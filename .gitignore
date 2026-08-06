@@ -1,0 +1,23 @@
+# ── never publish: the moat ──
+# The film grades are the one input no competitor can reproduce. The arithmetic
+# is public (that is the brand's transparency promise); the grades are not.
+exports/
+data/model.db
+data/cache/
+data/api_budget.json
+
+# ── never publish: internal analysis + secrets ──
+# FINDINGS.md is marked Internal/working and critiques the model candidly.
+# SETUP.md contains real Google Sheet IDs.
+# NOTE: a '#' only starts a comment at the START of a line. An inline comment
+# becomes part of the pattern and silently matches nothing.
+FINDINGS.md
+SETUP.md
+service-account*.json
+*.env
+
+# ── generated ──
+output/
+*.pyc
+__pycache__/
+.DS_Store

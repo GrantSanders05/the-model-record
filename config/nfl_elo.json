@@ -1,0 +1,7 @@
+{
+  "rater": "elo",
+  "elo_per_point": 25.0,
+  "elo_hfa": 30.0,
+  "elo_revert": 0.45,
+  "hfa": 3.0
+}

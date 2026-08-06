@@ -1,0 +1,98 @@
+name: The Model — scheduled update
+
+# Runs on GitHub's free tier. Public repos get unlimited Actions minutes;
+# private repos get 2,000 minutes/month and a run here costs well under one
+# minute, so this stays free either way.
+#
+# Times are UTC. 11:00 UTC is ~6am ET / 5am CT — results from last night's
+# games are final, and picks are refreshed before anyone is awake to look.
+
+on:
+  schedule:
+    - cron: "0 11 * * *"        # daily, in-season results + fresh picks
+    - cron: "0 15 * * 2"        # Tuesday midday: rankings land, re-grade the week
+  workflow_dispatch:            # lets Grant trigger a run by hand from the Actions tab
+
+concurrency:
+  group: model-update
+  cancel-in-progress: false
+
+# Required for the GitHub Pages deploy step below.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The core is stdlib; this is only for the Sheets push. If the secret
+      # isn't configured the job still runs and just skips that step.
+      - name: Install Sheets dependencies
+        run: pip install -r requirements.txt
+
+      # The SQLite file and the CFBD response cache are restored between runs
+      # so history never has to be re-fetched. This is what keeps the CFBD
+      # spend at a handful of requests per day instead of hundreds.
+      - name: Restore data cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/cache
+            data/model.db
+            data/api_budget.json
+          key: model-data-${{ github.run_id }}
+          restore-keys: |
+            model-data-
+
+      - name: Seed history if the cache was empty
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+        run: |
+          if [ ! -f data/model.db ]; then
+            echo "No database found — seeding history (one-off cost)."
+            python3 src/fetch_nfl.py
+            python3 src/fetch_cfb.py --seasons 2014-2026
+          else
+            echo "Database restored from cache."
+          fi
+
+      - name: Verify the harness still measures what it claims
+        run: python3 src/validate_harness.py
+
+      - name: Run the update
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          MODEL_SHEET_ID: ${{ secrets.MODEL_SHEET_ID }}
+        run: python3 src/run_update.py --sport cfb --config config/cfb_grades.json
+
+      # The published page is generated from the append-only ledger, so it can
+      # never disagree with the record it claims to show.
+      - name: Upload track record page
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: output/site
+
+      - name: Deploy to GitHub Pages
+        id: pages
+        uses: actions/deploy-pages@v4
+
+      - name: Publish picks as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: picks-${{ github.run_number }}
+          path: output/
+          retention-days: 30
