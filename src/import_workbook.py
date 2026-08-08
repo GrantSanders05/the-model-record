@@ -69,7 +69,19 @@ def map_header(row):
 
 
 def parse_sheet(wb, tab, sport, season, effective_week):
-    rows = wb.table(tab)
+    """Read a tab out of an .xlsx workbook."""
+    return parse_rows(wb.table(tab), sport, season, effective_week, label=tab)
+
+
+def parse_rows(rows, sport, season, effective_week, label=""):
+    """
+    Turn a grid of cells into grade records.
+
+    Shared by the .xlsx importer and the live Google Sheets sync so both paths
+    map columns, normalize team names and stamp weeks identically -- if they
+    diverged, grades imported one way would silently disagree with grades
+    imported the other.
+    """
     if not rows:
         return [], 0
     hdr = map_header(rows[0])
@@ -77,7 +89,7 @@ def parse_sheet(wb, tab, sport, season, effective_week):
         return [], 0
     missing = [p for p in POSITIONS if p not in hdr.values()]
     if missing:
-        print("     WARNING: %s is missing position columns: %s" % (tab, ", ".join(missing)))
+        print("     WARNING: %s is missing position columns: %s" % (label, ", ".join(missing)))
 
     out, teams = [], 0
     for r in rows[1:]:

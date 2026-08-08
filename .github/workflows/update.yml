@@ -9,8 +9,9 @@ name: The Model — scheduled update
 
 on:
   schedule:
-    - cron: "0 11 * * *"        # daily, in-season results + fresh picks
+    - cron: "0 11 * * *"        # daily: results, fresh grades, fresh picks
     - cron: "0 15 * * 2"        # Tuesday midday: rankings land, re-grade the week
+    - cron: "0 16 * * 6"        # Saturday midday: catch grade edits before kickoffs
   workflow_dispatch:            # lets Grant trigger a run by hand from the Actions tab
 
 concurrency:
@@ -76,6 +77,10 @@ jobs:
         env:
           CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          # Sheet the weekly film grades are READ FROM (the Power Rankings workbook).
+          MODEL_GRADES_SHEET_ID: ${{ secrets.MODEL_GRADES_SHEET_ID }}
+          # Sheet picks + accuracy are WRITTEN TO. May be the same workbook;
+          # the automation only ever writes to its own tabs.
           MODEL_SHEET_ID: ${{ secrets.MODEL_SHEET_ID }}
         run: python3 src/run_update.py --sport cfb --config config/cfb_grades.json
 

@@ -36,6 +36,7 @@ import ledger
 import metrics
 import predict
 import publish
+import sync_grades
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "output")
@@ -78,6 +79,9 @@ def main():
     ap.add_argument("--picks-tab", default="Model Picks")
     ap.add_argument("--accuracy-tab", default="Model Accuracy")
     ap.add_argument("--no-fetch", action="store_true")
+    ap.add_argument("--grades-sheet",
+                    help="Google Sheet ID holding the weekly film grades "
+                         "(or set MODEL_GRADES_SHEET_ID)")
     ap.add_argument("--min-edge", type=float, default=0.0)
     args = ap.parse_args()
 
@@ -93,25 +97,49 @@ def main():
     season = args.season or (dt.date.today().year if dt.date.today().month >= 7
                              else dt.date.today().year - 1)
 
-    print("\n[1/7] refresh %s %d" % (args.sport, season))
+    # ── step 0: pull the film grades straight from the live sheet ──
+    # This is what makes the loop hands-off. Grant grades film; nothing else
+    # requires a human. If no sheet is configured the run continues on whatever
+    # grades are already in the database rather than failing.
+    print("\n[1/8] sync film grades from Google Sheets")
+    grades_sheet = args.grades_sheet or os.environ.get("MODEL_GRADES_SHEET_ID")
+    if not grades_sheet:
+        n_existing = conn.execute(
+            "SELECT COUNT(*) c FROM grades WHERE sport=?", (args.sport,)).fetchone()["c"]
+        print("  skipped — no --grades-sheet / MODEL_GRADES_SHEET_ID set.")
+        print("  using %d grade rows already in the database." % n_existing)
+    else:
+        try:
+            total, tabs = sync_grades.sync(conn, grades_sheet, args.sport, season, verbose=False)
+            print("  synced %d grade rows from %d weekly tab(s)" % (total, tabs))
+            checked, bad = sync_grades.iw.verify_formula(conn, args.sport, season)
+            print("  formula check: %d team-weeks, %d mismatches%s"
+                  % (checked, bad, "" if bad == 0 else "  <-- INVESTIGATE"))
+        except SystemExit as e:
+            print("  skipped — %s" % e)
+        except Exception as e:
+            # Stale grades still produce picks; a failed sync must not abort the run.
+            print("  FAILED: %s: %s (continuing on existing grades)" % (type(e).__name__, e))
+
+    print("\n[2/8] refresh %s %d" % (args.sport, season))
     if args.no_fetch:
         print("  skipped (--no-fetch)")
     else:
         refresh(args.sport, season)
 
-    print("\n[2/7] grade completed games")
+    print("\n[3/8] grade completed games")
     preds, m_season = season_grade(conn, args.sport, season, config)
     if m_season.get("n_games"):
         print(metrics.format_report(m_season, "%s %d season to date" % (args.sport, season)))
     else:
         print("  no completed games with lines yet this season.")
 
-    print("\n[3/7] generate picks")
+    print("\n[4/8] generate picks")
     picks = predict.generate(conn, args.sport, config, season=season)
     picks = [p for p in picks if p["edge"] is None or abs(p["edge"]) >= args.min_edge]
     print("  %d upcoming games" % len(picks))
 
-    print("\n[4/7] lock picks + grade finished ones")
+    print("\n[5/8] lock picks + grade finished ones")
     label = "%s@%s" % (os.path.basename(cfg_path).replace(".json", ""),
                        started.strftime("%Y-%m-%d"))
     locked, already_started = ledger.lock(conn, args.sport, picks, label, now=started)
@@ -127,7 +155,7 @@ def main():
     else:
         print("  LIVE ledger: no graded picks yet")
 
-    print("\n[5/7] write local artifacts")
+    print("\n[6/8] write local artifacts")
     os.makedirs(OUT, exist_ok=True)
     picks_path = os.path.join(OUT, "%s_picks.json" % args.sport)
     with open(picks_path, "w") as fh:
@@ -139,7 +167,7 @@ def main():
                    "metrics": {k: v for k, v in m_season.items()}}, fh, indent=2, default=str)
     print("  %s\n  %s" % (picks_path, acc_path))
 
-    print("\n[6/7] render public track record page")
+    print("\n[7/8] render public track record page")
     try:
         site_dir = os.path.join(OUT, "site")
         os.makedirs(site_dir, exist_ok=True)
@@ -150,7 +178,7 @@ def main():
     except Exception as e:
         print("  FAILED: %s: %s" % (type(e).__name__, e))
 
-    print("\n[7/7] push to Google Sheets")
+    print("\n[8/8] push to Google Sheets")
     sheet_id = args.sheet or os.environ.get("MODEL_SHEET_ID")
     if not sheet_id:
         print("  skipped — no --sheet and no MODEL_SHEET_ID set.")
