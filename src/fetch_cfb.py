@@ -240,6 +240,8 @@ def fetch_season(conn, season, key, refresh=False, postseason=True):
     lrows = [r for r in lrows if r["game_id"] in known]
     if lrows:
         db.upsert_lines(conn, lrows)
+        # Capture the movement history too -- upsert_lines overwrites, this appends.
+        db.snapshot_lines(conn, lrows)
 
     raw, hit = api_get("/rankings", {"year": season}, key, refresh)
     cached_all &= hit

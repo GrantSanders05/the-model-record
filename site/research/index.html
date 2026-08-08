@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Model — Research</title>
+<meta name="robots" content="noindex,nofollow">
+<style>
+/* Single brand hue for every data mark: #00922E passed the palette validator's
+   lightness, chroma and contrast checks against BOTH the light and dark
+   surfaces, so no per-mode swap is needed. Win/loss is never encoded by colour
+   — a green/orange pair failed deutan separation at deltaE 3.1, and letters
+   carry the meaning instead. Sharp angles, no radii, per the brand. */
+:root{
+  --brand:#00922E; --brand-dim:#00922E33;
+  --surface:#fcfcfb; --panel:#fff; --line:#e6e6e2; --line2:#f0f0ec;
+  --ink:#16170f; --ink2:#4a4d40; --ink3:#7a7d70; --warn:#8a5a00; --warnbg:#fff6e0;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --surface:#0f100c; --panel:#1a1a19; --line:#2c2d27; --line2:#232420;
+         --ink:#f2f3ec; --ink2:#b6b9ab; --ink3:#84887a; --warn:#e8b866; --warnbg:#2a2113; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface);color:var(--ink);
+ font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1140px;margin:0 auto;padding:20px 16px 60px}
+header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+ border-bottom:2px solid var(--brand);padding-bottom:10px;margin-bottom:14px}
+h1{margin:0;font-size:20px;font-weight:800;letter-spacing:-.02em}
+h1 span{color:var(--brand)}
+.meta{color:var(--ink3);font-size:11.5px}
+nav{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:16px;flex-wrap:wrap}
+nav button{flex:1 1 auto;background:var(--panel);border:0;color:var(--ink2);padding:9px 14px;
+ font:inherit;font-weight:600;font-size:12.5px;cursor:pointer;letter-spacing:.02em}
+nav button[aria-selected=true]{background:var(--brand);color:#fff}
+.view{display:none} .view.on{display:block}
+.banner{border:1px solid var(--warn);background:var(--warnbg);color:var(--warn);
+ padding:11px 13px;margin-bottom:14px;font-size:12.5px}
+.banner b{display:block;font-size:13px;margin-bottom:3px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+select,input[type=search]{background:var(--panel);color:var(--ink);border:1px solid var(--line);
+ padding:7px 9px;font:inherit;font-size:13px;min-width:190px}
+label{font-size:11.5px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em}
+.scroll{overflow-x:auto;border:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;background:var(--panel);font-size:12.5px}
+th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line2);white-space:nowrap}
+th{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink3);
+ font-weight:600;position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--line)}
+tbody tr:hover{background:var(--line2)}
+.num{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.pos{color:var(--brand);font-weight:700}
+.muted{color:var(--ink3)}
+.cards{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
+.card{flex:1 1 130px;background:var(--panel);padding:11px 13px}
+.card .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3)}
+.card .v{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.card .s{font-size:10.5px;color:var(--ink3)}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.grid{stroke:var(--line);stroke-width:1}
+.axis{fill:var(--ink3);font-size:10px}
+.mark{fill:none;stroke:var(--brand);stroke-width:2;stroke-linecap:square}
+.mark2{fill:none;stroke:var(--ink3);stroke-width:1.5;stroke-dasharray:4 3}
+.dot{fill:var(--brand)}
+figcaption{color:var(--ink3);font-size:11px;margin-top:5px}
+.sliders{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:9px;margin:12px 0}
+.sl{background:var(--panel);border:1px solid var(--line);padding:8px 10px}
+.sl .t{display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:5px}
+.sl .t b{font-variant-numeric:tabular-nums}
+.sl input{width:100%;accent-color:var(--brand)}
+.delta{font-weight:700;font-variant-numeric:tabular-nums}
+footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
+ color:var(--ink3);font-size:11.5px;max-width:76ch}
+.empty{color:var(--ink3);border:1px dashed var(--line);padding:15px;font-size:12.5px}
+</style></head><body>
+<div class="wrap">
+<header>
+  <h1>The <span>Model</span> — Research</h1>
+  <div class="meta" id="meta">loading…</div>
+</header>
+
+<nav role="tablist">
+  <button role="tab" data-v="bets" aria-selected="true">Best bets</button>
+  <button role="tab" data-v="teams" aria-selected="false">Teams</button>
+  <button role="tab" data-v="move" aria-selected="false">Line movement</button>
+  <button role="tab" data-v="whatif" aria-selected="false">What-if</button>
+</nav>
+
+<div id="banner"></div>
+
+<section class="view on" id="v-bets">
+  <div class="cards" id="betcards"></div>
+  <div class="row">
+    <label for="sortby">Rank by</label>
+    <select id="sortby">
+      <option value="ml">Moneyline EV (vig removed)</option>
+      <option value="spread">Spread disagreement</option>
+    </select>
+    <label for="wk">Week</label><select id="wk"></select>
+    <label for="bank">Bankroll</label><input id="bank" type="search" value="1000" style="min-width:90px">
+  </div>
+  <div class="scroll"><table id="bets"></table></div>
+  <footer>
+    Moneyline EV strips the bookmaker's margin before comparing — raw implied
+    probabilities sum to about 105%, so without that step nearly every game
+    looks like value. Stakes are quarter-Kelly capped at 2% of bankroll.
+    Spread disagreement is the weaker signal: the model's biggest disagreements
+    have historically been its <em>worst</em> bets, not its best.
+  </footer>
+</section>
+
+<section class="view" id="v-teams">
+  <div class="row">
+    <label for="team">Team</label><select id="team"></select>
+  </div>
+  <div class="cards" id="teamcards"></div>
+  <div class="row" style="gap:24px;align-items:flex-start">
+    <figure style="flex:1 1 340px;margin:0">
+      <div id="effchart"></div>
+      <figcaption>Offensive efficiency (PPA per play) by week. Higher is better.</figcaption>
+    </figure>
+  </div>
+  <div class="scroll" style="margin-top:12px"><table id="teamgames"></table></div>
+</section>
+
+<section class="view" id="v-move">
+  <div class="row"><label for="game">Game</label><select id="game"></select></div>
+  <div id="movechart"></div>
+  <div class="scroll" style="margin-top:12px"><table id="movetbl"></table></div>
+  <footer>
+    Closing-line value is the leading indicator of a real edge — it separates
+    from noise months before a win rate does. History only exists from the day
+    capture started, so this fills in as the season runs.
+  </footer>
+</section>
+
+<section class="view" id="v-whatif">
+  <div class="row">
+    <label for="wteam">Team</label><select id="wteam"></select>
+    <button id="reset" style="background:var(--panel);border:1px solid var(--line);
+      color:var(--ink2);padding:7px 12px;font:inherit;font-size:12.5px;cursor:pointer">Reset</button>
+  </div>
+  <div class="sliders" id="sliders"></div>
+  <div class="cards" id="wcards"></div>
+  <div class="scroll"><table id="wgames"></table></div>
+  <footer>
+    Re-prices every one of this team's games live, using the same arithmetic the
+    engine uses: <span class="num">2×(QB+RB+WR+OL+DL+LB+DB) + Coach/ST + WinPts − LossPts</span>,
+    then home total − away total + home-field. Nothing here writes back to the
+    spreadsheet — it is a scratchpad for seeing what a grade change would do.
+  </footer>
+</section>
+</div>
+
+<script>
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const fmt=(v,d=1)=>v==null||isNaN(v)?"—":(v>0?"+":"")+Number(v).toFixed(d);
+const abs=(v,d=1)=>v==null||isNaN(v)?"—":Number(v).toFixed(d);
+const POS=["qb","rb","wr","ol","dl","lb","db","coach_st"];
+const LABEL={qb:"QB",rb:"RB",wr:"WR",ol:"OL",dl:"DL",lb:"LB",db:"DB",coach_st:"Coach/ST"};
+const MAXV={qb:15,ol:15,dl:15,coach_st:15,rb:10,wr:10,lb:10,db:10};
+let D=null, EDITS={};
+
+fetch("data.json").then(r=>r.json()).then(d=>{D=d;boot()})
+  .catch(e=>{$("#meta").textContent="could not load data.json";console.error(e)});
+
+/* The model's arithmetic, reimplemented exactly. Constants come from the
+   exported config, not hard-coded, so this cannot drift from the engine. */
+function teamTotal(g,cfg){
+  if(!g) return null;
+  const seven=["qb","rb","wr","ol","dl","lb","db"].reduce((s,p)=>s+(+g[p]||0),0);
+  return 2*seven + cfg.coach_weight*(+g.coach_st||0)
+       + (+g._win_points||0) + cfg.loss_sign*(+g._loss_points||0)
+       + cfg.raw_wl*((+g._wins||0)-(+g._losses||0));
+}
+function margin(hg,ag,cfg,neutral){
+  const h=teamTotal(hg,cfg), a=teamTotal(ag,cfg);
+  if(h==null||a==null) return null;
+  return (h-a)*cfg.scale + (neutral?cfg.neutral_hfa:cfg.hfa);
+}
+
+function boot(){
+  $("#meta").textContent =
+    `${D.sport.toUpperCase()} ${D.season} · grades ${D.grade_season} · `+
+    `updated ${D.generated_utc.slice(0,16).replace("T"," ")} UTC`;
+
+  if(D.grade_season!==D.season) addBanner(
+    `Showing ${D.grade_season} grades`,
+    `No ${D.season} grades have been synced yet. Upload the new workbook and the `+
+    `sync will pick it up — everything below still reflects ${D.grade_season}.`);
+  if(D.dispersion && !D.dispersion.ok) addBanner(
+    "These picks are not usable yet",
+    `Model margins vary ${D.dispersion.sd_model.toFixed(1)} pts against the market's `+
+    `${D.dispersion.sd_market.toFixed(1)} (ratio ${D.dispersion.ratio.toFixed(2)}). `+
+    `The ratings can barely tell teams apart, so every underdog looks like value — `+
+    `that is the flaw showing up in the EV column, not an edge. Grade film, then re-run.`);
+
+  $$("nav button").forEach(b=>b.onclick=()=>{
+    $$("nav button").forEach(x=>x.setAttribute("aria-selected",x===b));
+    $$(".view").forEach(v=>v.classList.remove("on"));
+    $("#v-"+b.dataset.v).classList.add("on");
+  });
+
+  const weeks=[...new Set(D.bets.map(b=>b.week))].sort((a,b)=>a-b);
+  $("#wk").innerHTML='<option value="">All</option>'+weeks.map(w=>`<option>${w}</option>`).join("");
+  const teams=Object.keys(D.teams).sort();
+  $("#team").innerHTML=teams.map(t=>`<option>${t}</option>`).join("");
+  $("#wteam").innerHTML=teams.map(t=>`<option>${t}</option>`).join("");
+  const games=Object.keys(D.movement);
+  $("#game").innerHTML=games.map(g=>{
+    const b=D.bets.find(x=>x.game_id===g);
+    return `<option value="${g}">${b?b.away+" @ "+b.home:g}</option>`;}).join("");
+
+  ["#sortby","#wk","#bank"].forEach(s=>$(s).oninput=drawBets);
+  $("#team").oninput=drawTeam; $("#game").oninput=drawMove;
+  $("#wteam").oninput=()=>{EDITS={};drawWhatIf()};
+  $("#reset").onclick=()=>{EDITS={};drawWhatIf()};
+  drawBets();drawTeam();drawMove();drawWhatIf();
+}
+
+function addBanner(title,body){
+  const d=document.createElement("div");
+  d.className="banner"; d.innerHTML=`<b>${title}</b>${body}`;
+  $("#banner").appendChild(d);
+}
+
+function drawBets(){
+  const by=$("#sortby").value, wk=$("#wk").value, bank=+$("#bank").value||1000;
+  let rows=D.bets.filter(b=>!wk||String(b.week)===wk);
+  rows = by==="ml"
+    ? rows.filter(b=>b.ml_ev!=null).sort((a,b)=>b.ml_ev-a.ml_ev)
+    : rows.filter(b=>b.spread_edge!=null).sort((a,b)=>Math.abs(b.spread_edge)-Math.abs(a.spread_edge));
+
+  const pos=rows.filter(r=>by==="ml"?r.ml_ev>0:true).length;
+  $("#betcards").innerHTML=`
+    <div class="card"><div class="k">Games</div><div class="v">${rows.length}</div></div>
+    <div class="card"><div class="k">${by==="ml"?"Positive EV":"With a line"}</div><div class="v">${pos}</div></div>
+    <div class="card"><div class="k">Record</div><div class="v">${
+      D.record.ats_pct!=null?D.record.ats_pct.toFixed(1)+"%":"—"}</div>
+      <div class="s">${D.record.ats_w||0}-${D.record.ats_l||0}-${D.record.ats_push||0} live</div></div>`;
+
+  const head = by==="ml"
+    ? ["Wk","Away","Home","Pick","Odds","Model","Fair","EV%","Stake"]
+    : ["Wk","Away","Home","Model","Line","Edge","Pick","Tot","Mkt","O/U"];
+  const body = rows.slice(0,120).map(r=> by==="ml" ? `<tr>
+      <td>${r.week}</td><td>${r.away}</td><td>${r.home}</td>
+      <td>${r.ml_pick||"—"}</td><td class="num">${r.ml_odds??"—"}</td>
+      <td class="num">${abs(r.model_prob)}%</td><td class="num">${abs(r.ml_fair_prob)}%</td>
+      <td class="num ${r.ml_ev>0?"pos":"muted"}">${fmt(r.ml_ev,2)}</td>
+      <td class="num">${r.ml_ev>0?"$"+(bank/1000*(r.stake||0)).toFixed(2):"—"}</td></tr>`
+    : `<tr><td>${r.week}</td><td>${r.away}</td><td>${r.home}</td>
+      <td class="num">${fmt(r.model_margin)}</td><td class="num">${fmt(r.market_margin)}</td>
+      <td class="num">${fmt(r.spread_edge)}</td><td>${r.ats_pick||"—"}</td>
+      <td class="num">${abs(r.model_total)}</td><td class="num">${abs(r.market_total)}</td>
+      <td>${r.ou_pick||"—"}</td></tr>`).join("");
+  $("#bets").innerHTML=`<thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${body}</tbody>`;
+}
+
+function drawTeam(){
+  const t=$("#team").value, info=D.teams[t]; if(!info) return;
+  const g=info.grades, cfg=D.config;
+  $("#teamcards").innerHTML=
+    POS.map(p=>`<div class="card"><div class="k">${LABEL[p]}</div>
+      <div class="v">${g[p]!=null?g[p].toFixed(1):"—"}</div>
+      <div class="s">of ${MAXV[p]}</div></div>`).join("")+
+    `<div class="card"><div class="k">Total</div><div class="v">${abs(teamTotal(g,cfg))}</div>
+      <div class="s">as of wk ${info.week}</div></div>`;
+
+  const eff=D.efficiency[t]||[];
+  $("#effchart").innerHTML = eff.length>1
+    ? lineChart(eff.map(e=>e.week), eff.map(e=>e.off), "PPA/play")
+    : `<div class="empty">No efficiency data for ${t} yet.</div>`;
+
+  const res=(D.results[t]||[]).filter(r=>r.margin!=null);
+  $("#teamgames").innerHTML = res.length
+    ? `<thead><tr><th>Wk</th><th>Opponent</th><th>H/A</th><th>Result</th><th>Line</th><th>vs Line</th></tr></thead>
+       <tbody>${res.map(r=>{
+         const ats = r.line!=null? r.margin - r.line : null;
+         return `<tr><td>${r.week}</td><td>${r.opp}</td><td>${r.home?"H":"A"}</td>
+           <td class="num">${fmt(r.margin,0)}</td><td class="num">${fmt(r.line)}</td>
+           <td class="num ${ats>0?"pos":"muted"}">${fmt(ats)}</td></tr>`}).join("")}</tbody>`
+    : `<tbody><tr><td class="muted">No completed games yet.</td></tr></tbody>`;
+}
+
+function drawMove(){
+  const id=$("#game").value, hist=D.movement[id]||[];
+  if(hist.length<2){
+    $("#movechart").innerHTML=`<div class="empty">Only ${hist.length} observation so far — `+
+      `movement appears once the line has been captured more than once.</div>`;
+    $("#movetbl").innerHTML=""; return;
+  }
+  $("#movechart").innerHTML=lineChart(hist.map((_,i)=>i), hist.map(h=>h.margin), "spread");
+  $("#movetbl").innerHTML=`<thead><tr><th>Observed</th><th>Spread</th><th>Total</th></tr></thead>
+    <tbody>${hist.map(h=>`<tr><td class="num">${h.at}</td>
+      <td class="num">${fmt(h.margin)}</td><td class="num">${abs(h.total)}</td></tr>`).join("")}</tbody>`;
+}
+
+function drawWhatIf(){
+  const t=$("#wteam").value, info=D.teams[t]; if(!info) return;
+  const base=info.grades, cfg=D.config;
+  const cur=Object.assign({},base,EDITS);
+
+  $("#sliders").innerHTML=POS.map(p=>{
+    const v=cur[p]!=null?cur[p]:0, changed=EDITS[p]!=null&&EDITS[p]!==base[p];
+    return `<div class="sl"><div class="t"><span>${LABEL[p]}</span>
+      <b class="${changed?"pos":""}">${v.toFixed(1)}${changed?" ("+fmt(v-(base[p]||0))+")":""}</b></div>
+      <input type="range" min="0" max="${MAXV[p]}" step="0.1" value="${v}" data-p="${p}"></div>`;
+  }).join("");
+  $$("#sliders input").forEach(i=>i.oninput=e=>{
+    EDITS[e.target.dataset.p]=+e.target.value; drawWhatIf();
+  });
+
+  const t0=teamTotal(base,cfg), t1=teamTotal(cur,cfg);
+  $("#wcards").innerHTML=`
+    <div class="card"><div class="k">Current total</div><div class="v">${abs(t0)}</div></div>
+    <div class="card"><div class="k">Adjusted total</div><div class="v">${abs(t1)}</div></div>
+    <div class="card"><div class="k">Change</div>
+      <div class="v ${t1-t0>0?"pos":""}">${fmt(t1-t0)}</div>
+      <div class="s">points of rating</div></div>
+    <div class="card"><div class="k">Per game</div>
+      <div class="v ${t1-t0>0?"pos":""}">${fmt((t1-t0)*cfg.scale)}</div>
+      <div class="s">points of spread</div></div>`;
+
+  const shift=(t1-t0)*cfg.scale;
+  const games=D.bets.filter(b=>b.home===t||b.away===t);
+  $("#wgames").innerHTML = games.length
+    ? `<thead><tr><th>Wk</th><th>Matchup</th><th>Model</th><th>Adjusted</th><th>Line</th><th>New edge</th></tr></thead>
+       <tbody>${games.map(b=>{
+          const dir = b.home===t? 1 : -1;
+          const adj = b.model_margin + dir*shift;
+          const edge = b.market_margin!=null ? adj-b.market_margin : null;
+          return `<tr><td>${b.week}</td><td>${b.away} @ ${b.home}</td>
+            <td class="num">${fmt(b.model_margin)}</td>
+            <td class="num delta ${dir*shift>0?"pos":""}">${fmt(adj)}</td>
+            <td class="num">${fmt(b.market_margin)}</td>
+            <td class="num">${fmt(edge)}</td></tr>`}).join("")}</tbody>`
+    : `<tbody><tr><td class="muted">No upcoming games for ${t}.</td></tr></tbody>`;
+}
+
+/* Single-series line chart. One brand hue, recessive grid, square caps,
+   no legend (the caption names the series). */
+function lineChart(xs, ys, label){
+  const W=760,H=200,P=34;
+  const good=ys.map((v,i)=>[xs[i],v]).filter(p=>p[1]!=null);
+  if(good.length<2) return `<div class="empty">Not enough points to plot.</div>`;
+  const yv=good.map(p=>p[1]);
+  let lo=Math.min(...yv), hi=Math.max(...yv);
+  if(lo===hi){lo-=1;hi+=1}
+  const pad=(hi-lo)*.15; lo-=pad; hi+=pad;
+  const xlo=Math.min(...good.map(p=>p[0])), xhi=Math.max(...good.map(p=>p[0]));
+  const X=v=>P+(W-2*P)*((v-xlo)/((xhi-xlo)||1));
+  const Y=v=>P+(H-2*P)*(1-(v-lo)/(hi-lo));
+  const pts=good.map(p=>`${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ");
+  const grid=[0.25,0.5,0.75].map(f=>
+    `<line class="grid" x1="${P}" y1="${Y(lo+(hi-lo)*f).toFixed(1)}" x2="${W-P}" y2="${Y(lo+(hi-lo)*f).toFixed(1)}"/>`).join("");
+  const dots=good.map(p=>`<circle class="dot" cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="2.5"><title>${p[0]}: ${p[1]}</title></circle>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${label} over time">
+    ${grid}
+    <text class="axis" x="${P}" y="${Y(hi).toFixed(1)}" dy="-6">${hi.toFixed(2)}</text>
+    <text class="axis" x="${P}" y="${Y(lo).toFixed(1)}" dy="12">${lo.toFixed(2)}</text>
+    <polyline class="mark" points="${pts}"/>${dots}</svg>`;
+}
+</script>
+</body></html>

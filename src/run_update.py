@@ -36,6 +36,7 @@ import ledger
 import metrics
 import predict
 import publish
+import research_export
 import sync_grades
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -101,7 +102,7 @@ def main():
     # This is what makes the loop hands-off. Grant grades film; nothing else
     # requires a human. If no sheet is configured the run continues on whatever
     # grades are already in the database rather than failing.
-    print("\n[1/8] sync film grades from Google Sheets")
+    print("\n[1/9] sync film grades from Google Sheets")
     grades_sheet = args.grades_sheet or os.environ.get("MODEL_GRADES_SHEET_ID")
     if not grades_sheet:
         n_existing = conn.execute(
@@ -121,25 +122,25 @@ def main():
             # Stale grades still produce picks; a failed sync must not abort the run.
             print("  FAILED: %s: %s (continuing on existing grades)" % (type(e).__name__, e))
 
-    print("\n[2/8] refresh %s %d" % (args.sport, season))
+    print("\n[2/9] refresh %s %d" % (args.sport, season))
     if args.no_fetch:
         print("  skipped (--no-fetch)")
     else:
         refresh(args.sport, season)
 
-    print("\n[3/8] grade completed games")
+    print("\n[3/9] grade completed games")
     preds, m_season = season_grade(conn, args.sport, season, config)
     if m_season.get("n_games"):
         print(metrics.format_report(m_season, "%s %d season to date" % (args.sport, season)))
     else:
         print("  no completed games with lines yet this season.")
 
-    print("\n[4/8] generate picks")
+    print("\n[4/9] generate picks")
     picks = predict.generate(conn, args.sport, config, season=season)
     picks = [p for p in picks if p["edge"] is None or abs(p["edge"]) >= args.min_edge]
     print("  %d upcoming games" % len(picks))
 
-    print("\n[5/8] lock picks + grade finished ones")
+    print("\n[5/9] lock picks + grade finished ones")
     label = "%s@%s" % (os.path.basename(cfg_path).replace(".json", ""),
                        started.strftime("%Y-%m-%d"))
     locked, already_started = ledger.lock(conn, args.sport, picks, label, now=started)
@@ -155,7 +156,7 @@ def main():
     else:
         print("  LIVE ledger: no graded picks yet")
 
-    print("\n[6/8] write local artifacts")
+    print("\n[6/9] write local artifacts")
     os.makedirs(OUT, exist_ok=True)
     picks_path = os.path.join(OUT, "%s_picks.json" % args.sport)
     with open(picks_path, "w") as fh:
@@ -167,7 +168,7 @@ def main():
                    "metrics": {k: v for k, v in m_season.items()}}, fh, indent=2, default=str)
     print("  %s\n  %s" % (picks_path, acc_path))
 
-    print("\n[7/8] render public track record page")
+    print("\n[7/9] render public track record page")
     try:
         site_dir = os.path.join(OUT, "site")
         os.makedirs(site_dir, exist_ok=True)
@@ -178,7 +179,18 @@ def main():
     except Exception as e:
         print("  FAILED: %s: %s" % (type(e).__name__, e))
 
-    print("\n[8/8] push to Google Sheets")
+    print("\n[8/9] build private research bundle")
+    try:
+        import subprocess as _sp
+        r = _sp.run([sys.executable, os.path.join(ROOT, "src", "research_export.py"),
+                     "--sport", args.sport, "--config", cfg_path],
+                    capture_output=True, text=True, cwd=ROOT)
+        print("  " + (r.stdout.strip().splitlines() or ["(no output)"])[0]
+              if r.returncode == 0 else "  FAILED: %s" % r.stderr[-300:])
+    except Exception as e:
+        print("  FAILED: %s: %s" % (type(e).__name__, e))
+
+    print("\n[9/9] push to Google Sheets")
     sheet_id = args.sheet or os.environ.get("MODEL_SHEET_ID")
     if not sheet_id:
         print("  skipped — no --sheet and no MODEL_SHEET_ID set.")

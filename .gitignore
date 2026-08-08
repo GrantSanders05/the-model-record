@@ -3,6 +3,10 @@
 # is public (that is the brand's transparency promise); the grades are not.
 exports/
 data/model.db
+# The research bundle embeds every film grade. It is deployed to the PRIVATE
+# Vercel repo, never to this public one.
+site/research/data.json
+output/research/
 data/cache/
 data/api_budget.json
 

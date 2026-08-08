@@ -125,6 +125,28 @@ CREATE TABLE IF NOT EXISTS team_game_stats (
 );
 CREATE INDEX IF NOT EXISTS idx_tgs ON team_game_stats(sport, season, week);
 
+-- Every line we have ever seen, one row per observation.
+--
+-- The `lines` table holds only the CURRENT number for a game; each fetch
+-- overwrites it. That is fine for backtesting against closing lines, but it
+-- destroys the movement history -- and closing-line value is the leading
+-- indicator of a real edge. CLV shows up in the data months before a win rate
+-- separates from noise, so it is worth capturing from the first day.
+--
+-- Append-only by construction: the primary key includes the observation time,
+-- so a re-run adds a row rather than replacing one.
+CREATE TABLE IF NOT EXISTS line_history (
+    game_id     TEXT NOT NULL,
+    observed_at TEXT NOT NULL,          -- UTC ISO8601
+    provider    TEXT,
+    home_margin REAL,
+    total       REAL,
+    home_ml     INTEGER,
+    away_ml     INTEGER,
+    PRIMARY KEY (game_id, observed_at)
+);
+CREATE INDEX IF NOT EXISTS idx_linehist ON line_history(game_id, observed_at);
+
 -- THE PUBLIC LEDGER. One row per game, written BEFORE kickoff, never rewritten.
 --
 -- This table is the entire basis of the published track record, so its value
@@ -257,6 +279,20 @@ def upsert_games(conn, rows):
         rows,
     )
     conn.commit()
+
+
+def snapshot_lines(conn, rows, observed_at=None):
+    """Append the current lines to the history. Never updates an existing row."""
+    import datetime as _dt
+    ts = observed_at or _dt.datetime.now(_dt.timezone.utc).isoformat()
+    conn.executemany(
+        """INSERT OR IGNORE INTO line_history
+           (game_id, observed_at, provider, home_margin, total, home_ml, away_ml)
+           VALUES (:game_id, :observed_at, :provider, :home_margin, :total,
+                   :home_ml, :away_ml)""",
+        [dict(r, observed_at=ts) for r in rows])
+    conn.commit()
+    return len(rows)
 
 
 def upsert_lines(conn, rows):
