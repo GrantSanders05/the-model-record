@@ -23,6 +23,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  issues: write                 # roster alerts are filed as issues so they email out
 
 jobs:
   update:
@@ -38,6 +39,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      # Whether the college-football half of this job can run at all. Checked
+      # once, here, so every dependent step reads the same answer instead of
+      # each re-testing the secret and drifting.
+      - name: Detect available credentials
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+        run: |
+          if [ -n "$CFBD_API_KEY" ]; then
+            echo "HAS_CFBD=true" >> "$GITHUB_ENV"
+          else
+            echo "HAS_CFBD=false" >> "$GITHUB_ENV"
+            echo "::warning::CFBD_API_KEY is not set — college football is skipped."
+          fi
 
       # The core is stdlib; this is only for the Sheets push. If the secret
       # isn't configured the job still runs and just skips that step.
@@ -65,13 +80,34 @@ jobs:
           if [ ! -f data/model.db ]; then
             echo "No database found — seeding history (one-off cost)."
             python3 src/fetch_nfl.py
-            python3 src/fetch_cfb.py --seasons 2014-2026
+            if [ -n "$CFBD_API_KEY" ]; then
+              python3 src/fetch_cfb.py --seasons 2014-2026
+            else
+              # Missing key is a configuration gap, not a crash. Failing the whole
+              # job here meant the site never deployed at all and the run just went
+              # red every morning with no page to show for it. Warn loudly, carry on,
+              # and let the site publish whatever it legitimately has.
+              echo "::warning::CFBD_API_KEY is not set — skipping college football."
+              echo "::warning::No CFB picks will be produced until it is added:"
+              echo "::warning::  gh secret set CFBD_API_KEY"
+            fi
           else
             echo "Database restored from cache."
           fi
 
       - name: Verify the harness still measures what it claims
         run: python3 src/validate_harness.py
+
+      # Roster news, priced in points of spread rather than reported as headlines.
+      # Runs BEFORE the update so the research bundle ships this run's alerts and
+      # not the previous run's. Allowed to fail: it makes 138 requests to a third
+      # party, and none of that should be able to hold up the model.
+      - name: Check rosters for news that moves the model
+        if: ${{ env.HAS_CFBD == 'true' }}
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+        continue-on-error: true
+        run: python3 src/roster_watch.py --season 2026 --min-points 0.75
 
       - name: Run the update
         env:
@@ -82,14 +118,83 @@ jobs:
           # Sheet picks + accuracy are WRITTEN TO. May be the same workbook;
           # the automation only ever writes to its own tabs.
           MODEL_SHEET_ID: ${{ secrets.MODEL_SHEET_ID }}
-        run: python3 src/run_update.py --sport cfb --config config/cfb_grades.json
+        run: |
+          if [ -n "$CFBD_API_KEY" ]; then
+            python3 src/run_update.py --sport cfb --config config/cfb_grades.json
+          else
+            echo "::warning::Skipping the CFB update — no CFBD_API_KEY."
+            # publish.py takes no arguments and writes output/site/index.html.
+            # It renders from the ledger, so with no picks yet it produces an
+            # honest empty record rather than nothing at all.
+            python3 src/publish.py || true
+          fi
 
-      # The published page is generated from the append-only ledger, so it can
-      # never disagree with the record it claims to show.
+      # Push, not pull. GitHub emails issue activity for free, so a material
+      # injury reaches Grant without him remembering to open the site.
+      - name: Raise an issue if anything material changed
+        if: ${{ env.HAS_CFBD == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY' > alert_body.md
+          import json, os
+          p = "output/alerts.json"
+          d = json.load(open(p)) if os.path.exists(p) else {"alerts": []}
+          a = d.get("alerts", [])
+          print("_%d player(s) currently listed out who move a rating by %s+ points._\n"
+                % (len(a), d.get("min_points")))
+          if a:
+              print("| Team | Player | Pos | Line moves | Status |")
+              print("|---|---|---|---:|---|")
+              for r in a[:25]:
+                  print("| %s | %s | %s | %.2f | %s |" % (
+                      r["team"], r["player"], r["pos"], -r["points"],
+                      " ".join(x for x in (r.get("status"), r.get("detail")) if x)))
+          open("alert_count", "w").write(str(len(a)))
+          PY
+          COUNT=$(cat alert_count 2>/dev/null || echo 0)
+          if [ "$COUNT" -gt 0 ]; then
+            gh issue create \
+              --title "Roster news affecting the model — $(date -u +%Y-%m-%d)" \
+              --body-file alert_body.md || true
+          else
+            echo "nothing material — no issue raised"
+          fi
+
+      # ── assemble the site ────────────────────────────────────────────────
+      # The public page is generated from the append-only ledger, so it can never
+      # disagree with the record it claims to show. The research app ships beside
+      # it with its data ENCRYPTED: a free GitHub account can only serve Pages
+      # from a public repo and Pages cannot do Basic auth, so the page is public
+      # and the grades are not.
+      - name: Assemble site
+        env:
+          RESEARCH_PASS: ${{ secrets.RESEARCH_PASS }}
+        run: |
+          rm -rf _site && mkdir -p _site
+          cp -r output/site/. _site/ 2>/dev/null || echo "no public page produced"
+          if [ -z "$RESEARCH_PASS" ]; then
+            echo "::warning::RESEARCH_PASS is not set — the research app will NOT be published."
+            echo "::warning::Set it and the encrypted bundle ships on the next run:"
+            echo "::warning::  gh secret set RESEARCH_PASS"
+          elif [ -f output/research/data.json ]; then
+            mkdir -p _site/research
+            cp site/research/index.html _site/research/index.html
+            node tools/encrypt_bundle.mjs output/research/data.json _site/research/data.enc.json
+            # Belt and braces: the plaintext bundle must never reach the artifact.
+            # It is the one file in this repo that would leak every film grade.
+            if find _site -name 'data.json' | grep -q .; then
+              echo "::error::plaintext data.json found in _site — refusing to publish"; exit 1
+            fi
+            echo "research app published (encrypted)"
+          fi
+          find _site -type f | sed 's/^/  /'
+
       - name: Upload track record page
         uses: actions/upload-pages-artifact@v3
         with:
-          path: output/site
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: pages

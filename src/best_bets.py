@@ -69,7 +69,19 @@ def payout(american):
     return (100.0 / -a) if a < 0 else (a / 100.0)
 
 
-def dispersion_check(rows):
+# Beyond this line the model is structurally out of its depth, and so is the
+# check below. A grade sheet spans about 30 rating points end to end, so the
+# widest margin it can express is around 30; the market routinely posts 45+ on
+# week-1 mismatches. Measured on the 2025 season this is not a property of any
+# particular grades -- Grant's own hand grades needed a 1.57x scale to reach the
+# week-1 market, and the EA-derived ones needed 1.98x, off rating spreads that
+# were otherwise identical (7.31 vs 7.14). Nobody's edge is in a 45-point
+# cupcake line anyway, so those games are excluded from both the board and the
+# dispersion measurement rather than being allowed to dominate them.
+BLOWOUT_LINE = 28.0
+
+
+def dispersion_check(rows, max_abs_line=BLOWOUT_LINE):
     """
     Is the model's spread of opinion even comparable to the market's?
 
@@ -80,9 +92,14 @@ def dispersion_check(rows):
 
     Comparing the standard deviation of model margins against the market's
     catches that in one number, before it becomes a week of bad picks.
+
+    Blowouts are excluded first. Including them made this check fire on grades
+    that were provably fine, and its advice -- "grade film, then re-run" -- was
+    advice film cannot act on.
     """
     pairs = [(r["model_margin"], r["market_margin"]) for r in rows
-             if r.get("market_margin") is not None]
+             if r.get("market_margin") is not None
+             and abs(r["market_margin"]) <= max_abs_line]
     if len(pairs) < 20:
         return None
     def sd(v):
@@ -93,7 +110,8 @@ def dispersion_check(rows):
         return None
     ratio = sd_model / sd_mkt
     return {"sd_model": sd_model, "sd_market": sd_mkt, "ratio": ratio,
-            "ok": 0.6 <= ratio <= 1.6, "n": len(pairs)}
+            "ok": 0.6 <= ratio <= 1.6, "n": len(pairs),
+            "max_abs_line": max_abs_line}
 
 
 def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
@@ -116,6 +134,12 @@ def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
             "model_win_prob_home": round(100 * wp_home, 1),
             "ml_pick": None, "ml_ev": None, "ml_fair_prob": None,
             "ml_odds": None, "stake": None,
+            # Priced, but not offered. A game the ratings cannot reach is shown
+            # with its numbers and excluded from every ranking and stake, rather
+            # than dropped -- a silently missing game looks like an oversight,
+            # and its enormous fake EV is exactly what would top the board.
+            "no_bet": (p["market_margin"] is not None
+                       and abs(p["market_margin"]) > BLOWOUT_LINE),
         }
 
         ph, pa = devig(implied_prob(home_ml), implied_prob(away_ml))
@@ -138,7 +162,8 @@ def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
                     "ml_fair_prob": round(100 * p_mkt, 1),
                     "model_prob": round(100 * p_model, 1),
                     "ml_odds": odds,
-                    "stake": staking.recommended_stake(p_model, bankroll) if ev > 0 else 0.0,
+                    "stake": (staking.recommended_stake(p_model, bankroll)
+                              if ev > 0 and not rec["no_bet"] else 0.0),
                 })
         out.append(rec)
     return out
@@ -165,20 +190,55 @@ def main():
         return
 
     disp = dispersion_check(rows)
-    if disp and not disp["ok"]:
+    skipped = sum(1 for r in rows if r.get("no_bet"))
+
+    # "Preseason" is not a week number -- it is the absence of results. The
+    # quality-points half of the formula is fed by completed games, so until one
+    # has been played every rating is a preseason estimate no matter which week
+    # the fixture belongs to.
+    season = args.season or conn.execute(
+        "SELECT MAX(season) s FROM games WHERE sport=?", (args.sport,)).fetchone()["s"]
+    preseason = conn.execute(
+        "SELECT COUNT(*) n FROM games "
+        "WHERE sport=? AND season=? AND home_score IS NOT NULL",
+        (args.sport, season)).fetchone()["n"] == 0
+
+    if preseason:
+        print("=" * 78)
+        print("  SEASON HAS NOT STARTED — TRACK THESE, DO NOT BET THEM")
+        print("  The model has no in-season information yet. Win and loss points are")
+        print("  all zero, so every rating is a preseason estimate and nothing more.")
+        print("  Replaying 2025 with Grant's own film grades, on games inside %.0f pts:"
+              % BLOWOUT_LINE)
+        print("      week 1 ......... 48.67% ATS   (113 games)")
+        print("      weeks 4-8 ...... 57.63% ATS   (262 games)")
+        print("      whole season ... 55.06% ATS   (801 games)")
+        print("  One season is far too little to call that proven, but the mechanism is")
+        print("  real and not a data-mined split: in week 1 the quality-points half of")
+        print("  the formula is literally zero. The edge shows up once results do.")
+        print("=" * 78 + "\n")
+    elif disp and not disp["ok"]:
         print("=" * 78)
         print("  WARNING — THESE PICKS ARE NOT USABLE YET")
-        print("  Model margins vary %.1f pts; the market's vary %.1f (ratio %.2f)."
+        print("  On the %d bettable games (line within %.0f), model margins vary"
+              % (disp["n"], disp["max_abs_line"]))
+        print("  %.1f pts against the market's %.1f (ratio %.2f)."
               % (disp["sd_model"], disp["sd_market"], disp["ratio"]))
         if disp["ratio"] < 0.6:
             print("  The ratings are UNDER-DISPERSED — the model can barely tell teams")
             print("  apart, so every underdog looks like value and the EV column is")
-            print("  measuring that flaw, not an edge. This is what placeholder grades")
-            print("  look like. Grade film, then re-run.")
+            print("  measuring that flaw, not an edge. Check that the grades actually")
+            print("  imported, and that they are not all sitting near the column mean.")
         else:
             print("  The ratings are OVER-DISPERSED — margins are far more extreme than")
             print("  the market's. Check for a mis-entered grade or a scale problem.")
         print("=" * 78 + "\n")
+
+    rows = [r for r in rows if not r.get("no_bet")]
+    if skipped:
+        print("  %d game(s) excluded: the line is beyond %.0f, which is wider than a"
+              % (skipped, BLOWOUT_LINE))
+        print("  grade sheet can express. The model cannot price those and does not try.\n")
 
     if args.by == "ml":
         rows.sort(key=lambda r: -(r["ml_ev"] if r["ml_ev"] is not None else -999))

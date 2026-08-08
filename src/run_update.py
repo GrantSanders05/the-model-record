@@ -71,10 +71,36 @@ def season_grade(conn, sport, season, config):
     return preds, metrics.evaluate(preds)
 
 
+def resolve_config(explicit, sport):
+    """
+    Which config this run uses, in one place.
+
+    Prefers the grade model, because that is the one with a measured edge, and
+    falls back to Elo only if no grade config exists for the sport.
+    """
+    if explicit:
+        return explicit if os.path.isabs(explicit) else os.path.join(ROOT, explicit)
+    for name in ("config/%s_grades.json" % sport, "config/%s_elo.json" % sport):
+        path = os.path.join(ROOT, name)
+        if os.path.exists(path):
+            return path
+    return os.path.join(ROOT, "config/%s_grades.json" % sport)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sport", default="cfb")
-    ap.add_argument("--config", default="config/cfb_elo.json")
+    # No hard-coded default. It was "config/cfb_elo.json", so any run that did
+    # not name a config used the Elo rater -- 50.52% ATS against the grade
+    # model's 54.66%, i.e. the one model measured to have no edge. The scheduled
+    # job passes --config explicitly and was never affected, so nothing was
+    # published wrong; but every manual run silently produced Elo picks and
+    # looked identical while doing it. A default that quietly selects the worst
+    # model is a trap whether or not it has been sprung yet.
+    # The config is now derived from --sport and announced on every run.
+    ap.add_argument("--config", default=None,
+                    help="defaults to config/<sport>_grades.json, "
+                         "falling back to config/<sport>_elo.json")
     ap.add_argument("--season", type=int)
     ap.add_argument("--sheet", help="Google Sheet ID to write to")
     ap.add_argument("--picks-tab", default="Model Picks")
@@ -89,10 +115,14 @@ def main():
     started = dt.datetime.now(dt.timezone.utc)
     print("The Model — update run %s UTC | sport=%s" % (started.strftime("%Y-%m-%d %H:%M"), args.sport))
 
-    cfg_path = args.config if os.path.isabs(args.config) else os.path.join(ROOT, args.config)
+    cfg_path = resolve_config(args.config, args.sport)
     config = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
     if not config:
         print("  NOTE: no config at %s — using un-optimized defaults." % cfg_path)
+    # Say which model is about to run, every time. The rater is the single most
+    # consequential setting here and it used to be invisible.
+    print("  config: %s   rater=%s"
+          % (os.path.relpath(cfg_path, ROOT), config.get("rater", "(default)")))
 
     conn = db.connect()
     season = args.season or (dt.date.today().year if dt.date.today().month >= 7

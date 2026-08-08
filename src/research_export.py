@@ -112,6 +112,27 @@ def line_movement(conn, sport, season, limit_games=400):
     return {k: v for k, v in list(out.items())[:limit_games]}
 
 
+def load_alerts(path="output/alerts.json"):
+    """
+    Roster news from `roster_watch.py`, if it has run.
+
+    Kept optional and separate: the alerts job hits ESPN 138 times and should
+    never be able to hold up the picks. If it has not run, the site says so
+    rather than showing an empty list that reads as "no injuries".
+    """
+    p = path if os.path.isabs(path) else os.path.join(ROOT, path)
+    if not os.path.exists(p):
+        return None
+    try:
+        d = json.load(open(p))
+    except ValueError:
+        return None
+    return {"generated_utc": d.get("generated_utc"),
+            "min_points": d.get("min_points"),
+            "alerts": d.get("alerts", []),
+            "watchlist": d.get("watchlist", [])[:120]}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sport", default="cfb")
@@ -133,6 +154,20 @@ def main():
     disp = best_bets.dispersion_check(bets)
     rec = ledger.record(conn, args.sport)
 
+    # Games the ratings cannot reach are dropped from the board rather than
+    # shipped with a flag: they carry the largest EV numbers on the page, and a
+    # badge is not enough to stop a number that big from being read as the best
+    # bet available.
+    n_all = len(bets)
+    bets = [b for b in bets if not b.get("no_bet")]
+
+    # Until a game is played the quality-points half of the formula is zero, so
+    # every rating is a preseason estimate. The site says so rather than
+    # presenting week-1 numbers as if they carried the model's measured edge.
+    preseason = conn.execute(
+        "SELECT COUNT(*) n FROM games WHERE sport=? AND season=? AND home_score IS NOT NULL",
+        (args.sport, season)).fetchone()["n"] == 0
+
     grade_season = latest_season_with(conn, "grades", args.sport, season)
     eff_season = latest_season_with(conn, "team_game_stats", args.sport, season)
 
@@ -153,6 +188,10 @@ def main():
             "raw_wl": config.get("sheet_raw_wl", 0.0),
         },
         "dispersion": disp,
+        "preseason": preseason,
+        "alerts": load_alerts(),
+        "excluded_blowouts": n_all - len(bets),
+        "blowout_line": best_bets.BLOWOUT_LINE,
         "record": {k: v for k, v in rec.items() if k not in ("rows", "curve")},
         "curve": rec.get("curve", []),
         "bets": bets,

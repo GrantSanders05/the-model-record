@@ -26,6 +26,15 @@ CFB_ALIASES = {
     "USF": "South Florida",
     "UTEP (Texas-El Paso)": "UTEP",
     "Uconn": "UConn",
+
+    # TeamCrafters roster-file spellings. Same job, second source: these are the
+    # names EA ships in the game, which differ from both the sheet's and CFBD's.
+    # Note the en-dash in UL–Monroe -- it is not the hyphen it looks like, and a
+    # hyphen typed here would match nothing at all.
+    "Appalachian State": "App State",
+    "Miami (FL)": "Miami",
+    "Sacramento State University": "Sacramento State",
+    "UL–Monroe": "UL Monroe",
 }
 
 ALIASES = {"cfb": CFB_ALIASES, "nfl": {}, "nba": {}}

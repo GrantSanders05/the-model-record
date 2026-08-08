@@ -122,6 +122,47 @@ def starting_grades(prev, teams):
     return rows
 
 
+def teamcrafters_grades(conn, teams, game, roster_slug, prev_season):
+    """
+    Starting grades from the EA roster file instead of last season's carryover.
+
+    A carryover knows last season. A roster file knows THIS season -- who
+    transferred in, who left, who was recruited. Backtested against the real
+    2025 season it scored 53.57% ATS against Elo's 50.52%, so it carries genuine
+    signal; it lost to Grant's own film grades (54.56% on the same games, same
+    static footing), so it is a seed and not a replacement.
+
+    Only the ORDERING comes from EA. The numbers are mapped onto the shape of
+    Grant's own grade distribution, so the columns look like his columns and the
+    engine's tuned parameters stay valid. See game_ratings.py.
+    """
+    import fetch_teamcrafters as tc
+    import game_ratings
+    import team_aliases
+
+    target = game_ratings.target_from_grades(conn, "cfb", prev_season)
+    if not target:
+        raise SystemExit("No %d grades to take a target distribution from." % prev_season)
+
+    rosters = tc.fetch_all(game, roster_slug)
+    graded = game_ratings.build(rosters, target)
+
+    by_canon = {}
+    for name, gmap in graded.items():
+        by_canon[team_aliases.canonical("cfb", name)] = gmap
+
+    rows, missing = {}, []
+    for t in teams:
+        g = by_canon.get(t)
+        if g is None:
+            missing.append(t)
+            continue
+        rows[t] = dict(g)
+        rows[t]["_new"] = False
+        rows[t]["_src"] = "ea"
+    return rows, missing
+
+
 def team_rows(grades, conf_by_team, prev):
     """Build the grid, ranked by starting TOTAL."""
     def total(g):
@@ -132,8 +173,12 @@ def team_rows(grades, conf_by_team, prev):
     rows = [HEADERS]
     for rank, (team, g) in enumerate(ordered, start=1):
         r = rank + 1                      # spreadsheet row (header is row 1)
-        note = ("NEW TO FBS — grade from film" if g["_new"]
-                else "pre-filled from 2025, replace with film grade")
+        if g.get("_src") == "ea":
+            note = "EA CFB27 launch rating — replace with film grade"
+        elif g["_new"]:
+            note = "NEW TO FBS — grade from film"
+        else:
+            note = "pre-filled from 2025, replace with film grade"
         rows.append([
             rank, team, 0, 0,
             g["qb"], g["rb"], g["wr"], g["ol"], g["dl"], g["lb"], g["db"], g["coach_st"],
@@ -151,14 +196,34 @@ INSTRUCTIONS = [
     ["The Model — 2026 Power Rankings"],
     [""],
     ["HOW THIS WORKBOOK IS USED"],
-    ["1. Grade film. Overwrite the pre-filled grades in 'Team Data'. They are"],
-    ["   carried over from 2025 and regressed toward the mean — a starting point,"],
-    ["   not a rating. The NOTES column flags every row still un-graded."],
+    ["1. Grade film. Overwrite the pre-filled grades in 'Team Data'. They are a"],
+    ["   starting point, not a rating. The NOTES column flags every un-graded row."],
     ["2. Each week, duplicate 'Team Data' and rename the copy 'Week N Data',"],
     ["   where N is the number of weeks COMPLETED. After week 3's games, the"],
     ["   snapshot is 'Week 3 Data'."],
     ["3. That is all. The automation reads every 'Week N Data' tab on a schedule"],
     ["   and does the rest — picks, grading, and the public record."],
+    [""],
+    ["WHERE THE STARTING GRADES CAME FROM"],
+    ["The EA College Football 27 launch roster (TeamCrafters, 30 June 2026), one"],
+    ["team at a time, one position group at a time. Each group is a DEPTH-WEIGHTED"],
+    ["average of its players' overalls — the starters carry the rating, because a"],
+    ["team with seven halfbacks is not better at running back than one with three."],
+    [""],
+    ["Only the ORDER of teams is taken from EA. The numbers themselves are mapped"],
+    ["onto the same distribution your 2025 grades occupied, so every column has"],
+    ["your centre, your spread, and your floor and ceiling. The sheet looks like"],
+    ["your sheet. What changed is who is ranked where."],
+    [""],
+    ["HOW GOOD ARE THEY? (measured, not asserted)"],
+    ["The equivalent EA file was published before the 2025 season, so it could be"],
+    ["replayed against a season that actually happened. On 785 games, scoring the"],
+    ["identical game set, all of it out of sample:"],
+    ["   your film grades, frozen preseason ....... 54.56% ATS"],
+    ["   EA roster ratings ........................ 53.57% ATS"],
+    ["   Elo, no grades at all .................... 50.52% ATS"],
+    ["Break-even is 52.38%. So the roster file is real signal and clears the"],
+    ["number — and YOUR EYE STILL BEAT IT by about a point. Grade over the top."],
     [""],
     ["THE TAB NAME MATTERS"],
     ["'Week N Data' is how the sync finds a snapshot, and N is what keeps the"],
@@ -194,6 +259,11 @@ def main():
     ap.add_argument("--season", type=int, default=2026)
     ap.add_argument("--prev-season", type=int, default=2025)
     ap.add_argument("--out", default="exports/College Football PR 26.xlsx")
+    ap.add_argument("--source", default="teamcrafters",
+                    choices=["teamcrafters", "carryover"],
+                    help="where the starting grades come from")
+    ap.add_argument("--tc-game", default="CFB27")
+    ap.add_argument("--tc-roster", default="launch-6-30-26")
     args = ap.parse_args()
 
     import fetch_cfb
@@ -205,8 +275,22 @@ def main():
     conf = {t["school"]: (t.get("conference") or "") for t in teams_raw}
     prev = final_grades(conn, args.prev_season)
 
-    grades = starting_grades(prev, teams)
-    new_teams = [t for t, g in grades.items() if g["_new"]]
+    if args.source == "teamcrafters":
+        grades, missing = teamcrafters_grades(
+            conn, teams, args.tc_game, args.tc_roster, args.prev_season)
+        if missing:
+            # A team the roster file does not cover still needs a row, or it
+            # vanishes from the sheet and every one of its games silently falls
+            # back to Elo. Fill those from the carryover path instead.
+            print("  %d team(s) absent from %s, filled from %d carryover: %s"
+                  % (len(missing), args.tc_game, args.prev_season, ", ".join(missing)))
+            fallback = starting_grades(prev, missing)
+            for t in missing:
+                grades[t] = fallback[t]
+    else:
+        grades = starting_grades(prev, teams)
+
+    new_teams = [t for t, g in grades.items() if g.get("_new")]
 
     rows = team_rows(grades, conf, prev)
     out = args.out if os.path.isabs(args.out) else os.path.join(ROOT, args.out)
@@ -220,13 +304,21 @@ def main():
 
     print("Built %s" % out)
     print("  %d FBS teams for %d" % (len(teams), args.season))
-    print("  carried %d teams forward from %d (regressed %.0f%% toward the mean)"
-          % (len(teams) - len(new_teams), args.prev_season, (1 - CARRYOVER) * 100))
+
+    n_ea = sum(1 for g in grades.values() if g.get("_src") == "ea")
+    if n_ea:
+        print("  %d teams graded from %s %s (depth-weighted position groups,"
+              % (n_ea, args.tc_game, args.tc_roster))
+        print("     mapped onto the shape of the %d grade distribution)" % args.prev_season)
+    n_carry = len(grades) - n_ea - len(new_teams)
+    if n_carry > 0:
+        print("  %d team(s) carried forward from %d (regressed %.0f%% to the mean)"
+              % (n_carry, args.prev_season, (1 - CARRYOVER) * 100))
     if new_teams:
         print("  NEW to FBS, placed at the 20th percentile and flagged: %s"
               % ", ".join(sorted(new_teams)))
     print("  tabs: Team Data | Week 0 Data | How This Works")
-    print("\n  Every grade in here is a placeholder. Grade film over the top of it.")
+    print("\n  Every grade in here is a starting point. Grade film over the top of it.")
 
 
 if __name__ == "__main__":

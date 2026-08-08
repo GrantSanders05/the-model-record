@@ -69,6 +69,17 @@ figcaption{color:var(--ink3);font-size:11px;margin-top:5px}
 footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
  color:var(--ink3);font-size:11.5px;max-width:76ch}
 .empty{color:var(--ink3);border:1px dashed var(--line);padding:15px;font-size:12.5px}
+.gatebox{border:1px solid var(--line);border-radius:8px;padding:20px;max-width:44ch;margin:28px auto}
+.gatebox b{display:block;font-size:14px;margin-bottom:6px}
+.gatebox p{color:var(--ink2);font-size:12.5px;line-height:1.5;margin:0 0 14px}
+.gaterow{display:flex;gap:8px}
+.gaterow input{flex:1;min-width:0;padding:8px 10px;font:inherit;font-size:13px;
+  border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+.gaterow button{padding:8px 16px;font:inherit;font-size:13px;border:1px solid var(--line);
+  border-radius:6px;background:var(--ink);color:var(--bg);cursor:pointer}
+.gaterow button:disabled{opacity:.5;cursor:default}
+.gateopt{display:block;margin-top:10px;color:var(--ink3);font-size:12px}
+.gatemsg{margin-top:10px;color:var(--warn);font-size:12.5px;min-height:1em}
 </style></head><body>
 <div class="wrap">
 <header>
@@ -76,14 +87,44 @@ footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
   <div class="meta" id="meta">loading…</div>
 </header>
 
+<section id="gate" hidden>
+  <div class="gatebox">
+    <b>This bundle is encrypted</b>
+    <p>The page is public; the grades are not. Enter the research passphrase to
+    decrypt it in your browser — nothing is sent anywhere.</p>
+    <div class="gaterow">
+      <input id="gate-pass" type="password" autocomplete="current-password"
+             placeholder="Research passphrase" aria-label="Research passphrase">
+      <button id="gate-btn">Unlock</button>
+    </div>
+    <label class="gateopt"><input id="gate-remember" type="checkbox" checked>
+      Remember on this device</label>
+    <div class="gatemsg" id="gate-msg"></div>
+  </div>
+</section>
+
+<!-- Hidden until a bundle is actually open. Rendering the shell first and then
+     hiding it flashes the app for anyone who has not authenticated. -->
+<div id="app" hidden>
 <nav role="tablist">
   <button role="tab" data-v="bets" aria-selected="true">Best bets</button>
   <button role="tab" data-v="teams" aria-selected="false">Teams</button>
   <button role="tab" data-v="move" aria-selected="false">Line movement</button>
   <button role="tab" data-v="whatif" aria-selected="false">What-if</button>
+  <button role="tab" data-v="alerts" aria-selected="false">Roster news</button>
 </nav>
 
 <div id="banner"></div>
+
+<section class="view" id="v-alerts">
+  <div class="scroll"><table id="alerttbl"></table></div>
+  <footer id="alertnote"></footer>
+  <h3 style="font-size:13px;margin:22px 0 8px">Most load-bearing players</h3>
+  <footer style="margin:0 0 10px">Who each team can least afford to lose, in points
+  of spread. Computed by removing the player and re-rating all 138 teams — so it
+  is the model's own answer, not a guess.</footer>
+  <div class="scroll"><table id="watchtbl"></table></div>
+</section>
 
 <section class="view on" id="v-bets">
   <div class="cards" id="betcards"></div>
@@ -158,8 +199,87 @@ const LABEL={qb:"QB",rb:"RB",wr:"WR",ol:"OL",dl:"DL",lb:"LB",db:"DB",coach_st:"C
 const MAXV={qb:15,ol:15,dl:15,coach_st:15,rb:10,wr:10,lb:10,db:10};
 let D=null, EDITS={};
 
-fetch("data.json").then(r=>r.json()).then(d=>{D=d;boot()})
-  .catch(e=>{$("#meta").textContent="could not load data.json";console.error(e)});
+/* ── loading the bundle ────────────────────────────────────────────────────
+   Two shapes are accepted. `data.json` is the plaintext bundle, used when the
+   site is served from somewhere that gates it (Vercel + middleware.js) or off
+   a laptop. `data.enc.json` is the same bundle encrypted, used when the host is
+   public — GitHub Pages on a free account can only serve from a public repo and
+   cannot do Basic auth, so the page is public and the data is not.
+   Encrypted is preferred when both exist: never fall back to plaintext, because
+   a stale data.json sitting next to a live data.enc.json would silently serve
+   the grades in the clear. */
+const PASS_KEY = "tm_research_pass";
+
+async function deriveKey(pass, salt, iterations){
+  const base = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    {name:"PBKDF2", salt, iterations, hash:"SHA-256"},
+    base, {name:"AES-GCM", length:256}, false, ["decrypt"]);
+}
+const b64 = s => Uint8Array.from(atob(s), c=>c.charCodeAt(0));
+
+async function decryptBundle(blob, pass){
+  const key = await deriveKey(pass, b64(blob.salt), blob.iterations);
+  const plain = await crypto.subtle.decrypt(
+    {name:"AES-GCM", iv:b64(blob.iv)}, key, b64(blob.ct));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+async function load(){
+  let blob=null;
+  try{
+    const r = await fetch("data.enc.json", {cache:"no-store"});
+    if(r.ok) blob = await r.json();
+  }catch(e){ /* not deployed encrypted — fall through to plaintext */ }
+
+  if(!blob){
+    const r = await fetch("data.json", {cache:"no-store"});
+    if(!r.ok) throw new Error("no bundle found");
+    D = await r.json();
+    return boot();
+  }
+
+  // A saved passphrase is tried silently first; a wrong one just re-prompts.
+  const saved = localStorage.getItem(PASS_KEY);
+  if(saved){
+    try{ D = await decryptBundle(blob, saved); return boot(); }
+    catch(e){ localStorage.removeItem(PASS_KEY); }
+  }
+  showGate(blob);
+}
+
+function showGate(blob){
+  const el = $("#gate");
+  el.hidden = false;
+  $("#app").hidden = true;
+  const submit = async () => {
+    const pass = $("#gate-pass").value;
+    if(!pass) return;
+    $("#gate-msg").textContent = "decrypting…";
+    $("#gate-btn").disabled = true;
+    try{
+      D = await decryptBundle(blob, pass);
+      if($("#gate-remember").checked) localStorage.setItem(PASS_KEY, pass);
+      el.hidden = true; $("#app").hidden = false;
+      boot();
+    }catch(e){
+      // GCM authentication failing IS the wrong-passphrase signal; there is no
+      // separate check and no way to distinguish it from tampering, which is
+      // the property that makes the gate worth anything.
+      $("#gate-msg").textContent = "That passphrase does not open this bundle.";
+      $("#gate-btn").disabled = false;
+    }
+  };
+  $("#gate-btn").onclick = submit;
+  $("#gate-pass").onkeydown = e => { if(e.key==="Enter") submit(); };
+  $("#gate-pass").focus();
+}
+
+load().catch(e=>{
+  $("#meta").textContent = "could not load the research bundle";
+  console.error(e);
+});
 
 /* The model's arithmetic, reimplemented exactly. Constants come from the
    exported config, not hard-coded, so this cannot drift from the engine. */
@@ -177,6 +297,8 @@ function margin(hg,ag,cfg,neutral){
 }
 
 function boot(){
+  $("#gate").hidden = true;
+  $("#app").hidden = false;
   $("#meta").textContent =
     `${D.sport.toUpperCase()} ${D.season} · grades ${D.grade_season} · `+
     `updated ${D.generated_utc.slice(0,16).replace("T"," ")} UTC`;
@@ -185,12 +307,26 @@ function boot(){
     `Showing ${D.grade_season} grades`,
     `No ${D.season} grades have been synced yet. Upload the new workbook and the `+
     `sync will pick it up — everything below still reflects ${D.grade_season}.`);
-  if(D.dispersion && !D.dispersion.ok) addBanner(
+  if(D.preseason) addBanner(
+    "Season has not started — track these, do not bet them",
+    `Win and loss points are all zero, so every rating below is a preseason `+
+    `estimate and nothing more. Replaying 2025 with the film grades, on games `+
+    `inside ${D.blowout_line} pts: <b style="display:inline">week 1 went 48.7% ATS</b> `+
+    `against 57.6% in weeks 4–8 and 55.1% for the season. One season proves little, `+
+    `but the mechanism is real — in week 1 half the formula is literally zero.`);
+  else if(D.dispersion && !D.dispersion.ok) addBanner(
     "These picks are not usable yet",
-    `Model margins vary ${D.dispersion.sd_model.toFixed(1)} pts against the market's `+
+    `Across ${D.dispersion.n} bettable games, model margins vary `+
+    `${D.dispersion.sd_model.toFixed(1)} pts against the market's `+
     `${D.dispersion.sd_market.toFixed(1)} (ratio ${D.dispersion.ratio.toFixed(2)}). `+
     `The ratings can barely tell teams apart, so every underdog looks like value — `+
-    `that is the flaw showing up in the EV column, not an edge. Grade film, then re-run.`);
+    `that is the flaw showing up in the EV column, not an edge. Check that the `+
+    `grades imported and are not all sitting near the column mean.`);
+  if(D.excluded_blowouts) addBanner(
+    `${D.excluded_blowouts} game${D.excluded_blowouts===1?"":"s"} left off the board`,
+    `The line is wider than ${D.blowout_line} points. A grade sheet spans about 30 `+
+    `rating points end to end, so it cannot express a 45-point spread — those games `+
+    `produce the biggest EV numbers on the page and every one of them is an artefact.`);
 
   $$("nav button").forEach(b=>b.onclick=()=>{
     $$("nav button").forEach(x=>x.setAttribute("aria-selected",x===b));
@@ -212,7 +348,41 @@ function boot(){
   $("#team").oninput=drawTeam; $("#game").oninput=drawMove;
   $("#wteam").oninput=()=>{EDITS={};drawWhatIf()};
   $("#reset").onclick=()=>{EDITS={};drawWhatIf()};
-  drawBets();drawTeam();drawMove();drawWhatIf();
+  drawBets();drawTeam();drawMove();drawWhatIf();drawAlerts();
+}
+
+function drawAlerts(){
+  const A = D.alerts;
+  const note = $("#alertnote");
+  if(!A){
+    $("#alerttbl").innerHTML="";
+    note.textContent = "The roster watcher has not run yet, so this is unknown — "+
+      "which is not the same as “nobody is hurt”.";
+    $("#watchtbl").innerHTML=""; return;
+  }
+  const rows = A.alerts||[];
+  if(!rows.length){
+    $("#alerttbl").innerHTML =
+      `<tr><td class="empty">Nothing listed as out moves any rating by `+
+      `${A.min_points} points or more.</td></tr>`;
+    note.textContent = "College football has no mandatory injury report, so an "+
+      "empty board in the preseason is the expected answer rather than a broken feed. "+
+      `Checked ${(A.generated_utc||"").slice(0,16).replace("T"," ")} UTC.`;
+  }else{
+    $("#alerttbl").innerHTML =
+      `<tr><th>Team</th><th>Player</th><th>Pos</th><th class="num">Line moves</th><th>Status</th></tr>`+
+      rows.map(a=>`<tr><td>${a.team}</td><td>${a.player}</td><td>${a.pos}</td>`+
+        `<td class="num">${(-a.points).toFixed(2)}</td>`+
+        `<td>${[a.status,a.detail].filter(Boolean).join(" · ")}</td></tr>`).join("");
+    note.textContent = "How far this team's number should move if he does not play. "+
+      `Checked ${(A.generated_utc||"").slice(0,16).replace("T"," ")} UTC.`;
+  }
+  const w = A.watchlist||[];
+  $("#watchtbl").innerHTML = w.length
+    ? `<tr><th>Team</th><th>Player</th><th>Pos</th><th class="num">OVR</th><th class="num">Points</th></tr>`+
+      w.slice(0,60).map(r=>`<tr><td>${r.team}</td><td>${r.player}</td><td>${r.pos}</td>`+
+        `<td class="num">${r.ovr}</td><td class="num">${r.points.toFixed(2)}</td></tr>`).join("")
+    : "";
 }
 
 function addBanner(title,body){
@@ -358,4 +528,5 @@ function lineChart(xs, ys, label){
     <polyline class="mark" points="${pts}"/>${dots}</svg>`;
 }
 </script>
+</div>
 </body></html>
