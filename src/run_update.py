@@ -171,6 +171,30 @@ def main():
     print("  %d upcoming games" % len(picks))
 
     print("\n[5/9] lock picks + grade finished ones")
+
+    # REFUSE to lock if the configured rater has nothing to rate with.
+    #
+    # GradeRater returns None when a team has no grades and the engine quietly
+    # falls back to Elo. That is the right behaviour for one missing team and
+    # completely wrong for all of them: on a runner with an empty grades table
+    # every pick is an Elo pick, and the ledger is APPEND-ONLY, so they are
+    # recorded permanently as this model's picks. It happened -- 888 of them,
+    # published to the public track record, from the model measured to have no
+    # edge at all. Nothing failed, because substituting a different model is not
+    # an error anywhere in the code.
+    if config.get("rater") == "grades":
+        n_grades = conn.execute(
+            "SELECT COUNT(*) n FROM grades WHERE sport=? AND season=?",
+            (args.sport, season)).fetchone()["n"]
+        if n_grades == 0:
+            print("  REFUSING TO LOCK — the config asks for the grade model and")
+            print("  there are no %d grades in the database. Every pick would be" % season)
+            print("  an Elo fallback recorded permanently as a grade-model pick.")
+            print("  Sync the film grades (MODEL_GRADES_SHEET_ID) and re-run.")
+            picks = []
+        else:
+            print("  %d grade rows for %d — grade model is live." % (n_grades, season))
+
     label = "%s@%s" % (os.path.basename(cfg_path).replace(".json", ""),
                        started.strftime("%Y-%m-%d"))
     locked, already_started = ledger.lock(conn, args.sport, picks, label, now=started)

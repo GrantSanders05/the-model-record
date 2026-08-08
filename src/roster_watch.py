@@ -47,8 +47,21 @@ import team_aliases
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/college-football"
-UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+# ESPN allow-lists ordinary API clients and 403s everything else. Measured:
+#   urllib's own default  200      curl/8.4.0            200
+#   python-requests/2.31  200      the-model/1.0         403
+#   Chrome browser string 403
+# So it rejects both browser impersonation AND unfamiliar custom agents. The
+# honest option that works is to send no User-Agent override and let urllib
+# identify itself as what it is.
+#
+# Note this is the exact OPPOSITE of TeamCrafters, which 403s urllib's default
+# and requires the browser string. Copying the working headers from
+# fetch_teamcrafters.py is what broke this: every request 403'd, the team index
+# came back empty, and the run reported "no ESPN roster for 138 teams" as if
+# that were a fact about ESPN.
+HEADERS = {"Accept": "*/*"}
 
 SEVEN = ["qb", "rb", "wr", "ol", "dl", "lb", "db"]
 _SUFFIX = re.compile(r"\b(jr|sr|ii|iii|iv|v)\.?$", re.I)
@@ -70,16 +83,27 @@ def norm_name(first, last):
     return _PUNCT.sub("", s).strip()
 
 
-def _get_json(url, tries=3):
+def _get_json(url, tries=3, quiet=False):
+    """
+    Fetch and parse, returning None on failure -- but SAYING SO.
+
+    An earlier version swallowed the exception silently. ESPN began 403ing the
+    User-Agent it was sent, every request failed, the team index came back empty,
+    and the run reported "no ESPN roster for 138 teams" as though that were a
+    fact about ESPN rather than a bug here. A returned None must be visible.
+    """
+    last = None
     for attempt in range(tries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            req = urllib.request.Request(url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=45) as r:
                 return json.loads(r.read().decode("utf-8", "replace"))
-        except (urllib.error.URLError, TimeoutError, ValueError):
-            if attempt == tries - 1:
-                return None
-            time.sleep(1.5 * (attempt + 1))
+        except (urllib.error.URLError, TimeoutError, ValueError) as e:
+            last = e
+            if attempt < tries - 1:
+                time.sleep(1.5 * (attempt + 1))
+    if not quiet:
+        print("  fetch failed: %s (%s)" % (url.split("?")[0], last))
     return None
 
 
@@ -97,7 +121,14 @@ def espn_team_index(refresh=False):
                             "display": t.get("displayName"),
                             "abbrev": t.get("abbreviation")}
     except (KeyError, IndexError):
-        return {}
+        out = {}
+    if not out:
+        # An empty index makes every later lookup miss, which reads as "nobody is
+        # injured anywhere" -- the most dangerous possible wrong answer here. Never
+        # cache it, and never let it pass as a result.
+        raise RuntimeError(
+            "ESPN returned no teams. The injury check cannot run, and an empty "
+            "result would look exactly like good news.")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     json.dump(out, open(path, "w"))
     return out
