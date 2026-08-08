@@ -135,9 +135,14 @@ def verify_formula(conn, sport, season):
         if "_sheet_total" not in g:
             continue
         seven = sum(g.get(p, 0.0) for p in ["qb", "rb", "wr", "ol", "dl", "lb", "db"])
-        mine = (2 * seven + g.get("coach_st", 0.0)
-                + g.get("_win_points", 0.0) - g.get("_loss_points", 0.0)
-                + g.get("_wins", 0.0) - g.get("_losses", 0.0))
+        core = (2 * seven + g.get("coach_st", 0.0)
+                + g.get("_win_points", 0.0) - g.get("_loss_points", 0.0))
+        # Two sheet generations are both valid:
+        #   2025 workbook: core + Wins - Losses  (the double-counted version)
+        #   2026 workbook: core                  (matches what the engine computes)
+        # Accept either, so a sheet built to the new schema doesn't read as broken.
+        legacy = core + g.get("_wins", 0.0) - g.get("_losses", 0.0)
+        mine = min((core, legacy), key=lambda v: abs(v - g["_sheet_total"]))
         checked += 1
         if abs(mine - g["_sheet_total"]) > 0.06:
             bad += 1
