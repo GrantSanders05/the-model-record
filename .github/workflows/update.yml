@@ -77,22 +77,31 @@ jobs:
         env:
           CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
         run: |
-          if [ ! -f data/model.db ]; then
-            echo "No database found — seeding history (one-off cost)."
+          # Seed on what the database CONTAINS, not on whether the file exists.
+          # Those are different questions, and the difference bit: the runs that
+          # failed before the key was set still cached a model.db holding NFL and
+          # nothing else. Every later run then saw the file, declared itself
+          # restored, and skipped the college seed forever — a poisoned cache
+          # that would never have healed on its own.
+          NFL=$(python3 tools/db_count.py nfl)
+          CFB=$(python3 tools/db_count.py cfb)
+          echo "cached: nfl=$NFL games, cfb=$CFB games"
+
+          if [ "$NFL" -lt 100 ]; then
+            echo "Seeding NFL history."
             python3 src/fetch_nfl.py
-            if [ -n "$CFBD_API_KEY" ]; then
+          fi
+
+          if [ "$HAS_CFBD" = "true" ]; then
+            if [ "$CFB" -lt 100 ]; then
+              echo "Seeding college football history (one-off cost)."
               python3 src/fetch_cfb.py --seasons 2014-2026
             else
-              # Missing key is a configuration gap, not a crash. Failing the whole
-              # job here meant the site never deployed at all and the run just went
-              # red every morning with no page to show for it. Warn loudly, carry on,
-              # and let the site publish whatever it legitimately has.
-              echo "::warning::CFBD_API_KEY is not set — skipping college football."
-              echo "::warning::No CFB picks will be produced until it is added:"
-              echo "::warning::  gh secret set CFBD_API_KEY"
+              echo "College football history restored from cache."
             fi
           else
-            echo "Database restored from cache."
+            echo "::warning::CFBD_API_KEY is not set — skipping college football."
+            echo "::warning::  gh secret set CFBD_API_KEY"
           fi
 
       # This gate is deliberately hard: if the harness cannot prove it still
