@@ -185,7 +185,15 @@ CREATE TABLE IF NOT EXISTS picks_log (
     actual_total   REAL,
     ats_result     TEXT,               -- 'W' | 'L' | 'P'
     ou_result      TEXT,
-    graded_at      TEXT
+    graded_at      TEXT,
+    -- Moneyline. ml_pick was recorded from the start and never graded, so the
+    -- market the model has an actual expected-value calculation for contributed
+    -- nothing to the record. Odds are stored AT PICK TIME because a moneyline
+    -- result is worthless without the price it was taken at: 30 wins at +150 and
+    -- 30 wins at -150 are opposite outcomes.
+    ml_odds_at_pick INTEGER,
+    closing_ml      INTEGER,
+    ml_result       TEXT                -- 'W' | 'L' | 'P'
 );
 CREATE INDEX IF NOT EXISTS idx_picks_season ON picks_log(sport, season, week);
 
@@ -209,6 +217,29 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
 """
 
 
+# Columns added after a table already existed somewhere. CREATE TABLE IF NOT EXISTS
+# does nothing to a table that is already there, so a new column in SCHEMA above
+# reaches a fresh database and silently misses every existing one -- including the
+# only copy that matters, the model.db restored from the Actions cache on every run.
+# Each entry is applied with ALTER TABLE ADD COLUMN and skipped if already present.
+ADDED_COLUMNS = [
+    # (table, column, type) -- append only, never edit or remove an entry
+    ("picks_log", "ml_odds_at_pick", "INTEGER"),
+    ("picks_log", "closing_ml", "INTEGER"),
+    ("picks_log", "ml_result", "TEXT"),
+]
+
+
+def _migrate(conn):
+    for table, column, decl in ADDED_COLUMNS:
+        have = {r["name"] for r in conn.execute("PRAGMA table_info(%s)" % table)}
+        if not have:
+            continue                      # table itself is new; SCHEMA just made it
+        if column not in have:
+            conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, decl))
+    conn.commit()
+
+
 def connect(path=DB_PATH):
     """Open the database, creating it and its schema if needed."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -216,6 +247,7 @@ def connect(path=DB_PATH):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
 
 

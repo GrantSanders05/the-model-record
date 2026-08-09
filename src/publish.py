@@ -31,6 +31,7 @@ import os
 
 import ledger
 import metrics
+import tracking
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BRAND = "#00922E"
@@ -188,11 +189,40 @@ def render(conn, sport="cfb", backtest_summary=None):
     </div>
   </section>""" % (b["season"], b["n"], b["ats_pct"], b["roi"], b["vs_baseline"])
 
+    # Week by week, in public. A single season-long percentage is the number that
+    # is easiest to keep quiet about a bad month inside; splitting it is the
+    # cheapest credibility this page can buy, and it costs one table.
+    weekly_rows = tracking.weekly([r for r in rec["rows"] if r.get("graded_at")])
+    if weekly_rows:
+        body = "".join(
+            """<tr><td>%s</td><td class="num">%d–%d%s</td><td class="num">%s</td>
+                   <td class="num">%s</td><td class="num">%s</td></tr>""" % (
+                "Bowls" if str(w["key"]) == "99" else "Week %s" % w["key"],
+                w["ats"]["w"], w["ats"]["l"],
+                "–%d" % w["ats"]["push"] if w["ats"]["push"] else "",
+                "%.1f%%" % w["ats"]["pct"] if w["ats"]["pct"] is not None else "—",
+                "%+.2fu" % w["ats"]["units"] if w["ats"]["units"] is not None else "—",
+                "%.1f%%" % w["cumulative"]["pct"] if w["cumulative"]["pct"] is not None else "—")
+            for w in weekly_rows)
+        weekly = """
+  <section>
+    <h2>Week by week</h2>
+    <p class="note">Each week on its own, and the season to date beside it. A single
+      season-long percentage can hide a bad month; this cannot.</p>
+    <div class="panel scroll"><table><thead><tr><th>Week</th><th class="num">ATS</th>
+      <th class="num">ATS %%</th><th class="num">Units</th>
+      <th class="num">Season to date</th></tr></thead>
+      <tbody>%s</tbody></table></div>
+  </section>""" % body
+    else:
+        weekly = ""
+
     return TEMPLATE % {
         "brand": BRAND,
         "updated": now,
         "headline": headline,
         "chart": equity_svg(rec["curve"]),
+        "weekly": weekly,
         "backtest": bt,
         "pending_n": len(pending),
         "pending": picks_table(pending, graded=False),
@@ -325,6 +355,7 @@ footer strong{color:var(--ink2)}
   %(chart)s
 </section>
 
+%(weekly)s
 %(backtest)s
 
 <section>

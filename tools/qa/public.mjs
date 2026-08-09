@@ -43,6 +43,32 @@ ok("every stat has a label and a value",
 // being luck, so assert the guard rather than the accident.
 ok("stylesheet forces [hidden] to outrank author display rules",
    /\[hidden\]\s*\{\s*display\s*:\s*none\s*!important/.test(html));
+
+console.log("\n── week by week ──");
+{
+  // This section only exists once something is graded. Run with QA_PAGE pointed at
+  // the fixture to exercise the populated branch; against the live (empty) ledger
+  // the correct behaviour is for it to be absent rather than an empty table.
+  const hasWeekly = [...window.document.querySelectorAll("h2")]
+    .some(h => h.textContent.includes("Week by week"));
+  const graded = /ATS record/.test(window.document.body.textContent);
+  if (graded) {
+    ok("a graded record publishes a week-by-week table", hasWeekly);
+    const tbl = [...window.document.querySelectorAll("table")].find(
+      t => /Season to date/.test(t.textContent));
+    ok("the weekly table has a running season column", !!tbl);
+    const trs = [...(tbl?.querySelectorAll("tbody tr") || [])];
+    ok("it has one row per week", trs.length > 1, `${trs.length} rows`);
+    // A running total that does not run is worse than no column at all.
+    const cum = trs.map(tr => parseFloat(tr.lastElementChild.textContent));
+    ok("the running total is populated on every row",
+       cum.every(v => !Number.isNaN(v)), cum.slice(0, 4).join(", "));
+    ok("weeks are labelled", /Week /.test(trs[0]?.textContent || ""));
+  } else {
+    ok("an empty ledger omits the weekly table rather than showing an empty one",
+       !hasWeekly);
+  }
+}
 // The tooltip only exists once there is an equity chart to hover, so an empty ledger
 // legitimately has none. Skipping silently would let this assertion quietly stop
 // running the day it matters most, so say which case ran.

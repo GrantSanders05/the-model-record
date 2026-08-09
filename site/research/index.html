@@ -215,6 +215,22 @@ tr.daybreak>td{border-top:1px solid var(--ink3)}
 .legend{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:10px 0 0;
   color:var(--ink3);font-size:11.5px}
 .legend b{color:var(--ink2);font-weight:600}
+
+/* A confidence interval rides under its rate, smaller and quieter — present at a
+   glance, never competing with the number it qualifies. */
+.ci{display:block;font-size:10px;color:var(--ink3);font-weight:400;letter-spacing:0}
+/* The one banner that is good news. Same shape as the warning so the page has one
+   banner idiom, different hue so it is not read as an alarm. */
+.banner.ok{border-color:color-mix(in srgb,var(--brand) 45%,var(--line));
+  background:var(--brand-wash);color:var(--brand-ink)}
+.banner.ok b{color:var(--brand-ink)}
+/* W / L / P chips. A letter as well as a colour, always — the record is the part of
+   this page most likely to be read in print or by someone colour-blind. */
+.res-w,.res-l,.res-p{display:inline-grid;place-items:center;min-width:19px;height:18px;
+  border-radius:5px;font-size:10.5px;font-weight:700;letter-spacing:.02em}
+.res-w{background:var(--brand-wash);color:var(--brand-ink)}
+.res-l{background:color-mix(in srgb,var(--neg) 12%,transparent);color:var(--neg)}
+.res-p{background:var(--raised);color:var(--ink3)}
 /* "No bet" is a decision the model made, not a warning about the site, so it gets a
    quiet pill rather than the alarm colour used for banners. */
 .warnpill{color:var(--warn);font-size:11px;font-weight:600;white-space:nowrap}
@@ -294,6 +310,8 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
     <button role="tab" data-v="rank"   aria-selected="true">Rankings</button>
     <button role="tab" data-v="sched"  aria-selected="false">Schedule</button>
     <button role="tab" data-v="bets"   aria-selected="false">Best bets</button>
+    <button role="tab" data-v="results" aria-selected="false">Results</button>
+    <button role="tab" data-v="mybets" aria-selected="false">My bets</button>
     <button role="tab" data-v="teams"  aria-selected="false">Team</button>
     <button role="tab" data-v="move"   aria-selected="false">Line movement</button>
     <button role="tab" data-v="whatif" aria-selected="false">What-if</button>
@@ -390,6 +408,98 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
   <div id="sizenote" class="banner" hidden></div>
   <div class="panel scroll"><table id="bets"></table></div>
   <footer class="note" id="betnote"></footer>
+</section>
+
+<!-- ── RESULTS ─────────────────────────────────────────────────────── -->
+<section class="view" id="v-results">
+  <h2>The model's record</h2>
+  <p class="sub">Every pick locked before kickoff and graded after, cut every way that
+     could change the answer. No rate is shown without the number of decisions behind it
+     and a 95% interval, because those are what decide whether it means anything.</p>
+  <div id="resultstate"></div>
+  <div class="cards" id="rescards"></div>
+  <div id="resproof"></div>
+
+  <h2>Week by week</h2>
+  <p class="sub">Each week on its own, and the season to date beside it.</p>
+  <div class="panel scroll"><table id="restbl"></table></div>
+
+  <h2>Where the record comes from</h2>
+  <p class="sub">A headline rate can hide a segment that is losing. These are the cuts
+     most likely to be carrying — or draining — the whole thing.</p>
+  <div class="bar">
+    <div class="field"><label for="segcut">Cut by</label>
+      <select id="segcut">
+        <option value="by_edge">Size of disagreement with the market</option>
+        <option value="by_side">Favourite or underdog</option>
+        <option value="by_venue">Home team or away team</option>
+        <option value="by_config">Model version</option>
+      </select></div>
+  </div>
+  <div class="panel scroll"><table id="segtbl"></table></div>
+
+  <h2>Closing line value</h2>
+  <p class="sub">Whether the number moved toward the pick after it was made. This is the
+     only signal that means something before the win rate does — it needs dozens of bets,
+     not thousands, because it does not depend on how the ball bounced.</p>
+  <div class="cards" id="clvcards"></div>
+
+  <h2>Calibration</h2>
+  <p class="sub">Actual margin regressed on predicted margin. A slope near 1 means the
+     numbers are the right size; well under 1 means the model is directionally right and
+     numerically overconfident, which is a scaling problem, not an ignorance problem.</p>
+  <div class="cards" id="calcards"></div>
+
+  <h2>Every graded pick</h2>
+  <p class="sub">The working, not just the total. A record nobody can audit is a claim.</p>
+  <div class="bar">
+    <div class="field"><label for="rfilter">Show</label>
+      <select id="rfilter">
+        <option value="all">All picks</option>
+        <option value="W">Wins only</option>
+        <option value="L">Losses only</option>
+        <option value="P">Pushes only</option>
+      </select></div>
+    <div class="field"><label for="rweek">Week</label><select id="rweek"></select></div>
+  </div>
+  <div class="panel scroll"><table id="rpicks"></table></div>
+  <footer class="note" id="rpicksnote"></footer>
+</section>
+
+<!-- ── MY BETS ─────────────────────────────────────────────────────── -->
+<section class="view" id="v-mybets">
+  <h2>My bets</h2>
+  <p class="sub">What actually got money on it, at the price you got, in the size you
+     chose. Kept separate from the model's record on purpose: the gap between the two is
+     the part worth looking at.</p>
+  <div id="mbstate"></div>
+  <div class="bar" id="mbbar" hidden>
+    <div class="field"><label for="unitsize">1 unit =</label>
+      <input id="unitsize" type="number" min="0" step="5" value="50"></div>
+    <div class="field"><label for="mbmarket">Market</label>
+      <select id="mbmarket">
+        <option value="">All markets</option>
+        <option value="spread">Spread</option>
+        <option value="moneyline">Moneyline</option>
+        <option value="total">Total</option>
+      </select></div>
+    <div class="field"><label for="mbresult">Result</label>
+      <select id="mbresult">
+        <option value="">All</option>
+        <option value="W">Won</option>
+        <option value="L">Lost</option>
+        <option value="P">Push</option>
+        <option value="open">Not settled</option>
+      </select></div>
+  </div>
+  <div class="cards" id="mbcards"></div>
+  <div id="mbproblems"></div>
+  <h2 id="mbcurveh" hidden>Bankroll, in units</h2>
+  <div class="panel" style="padding:12px" id="mbcurve" hidden></div>
+  <h2 id="mbcuth" hidden>By market and by week</h2>
+  <div class="panel scroll" id="mbcutwrap" hidden><table id="mbcut"></table></div>
+  <h2 id="mblisth" hidden>Every bet</h2>
+  <div class="panel scroll" id="mblistwrap" hidden><table id="mblist"></table></div>
 </section>
 
 <!-- ── TEAM ────────────────────────────────────────────────────────── -->
@@ -629,7 +739,7 @@ function boot(){
      selectable — that is most of the season in August. */
   const sweeks=schedWeeks();
   $("#swk").innerHTML='<option value="">All weeks</option>'+
-    sweeks.map(w=>`<option value="${w}">Week ${w}</option>`).join("");
+    sweeks.map(w=>`<option value="${w}">${weekName(w)}</option>`).join("");
   $("#swk").value=String(defaultWeek());
   const sconfs=[...new Set(Object.values(D.teams).map(t=>t.conference).filter(Boolean))].sort();
   $("#sconf").innerHTML='<option value="">All conferences</option>'+
@@ -658,7 +768,14 @@ function boot(){
   $("#wteam").oninput=()=>{EDITS={};drawWhatIf()};
   $("#reset").onclick=()=>{EDITS={};drawWhatIf()};
 
-  drawRank();drawSched();drawBets();drawTeam();drawMove();drawWhatIf();drawAlerts();
+  try{ const u=localStorage.getItem(UNIT_KEY); if(u) $("#unitsize").value=u; }catch(e){}
+  ["#segcut"].forEach(s=>{ $(s).oninput=drawSeg; $(s).onchange=drawSeg; });
+  ["#rfilter","#rweek"].forEach(s=>{ $(s).oninput=drawPickList; $(s).onchange=drawPickList; });
+  ["#unitsize","#mbmarket","#mbresult"].forEach(s=>{
+    $(s).oninput=drawMyBets; $(s).onchange=drawMyBets; });
+
+  drawRank();drawSched();drawBets();drawResults();drawMyBets();
+  drawTeam();drawMove();drawWhatIf();drawAlerts();
 }
 
 function banners(){
@@ -815,6 +932,10 @@ function kickoffLabel(k){
                                      hour:"numeric",minute:"2-digit"});
 }
 function schedWeeks(){ return [...new Set(D.schedule.map(g=>g.week))].sort((a,b)=>a-b); }
+/* 99 is the bowls/playoff bucket. CFBD numbers the postseason from 1, so without a
+   distinct label a 27 December bowl and the opening Saturday share a week number. */
+const BOWLS=99;
+const weekName=w=>+w===BOWLS?"Bowls":"Week "+w;
 function defaultWeek(){
   /* Open on the week Grant is actually looking at: the earliest with a game still
      to play, or the last week of the season once they are all done. */
@@ -841,7 +962,7 @@ function drawSched(){
   const disagree=rows.filter(g=>g.edge!=null&&Math.abs(g.edge)>=3).length;
   $("#schedcards").innerHTML=`
     <div class="card"><div class="k">Games</div><div class="v">${rows.length}</div>
-      <div class="s">${wk===""?"all weeks":"week "+wk}</div></div>
+      <div class="s">${wk===""?"all weeks":weekName(wk).toLowerCase()}</div></div>
     <div class="card"><div class="k">With a line</div><div class="v">${withLine}</div>
       <div class="s">${rows.length?Math.round(100*withLine/rows.length):0}% priced</div></div>
     <div class="card"><div class="k">Model disagrees 3+</div><div class="v">${disagree}</div>
@@ -1080,6 +1201,309 @@ function loadBetPrefs(){
     if(p.bank)   $("#bank").value=p.bank;
     if(p.weekly) $("#weekly").value=p.weekly;
   }catch(e){}
+}
+
+/* ── RESULTS ──────────────────────────────────────────────────────
+   Nothing here prints a percentage alone. Every rate gets its n and its 95%
+   interval, and "clears" — whether the WHOLE interval sits above break-even —
+   is the only column that answers "is this an edge". A 75% start on eight bets
+   does not clear; 56% on 1,400 does. The point-estimate ordering of those two
+   is backwards from their evidential ordering, and that is the trap this page
+   exists to shut.                                                             */
+function recCell(r){
+  if(!r||!r.n) return `<td class="num muted">—</td>`;
+  return `<td class="num">${r.w}–${r.l}${r.push?"–"+r.push:""}</td>`;
+}
+function pctCell(r,showCI=true){
+  if(!r||!r.n) return `<td class="num muted">—</td>`;
+  const ci=showCI&&r.ci95?`<span class="ci">${r.ci95[0].toFixed(1)}–${r.ci95[1].toFixed(1)}</span>`:"";
+  return `<td class="num"><span class="${r.clears?"pos":""}">${r.pct.toFixed(1)}%</span>${ci}</td>`;
+}
+function unitsCell(v){
+  if(v==null) return `<td class="num muted">—</td>`;
+  return `<td class="num ${cls(v)}">${sgn(v,2)}u</td>`;
+}
+/* How many more decisions before a rate this size could clear break-even. The
+   honest answer to "is it working yet" is usually "not enough games", and saying
+   so with a number beats saying it with a shrug. */
+function betsNeeded(pct){
+  if(pct==null||pct<=52.38) return null;
+  const p=pct/100, be=0.5238095238;
+  for(let n=50;n<=200000;n+=50){
+    const w=Math.round(p*n), z=1.96, ph=w/n, d=1+z*z/n;
+    const c=(ph+z*z/(2*n))/d, m=z*Math.sqrt(ph*(1-ph)/n+z*z/(4*n*n))/d;
+    if(c-m>be) return n;
+  }
+  return null;
+}
+function drawResults(){
+  const T=D.tracking||{};
+  const state=$("#resultstate");
+  if(T.empty){
+    /* An empty record is a STATE, not a zero. "0-0, 0.0%" would be a lie about a
+       season that has not started, and a blank panel reads as a broken page. */
+    state.innerHTML=`<div class="banner"><b>No games have finished yet</b>`+
+      `${T.pending||0} pick(s) are locked and waiting on kickoff. Results appear here `+
+      `automatically as games go final — nothing to set up. Until then this screen is `+
+      `empty on purpose: an empty record is not a 0% record.</div>`;
+    ["#rescards","#resproof","#clvcards","#calcards"].forEach(s=>$(s).innerHTML="");
+    $("#restbl").innerHTML=$("#segtbl").innerHTML=$("#rpicks").innerHTML=
+      `<tbody><tr><td><div class="empty">Nothing graded yet.</div></td></tr></tbody>`;
+    $("#rweek").innerHTML="";
+    return;
+  }
+  state.innerHTML=D.fixture
+    ? `<div class="banner"><b>Sample data</b>This bundle is a 2025 replay built for `+
+      `testing the page. It is not the live record.</div>` : "";
+
+  const o=T.overall, a=o.ats;
+  $("#rescards").innerHTML=`
+    <div class="card"><div class="k">Against the spread</div>
+      <div class="v">${a.n?a.pct.toFixed(1)+"%":"—"}</div>
+      <div class="s">${a.w}–${a.l}${a.push?"–"+a.push:""} · ${a.n} decided</div></div>
+    <div class="card"><div class="k">95% interval</div>
+      <div class="v" style="font-size:17px">${a.ci95?a.ci95[0].toFixed(1)+"–"+a.ci95[1].toFixed(1)+"%":"—"}</div>
+      <div class="s">break-even ${T.break_even}%</div></div>
+    <div class="card"><div class="k">Units (ATS)</div>
+      <div class="v ${cls(a.units)}">${a.units==null?"—":sgn(a.units,1)}</div>
+      <div class="s">${a.roi==null?"":"ROI "+sgn(a.roi,1)+"%"} at −110</div></div>
+    <div class="card"><div class="k">Over / under</div>
+      <div class="v">${o.ou.n?o.ou.pct.toFixed(1)+"%":"—"}</div>
+      <div class="s">${o.ou.w}–${o.ou.l}${o.ou.push?"–"+o.ou.push:""}</div></div>
+    <div class="card"><div class="k">Straight up</div>
+      <div class="v">${o.ml.n?o.ml.pct.toFixed(1)+"%":"—"}</div>
+      <div class="s">${o.ml.units==null?"hit rate only":"units "+sgn(o.ml.units,1)}</div></div>
+    <div class="card"><div class="k">Graded</div><div class="v">${T.graded}</div>
+      <div class="s">${T.pending} still open</div></div>`;
+
+  /* The verdict, in one sentence, with the number that would change it. */
+  const need=betsNeeded(a.pct);
+  $("#resproof").innerHTML = !a.n ? "" : a.clears
+    ? `<div class="banner ok"><b>This clears break-even</b>The whole 95% interval `+
+      `(${a.ci95[0].toFixed(1)}–${a.ci95[1].toFixed(1)}%) sits above ${T.break_even}%. `+
+      `On ${a.n} decisions that is evidence of an edge, not a hot streak.</div>`
+    : `<div class="banner"><b>Not proven yet — and that is the expected state</b>`+
+      `${a.pct.toFixed(1)}% on ${a.n} decisions gives an interval of `+
+      `${a.ci95[0].toFixed(1)}–${a.ci95[1].toFixed(1)}%, which still contains `+
+      `${T.break_even}%. ${need?`At this rate it would take about ${need.toLocaleString()} `+
+      `graded bets for the interval to clear.`:`A rate at or below break-even never clears, `+
+      `however many bets you add.`} Closing line value below answers the same question `+
+      `far sooner.</div>`;
+
+  /* weekly */
+  const wk=T.weekly||[];
+  $("#restbl").innerHTML = wk.length ? `<thead><tr>
+      <th>Week</th><th class="num">ATS</th><th class="num">ATS %</th><th class="num">Units</th>
+      <th class="num">O/U</th><th class="num">Straight up</th><th class="num">CLV</th>
+      <th class="num">Season to date</th></tr></thead><tbody>`+
+    wk.map(r=>`<tr><td class="strong">${esc(weekName(r.key))}</td>
+      ${recCell(r.ats)}${pctCell(r.ats,false)}${unitsCell(r.ats.units)}
+      ${recCell(r.ou)}${recCell(r.ml)}
+      <td class="num ${cls(r.clv.mean)}">${r.clv.mean==null?"—":sgn(r.clv.mean,2)}</td>
+      ${pctCell(r.cumulative)}</tr>`).join("")+`</tbody>`
+    : `<tbody><tr><td><div class="empty">No weeks graded yet.</div></td></tr></tbody>`;
+
+  drawSeg();
+
+  const c=o.clv;
+  $("#clvcards").innerHTML=`
+    <div class="card"><div class="k">Mean CLV</div>
+      <div class="v ${cls(c.mean)}">${c.mean==null?"—":sgn(c.mean,2)}</div>
+      <div class="s">points per pick</div></div>
+    <div class="card"><div class="k">Beat the close</div>
+      <div class="v">${c.beat_pct==null?"—":c.beat_pct.toFixed(1)+"%"}</div>
+      <div class="s">${c.positive}–${c.negative}${c.flat?" ("+c.flat+" flat)":""}</div></div>
+    <div class="card"><div class="k">On</div><div class="v">${c.n}</div>
+      <div class="s">picks with both numbers</div></div>
+    <div class="card"><div class="k">Reading it</div>
+      <div class="v" style="font-size:14px;font-weight:560">${
+        c.mean==null?"—":c.mean>0.25?"Finding something":c.mean<-0.25?"Behind the market":"Neutral"}</div>
+      <div class="s">positive means the line moved your way</div></div>`;
+
+  const cal=T.calibration;
+  $("#calcards").innerHTML = cal ? `
+    <div class="card"><div class="k">Slope</div><div class="v">${cal.slope.toFixed(2)}</div>
+      <div class="s">1.00 is perfect</div></div>
+    <div class="card"><div class="k">Bias</div>
+      <div class="v ${cls(cal.bias)}">${sgn(cal.bias,2)}</div>
+      <div class="s">points, model minus actual</div></div>
+    <div class="card"><div class="k">RMSE</div><div class="v">${cal.rmse.toFixed(1)}</div>
+      <div class="s">typical miss, in points</div></div>
+    <div class="card"><div class="k">Correlation</div><div class="v">${cal.r.toFixed(2)}</div>
+      <div class="s">on ${cal.n} games</div></div>`
+    : `<div class="card"><div class="k">Calibration</div><div class="v">—</div>
+       <div class="s">needs 10+ graded games</div></div>`;
+
+  const weeks=[...new Set((T.rows||[]).map(r=>r.week))].sort((a,b)=>a-b);
+  if($("#rweek").options.length!==weeks.length+1)
+    $("#rweek").innerHTML='<option value="">All weeks</option>'+
+      weeks.map(w=>`<option value="${w}">${weekName(w)}</option>`).join("");
+  drawPickList();
+}
+function drawSeg(){
+  const T=D.tracking||{}; if(T.empty) return;
+  const rows=T[$("#segcut").value]||[];
+  $("#segtbl").innerHTML = rows.length ? `<thead><tr>
+      <th>Segment</th><th class="num">ATS</th><th class="num">ATS %</th>
+      <th class="num">Units</th><th class="num">Clears?</th><th class="num">CLV</th>
+      </tr></thead><tbody>`+
+    rows.map(r=>`<tr><td class="strong">${esc(r.key)}</td>
+      ${recCell(r.ats)}${pctCell(r.ats)}${unitsCell(r.ats.units)}
+      <td class="num">${r.ats.n?(r.ats.clears?'<span class="pos">yes</span>':'<span class="muted">no</span>'):"—"}</td>
+      <td class="num ${cls(r.clv.mean)}">${r.clv.mean==null?"—":sgn(r.clv.mean,2)}</td></tr>`).join("")+
+    `</tbody>`
+    : `<tbody><tr><td><div class="empty">Nothing in this cut yet.</div></td></tr></tbody>`;
+}
+function drawPickList(){
+  const T=D.tracking||{}; if(T.empty) return;
+  const f=$("#rfilter").value, wk=$("#rweek").value;
+  const matched=(T.rows||[]).filter(r=>(!f||f==="all"||r.ats===f)&&(!wk||String(r.week)===wk));
+  /* Capped for the DOM's sake, and the cap is STATED. Silently rendering the first
+     400 of 900 makes the table lie about the filter as well as the total — two
+     different filters both showing "400 rows" look identical and neither is. */
+  const CAP=400;
+  const rows=matched.slice(0,CAP);
+  $("#rpicksnote").textContent = matched.length>CAP
+    ? `Showing the first ${CAP} of ${matched.length} matching picks.`
+    : `Showing all ${matched.length} matching pick(s).`;
+  const badge=v=>v==null?`<span class="muted">—</span>`
+    :`<span class="res-${v.toLowerCase()}">${v}</span>`;
+  $("#rpicks").innerHTML = rows.length ? `<thead><tr>
+      <th class="num">Wk</th><th>Matchup</th><th>Spread pick</th><th class="num">Line at pick</th>
+      <th class="num">Closed</th><th class="num">CLV</th><th class="num">Final</th>
+      <th class="num">ATS</th><th class="num">O/U</th><th class="num">SU</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr>
+      <td class="num muted">${r.week}</td>
+      ${matchupCell(r.away,r.home,false)}
+      ${pickCell(r.ats_pick,r.closing,r.home,r.away)}
+      <td class="num muted">${r.line_at_pick==null?"—":sgn(r.line_at_pick)}</td>
+      <td class="num muted">${r.closing==null?"—":sgn(r.closing)}</td>
+      <td class="num ${cls(r.clv)}">${r.clv==null?"—":sgn(r.clv,1)}</td>
+      <td class="num">${r.actual==null?"—":sgn(r.actual,0)}</td>
+      <td class="num">${badge(r.ats)}</td><td class="num">${badge(r.ou)}</td>
+      <td class="num">${badge(r.ml)}</td></tr>`).join("")+`</tbody>`
+    : `<tbody><tr><td><div class="empty">No picks match that filter.</div></td></tr></tbody>`;
+}
+
+/* ── MY BETS ──────────────────────────────────────────────────────
+   His book, not the model's. Units are the unit of account throughout: a record
+   in units survives the bankroll changing and cannot be flattered by bet sizing,
+   which is the entire reason for betting in units in the first place. Dollars are
+   a display multiplication by one number he sets here, stored on this device.  */
+const UNIT_KEY="tm_unit_size";
+function drawMyBets(){
+  const M=D.mybets||{state:"never fetched"};
+  const st=$("#mbstate");
+  const setup=(title,body)=>{
+    st.innerHTML=`<div class="banner"><b>${title}</b>${body}</div>`;
+    ["#mbbar","#mbcurveh","#mbcurve","#mbcuth","#mbcutwrap","#mblisth","#mblistwrap"]
+      .forEach(s=>$(s).hidden=true);
+    $("#mbcards").innerHTML=""; $("#mbproblems").innerHTML="";
+  };
+  const HOWTO=
+    `Add a tab called <b>My Bets</b> to the same Google Sheet the grades are in, with `+
+    `these columns in the first row: <b>Date, Week, Team, Market, Side, Line, Odds, `+
+    `Units, Book, Notes</b>. One row per bet. <br><br>`+
+    `<b>Week</b> and <b>Team</b> are how a bet is matched to a game — a team plays once `+
+    `a week, so that is enough. <b>Market</b> is spread, moneyline or total. <b>Line</b> `+
+    `is the number you took, written from your side (−7.5 if you laid 7.5, +3 if you `+
+    `took 3). <b>Side</b> is only for totals: over or under. <b>Odds</b> defaults to `+
+    `−110 if you leave it blank. <b>Units</b> is your stake. Everything else is grading, `+
+    `and it happens automatically within half an hour.<br><br>`+
+    `Bowls and playoff games use <b>99</b> as the week. A playoff team plays more than `+
+    `one game in that bucket, so put the kickoff date in <b>Date</b> for those — it is `+
+    `the only time the date is needed.`;
+  if(M.state==="never fetched") return setup("Bet log not set up yet", HOWTO);
+  if(M.state==="no tab")
+    return setup("No “My Bets” tab found",
+      HOWTO+`<br><br><span class="muted">Tabs seen in the workbook: `+
+      `${esc((M.tabs_seen||[]).join(", "))||"none"}</span>`);
+  if(M.state==="error")
+    return setup("The bet log could not be read", esc(M.error||""));
+
+  const bets=M.bets||[], t=M.totals||{};
+  if(!bets.length && !(M.problems||[]).length)
+    return setup("The “My Bets” tab is empty",
+      `The tab is there and readable — there are just no bets in it yet. `+HOWTO);
+
+  ["#mbbar","#mbcurveh","#mbcurve","#mbcuth","#mbcutwrap","#mblisth","#mblistwrap"]
+    .forEach(s=>$(s).hidden=false);
+  st.innerHTML="";
+
+  const unit=+$("#unitsize").value||0;
+  try{ localStorage.setItem(UNIT_KEY,String(unit)); }catch(e){}
+  const $$$=(u)=>unit?` <span class="muted">(${(u*unit).toLocaleString(undefined,
+    {style:"currency",currency:"USD",maximumFractionDigits:0})})</span>`:"";
+
+  $("#mbcards").innerHTML=`
+    <div class="card"><div class="k">Units won</div>
+      <div class="v ${cls(t.units_won)}">${t.units_won==null?"—":sgn(t.units_won,2)}</div>
+      <div class="s">${t.units_risked||0}u risked${$$$(t.units_won||0)}</div></div>
+    <div class="card"><div class="k">ROI</div>
+      <div class="v ${cls(t.roi)}">${t.roi==null?"—":sgn(t.roi,1)+"%"}</div>
+      <div class="s">per unit risked</div></div>
+    <div class="card"><div class="k">Record</div>
+      <div class="v">${t.w}–${t.l}${t.push?"–"+t.push:""}</div>
+      <div class="s">${t.pct==null?"":t.pct.toFixed(1)+"%"} · ${t.open||0} open</div></div>
+    <div class="card"><div class="k">Break-even</div>
+      <div class="v">${t.break_even==null?"—":t.break_even+"%"}</div>
+      <div class="s">at the prices you took</div></div>
+    <div class="card"><div class="k">Your CLV</div>
+      <div class="v ${cls(t.clv_mean)}">${t.clv_mean==null?"—":sgn(t.clv_mean,2)}</div>
+      <div class="s">${t.clv_beat==null?"":t.clv_beat+"% beat the close"}</div></div>
+    <div class="card"><div class="k">Bets logged</div><div class="v">${t.n||0}</div>
+      <div class="s">${t.settled||0} settled</div></div>`;
+
+  /* Rows that could not be graded are shown, not swallowed. A bet log that quietly
+     drops what it cannot parse is a bet log that is wrong and looks complete. */
+  const probs=M.problems||[];
+  $("#mbproblems").innerHTML = probs.length
+    ? `<div class="banner"><b>${probs.length} row(s) in the sheet could not be used</b>`+
+      probs.slice(0,12).map(p=>esc(p)).join("<br>")+
+      (probs.length>12?`<br><span class="muted">…and ${probs.length-12} more</span>`:"")+
+      `</div>` : "";
+
+  const curve=t.curve||[];
+  $("#mbcurve").innerHTML = curve.length>1
+    ? lineChart(curve.map((_,i)=>i), curve.map(p=>p.units), "units", "bets settled")
+    : `<div class="empty">A curve appears once two bets have settled.</div>`;
+
+  const cut=[...(t.by_market||[]).map(r=>({...r,grp:"Market"})),
+             ...(t.by_week||[]).map(r=>({...r,grp:"Week"}))];
+  $("#mbcut").innerHTML = cut.length ? `<thead><tr><th></th><th>Segment</th>
+      <th class="num">W–L–P</th><th class="num">Units</th><th class="num">Risked</th>
+      <th class="num">ROI</th></tr></thead><tbody>`+
+    cut.map(r=>`<tr><td class="muted">${r.grp}</td>
+      <td class="strong">${esc(r.grp==="Week"?weekName(r.key):r.key)}</td>
+      <td class="num">${r.w}–${r.l}${r.push?"–"+r.push:""}</td>
+      ${unitsCell(r.units)}<td class="num muted">${r.risked}u</td>
+      <td class="num ${cls(r.roi)}">${r.roi==null?"—":sgn(r.roi,1)+"%"}</td></tr>`).join("")+
+    `</tbody>` : `<tbody><tr><td><div class="empty">Nothing settled yet.</div></td></tr></tbody>`;
+
+  const mk=$("#mbmarket").value, rs=$("#mbresult").value;
+  let list=bets.filter(b=>(!mk||b.market===mk)&&
+    (!rs||(rs==="open"?!b.result:b.result===rs)));
+  const badge=v=>v?`<span class="res-${v.toLowerCase()}">${v}</span>`
+                  :`<span class="muted">open</span>`;
+  $("#mblist").innerHTML = list.length ? `<thead><tr>
+      <th class="num">Wk</th><th>Matchup</th><th>Bet</th><th class="num">Line</th>
+      <th class="num">Odds</th><th class="num">Units</th><th class="num">CLV</th>
+      <th class="num">Final</th><th class="num">Result</th><th class="num">Won</th>
+      </tr></thead><tbody>`+
+    list.map(b=>`<tr>
+      <td class="num muted">${b.week}</td>
+      ${matchupCell(b.away,b.home,false)}
+      <td class="pair strong"><span class="t">${esc(
+        b.market==="total"?(b.side||"").toUpperCase():b.team)}</span>
+        <span class="n muted">${esc(b.market==="spread"?"":b.market)}</span></td>
+      <td class="num">${b.line==null?"—":sgn(b.line)}</td>
+      <td class="num mono">${b.odds>0?"+":""}${b.odds}</td>
+      <td class="num">${b.units}u</td>
+      <td class="num ${cls(b.clv)}">${b.clv==null?"—":sgn(b.clv,1)}</td>
+      <td class="num muted">${b.home_score==null?"—":`${b.away_score}–${b.home_score}`}</td>
+      <td class="num">${badge(b.result)}</td>
+      ${unitsCell(b.units_won)}</tr>`).join("")+`</tbody>`
+    : `<tbody><tr><td><div class="empty">No bets match that filter.</div></td></tr></tbody>`;
 }
 
 /* ── TEAM ────────────────────────────────────────────────────────── */

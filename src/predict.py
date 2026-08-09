@@ -88,8 +88,17 @@ def generate(conn, sport, config, week=None, season=None):
                 "edge": round(edge, 1) if edge is not None else None,
                 "ats_pick": (None if edge is None or edge == 0
                              else (g["home_team"] if edge > 0 else g["away_team"])),
+                # STRAIGHT-UP winner, which is not the same thing as the moneyline
+                # bet on the Best Bets board -- that one is the +EV side and is
+                # often the underdog. This is "who wins", and it is recorded so the
+                # ledger can report a straight-up accuracy that needs no odds.
                 "ml_pick": g["home_team"] if p["pred_margin"] > 0 else g["away_team"],
                 "ml_win_prob": round(100 * max(wp, 1 - wp), 1),
+                # ...but the price is carried anyway, because with it the same
+                # column also yields a moneyline ROI, and without it a hit rate on
+                # favourites is a number that cannot be interpreted at all.
+                "ml_odds": (g.get("home_ml") if p["pred_margin"] > 0
+                            else g.get("away_ml")),
                 "model_total": round(p.get("pred_total"), 1) if p.get("pred_total") else None,
                 "market_total": g["market_total"],
                 "ou_pick": None,

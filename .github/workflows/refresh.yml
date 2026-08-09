@@ -113,6 +113,19 @@ jobs:
           python3 src/sync_grades.py --sheet "$MODEL_GRADES_SHEET_ID" \
             --sport cfb --season 2026
 
+      # The bet log rides the fast path too: a bet added to the sheet should show up
+      # on the same half-hour cycle a grade edit does.
+      - name: Read the My Bets tab
+        if: ${{ env.SKIP != 'true' }}
+        continue-on-error: true
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          MODEL_GRADES_SHEET_ID: ${{ secrets.MODEL_GRADES_SHEET_ID }}
+        run: |
+          if [ -n "$MODEL_GRADES_SHEET_ID" ]; then
+            python3 src/bet_log.py --sheet "$MODEL_GRADES_SHEET_ID"
+          fi
+
       # Re-price and rebuild. No --fetch anywhere in here: every number comes from
       # the restored database plus the grades just read.
       - name: Rebuild both pages
@@ -147,8 +160,13 @@ jobs:
         run: |
           cd tools/qa && npm install --no-fund --no-audit --silent
           cd "$GITHUB_WORKSPACE"
+          python3 tools/test_tracking.py
           node tools/qa/public.mjs
           if [ -f output/research/data.json ]; then node tools/qa/research.mjs; fi
+          python3 tools/make_fixture.py
+          QA_BUNDLE=output/research/fixture.json node tools/qa/research.mjs
+          QA_PAGE=output/site/fixture.html node tools/qa/public.mjs
+          rm -f output/research/fixture.json output/site/fixture.html
 
       - name: Upload
         if: ${{ env.SKIP != 'true' }}

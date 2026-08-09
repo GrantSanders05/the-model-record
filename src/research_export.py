@@ -24,9 +24,11 @@ import os
 
 import backtest
 import best_bets
+import bet_log
 import db
 import ledger
 import predict
+import tracking
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -134,9 +136,34 @@ def display_weeks(conn, sport, season, min_gap_days=3):
         if (db_ - da).days >= min_gap_days:
             cut = b
             break
-    if not cut:
-        return {}
-    return {r["game_id"]: 0 for r in rows if r["kickoff"][:10] < cut}
+    labels = {} if not cut else {
+        r["game_id"]: 0 for r in rows if r["kickoff"][:10] < cut}
+    labels.update(bowl_weeks(conn, sport, season))
+    return labels
+
+
+BOWLS = 99          # sorts after every real week; displayed as "Bowls"
+
+
+def bowl_weeks(conn, sport, season):
+    """
+    {game_id: 99} for bowls and playoff games.
+
+    CFBD numbers the postseason from 1, so a bowl on 27 December is week 1 — the
+    same key as a game on the opening Saturday of the season. That is not a display
+    nuisance, it is an ambiguity: a bet logged as "week 1, San Diego State" matched
+    the September game instead of the bowl, and the fixture caught it doing so with
+    a 27-point closing line value nobody would have believed.
+
+    December is the honest boundary. Bowl season is always December and January,
+    every year, so the rule holds without hard-coding a date; the November games
+    CFBD also files as postseason are conference championship and rivalry weekends
+    that genuinely belong to the week number they carry, and they keep it.
+    """
+    return {r["game_id"]: BOWLS for r in conn.execute(
+        "SELECT game_id FROM games WHERE sport=? AND season=? AND season_type='postseason' "
+        "AND kickoff IS NOT NULL AND (substr(kickoff,6,2) IN ('12','01'))",
+        (sport, season))}
 
 
 def schedule(conn, sport, season, priced, labels, rated=()):
@@ -372,6 +399,25 @@ def main():
         "SELECT COUNT(*) n FROM games WHERE sport=? AND season=? AND home_score IS NOT NULL",
         (args.sport, season)).fetchone()["n"] == 0
 
+    # His bet log. Absent tab, unreachable sheet and a tab full of typos are three
+    # different states and the app says which; none of them may stop the export.
+    raw = load_json("output/my_bets_raw.json")
+    if raw is None:
+        mybets = {"state": "never fetched"}
+    elif raw.get("missing"):
+        mybets = {"state": "no tab", "fetched_utc": raw.get("fetched_utc"),
+                  "tabs_seen": raw.get("tabs_seen", [])}
+    else:
+        try:
+            built = bet_log.build(conn, args.sport, season, raw.get("rows") or [],
+                                  week_labels=labels)
+            built["state"] = "ok"
+            built["fetched_utc"] = raw.get("fetched_utc")
+            mybets = built
+        except Exception as e:                     # noqa: BLE001 - report anything
+            mybets = {"state": "error", "error": "%s: %s" % (type(e).__name__, e)}
+            print("  WARNING: could not build the bet log — %s" % mybets["error"])
+
     grade_season = latest_season_with(conn, "grades", args.sport, season) or season
     eff_found = latest_season_with(conn, "team_game_stats", args.sport, season,
                                    where="AND off_ppa IS NOT NULL")
@@ -404,6 +450,11 @@ def main():
         "schedule": slate,
         "week0": bool(labels),
         "grades_sync": load_json("output/grades_sync.json"),
+        # The model's own record, cut every way that could change the answer, and
+        # the bets Grant actually placed. Two different records on purpose — see
+        # the header of bet_log.py for why conflating them is the classic mistake.
+        "tracking": tracking.summary(conn, args.sport, season=None, week_labels=labels),
+        "mybets": mybets,
         "teams": team_snapshot(conn, args.sport, grade_season),
         "efficiency": efficiency_trend(conn, args.sport, eff_season),
         "results": team_results(conn, args.sport, eff_season),

@@ -190,6 +190,22 @@ jobs:
             python3 src/publish.py || true
           fi
 
+      # His own bet log. Read from the same workbook, after the update so the games
+      # it grades against are current. Allowed to fail: a typo in a spreadsheet must
+      # never be able to stop the picks from publishing.
+      - name: Read the My Bets tab
+        continue-on-error: true
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          MODEL_GRADES_SHEET_ID: ${{ secrets.MODEL_GRADES_SHEET_ID }}
+        run: |
+          if [ -n "$MODEL_GRADES_SHEET_ID" ]; then
+            python3 src/bet_log.py --sheet "$MODEL_GRADES_SHEET_ID"
+            python3 src/research_export.py --sport cfb --out output/research/data.json
+          else
+            echo "::warning::MODEL_GRADES_SHEET_ID is not set — no bet log."
+          fi
+
       # Push, not pull. GitHub emails issue activity for free, so a material
       # injury reaches Grant without him remembering to open the site.
       - name: Raise an issue if anything material changed
@@ -260,8 +276,16 @@ jobs:
         run: |
           cd tools/qa && npm install --no-fund --no-audit --silent
           cd "$GITHUB_WORKSPACE"
+          python3 tools/test_tracking.py
           node tools/qa/public.mjs
           if [ -f output/research/data.json ]; then node tools/qa/research.mjs; fi
+          # The populated branch of every tracking view. The live ledger is empty
+          # until games are played, so without this the results and bet-log screens
+          # would ship having only ever been rendered with zero rows.
+          python3 tools/make_fixture.py
+          QA_BUNDLE=output/research/fixture.json node tools/qa/research.mjs
+          QA_PAGE=output/site/fixture.html node tools/qa/public.mjs
+          rm -f output/research/fixture.json output/site/fixture.html
 
       - name: Upload track record page
         uses: actions/upload-pages-artifact@v3

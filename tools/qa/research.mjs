@@ -94,7 +94,8 @@ ok("meta populated", ($("#meta").textContent || "").includes("CFB"), $("#meta").
 // Naming them beats counting them: a count passes just as happily when a tab has
 // been renamed into nonsense or two tabs point at the same view.
 {
-  const want = ["Rankings","Schedule","Best bets","Team","Line movement","What-if","Roster news"];
+  const want = ["Rankings","Schedule","Best bets","Results","My bets",
+                "Team","Line movement","What-if","Roster news"];
   const got = $$("#nav button").map(b => b.textContent.trim());
   ok("every tab is present and named", JSON.stringify(got) === JSON.stringify(want), got.join(" | "));
   ok("every tab points at a view that exists",
@@ -335,6 +336,148 @@ console.log("\n── readable without decoding a sign ──");
      `${bet.ml_pick} tagged ${sideTag}`);
   ok("both tables carry a legend", $("#schednote .legend") !== null &&
      $("#betnote .legend") !== null);
+}
+
+console.log("\n── results / tracking ──");
+{
+  const B = JSON.parse(bundle);
+  const T = B.tracking;
+  ok("tracking is in the bundle", !!T);
+  $$("#nav button").find(b => b.dataset.v === "results")
+    .dispatchEvent(new window.Event("click", { bubbles: true }));
+
+  if (T.empty) {
+    // An empty ledger is the live state until games are played, and it is the state
+    // most likely to be shipped untested. It must read as "nothing has finished",
+    // never as a 0% record.
+    ok("an empty record says so instead of showing 0%",
+       $("#resultstate .banner") !== null &&
+       $("#resultstate").textContent.includes("No games have finished"));
+    ok("it names how many picks are waiting",
+       /\d+ pick/.test($("#resultstate").textContent), $("#resultstate").textContent.slice(0, 70));
+    ok("no fabricated percentage anywhere in the cards",
+       !/\d+\.\d%/.test($("#rescards").textContent), $("#rescards").textContent.slice(0, 60));
+  } else {
+    const a = T.overall.ats;
+    ok("headline cards render", $$("#rescards .card").length === 6);
+    ok("the ATS rate matches the bundle",
+       $("#rescards").textContent.includes(a.pct.toFixed(1) + "%"), a.pct);
+    // The whole point of the page: never a rate without its interval.
+    ok("the interval is shown beside the rate",
+       $("#rescards").textContent.includes(a.ci95[0].toFixed(1)), String(a.ci95));
+    ok("a verdict banner states whether it clears",
+       $("#resproof .banner") !== null &&
+       /clears break-even|Not proven yet/.test($("#resproof").textContent));
+    ok("the verdict agrees with the arithmetic",
+       a.clears === $("#resproof").textContent.includes("This clears break-even"),
+       `clears=${a.clears}`);
+
+    const wkRows = rows("#restbl");
+    ok("one row per graded week", wkRows === T.weekly.length, `${wkRows} vs ${T.weekly.length}`);
+    // CFBD numbers the postseason from 1, so bowls and the opening Saturday shared a
+    // week number until they were split. A row literally labelled "Week 99" would
+    // mean the split happened and the label did not.
+    const labels = $$("#restbl tbody tr").map(tr => cellText(tr, 0));
+    ok("no raw week-99 label leaks into the UI", !labels.includes("Week 99"),
+       labels.join(", "));
+    if (T.weekly.some(w => String(w.key) === "99"))
+      ok("the bowls bucket is named", labels.includes("Bowls"), labels.at(-1));
+    ok("weekly rows carry a running season total",
+       $$("#restbl thead th").some(t => t.textContent.includes("Season to date")));
+    // A cumulative column that does not accumulate is worse than none.
+    const cumCol = col("#restbl", "Season to date");
+    const firstCum = cellText($$("#restbl tbody tr")[0], cumCol);
+    const lastCum = cellText($$("#restbl tbody tr").at(-1), cumCol);
+    ok("the running total ends at the overall rate",
+       lastCum.includes(a.pct.toFixed(1)), `${firstCum} … ${lastCum}`);
+
+    // Segments must actually re-render, and must not all be one bucket.
+    const segBefore = $("#segtbl").innerHTML;
+    $("#segcut").value = "by_side"; fire($("#segcut"), "change");
+    ok("changing the cut re-renders", $("#segtbl").innerHTML !== segBefore);
+    ok("favourite/underdog splits into two", rows("#segtbl") === 2, `${rows("#segtbl")} rows`);
+    $("#segcut").value = "by_edge"; fire($("#segcut"), "change");
+    ok("edge buckets render", rows("#segtbl") >= 2, `${rows("#segtbl")} rows`);
+
+    ok("CLV is reported", $$("#clvcards .card").length === 4 &&
+       $("#clvcards").textContent.includes(String(T.overall.clv.n)));
+    ok("calibration is reported", $$("#calcards .card").length >= 1 &&
+       (!T.calibration || $("#calcards").textContent.includes(T.calibration.slope.toFixed(2))));
+
+    const all = rows("#rpicks");
+    ok("every graded pick is listed", all > 0, `${all} rows`);
+    // The table is capped for the DOM's sake, so compare the STATED match count
+    // rather than row counts — two different filters both capped at 400 look
+    // identical and neither is.
+    const matched = () => +($("#rpicksnote").textContent.match(/of (\d+)|all (\d+)/) || [])
+      .slice(1).find(Boolean);
+    ok("the table states how many matched", matched() > 0, $("#rpicksnote").textContent);
+    const allMatched = matched();
+    $("#rfilter").value = "L"; fire($("#rfilter"), "change");
+    const losses = matched();
+    ok("filtering to losses narrows", losses > 0 && losses < allMatched,
+       `${losses} of ${allMatched}`);
+    ok("...and only shows losses",
+       $$("#rpicks tbody tr").every(tr => tr.querySelector(".res-l") !== null));
+    $("#rfilter").value = "all"; fire($("#rfilter"), "change");
+    $("#rweek").value = String(T.weekly[0].key); fire($("#rweek"), "change");
+    ok("week filter narrows the pick list", matched() < allMatched, $("#rpicksnote").textContent);
+    $("#rweek").value = ""; fire($("#rweek"), "change");
+  }
+}
+
+console.log("\n── my bets ──");
+{
+  const M = JSON.parse(bundle).mybets || {};
+  $$("#nav button").find(b => b.dataset.v === "mybets")
+    .dispatchEvent(new window.Event("click", { bubbles: true }));
+
+  if (M.state !== "ok") {
+    // Not set up is the default state for everyone forever. It has to teach, not
+    // just report a null.
+    ok("an unconfigured log explains how to set it up",
+       $("#mbstate .banner") !== null &&
+       $("#mbstate").textContent.includes("My Bets"));
+    ok("the instructions name the required columns",
+       ["Week", "Team", "Market", "Line", "Odds", "Units"]
+         .every(c => $("#mbstate").textContent.includes(c)));
+    ok("controls stay hidden until there is something to control",
+       $("#mbbar").hasAttribute("hidden"));
+  } else {
+    const t = M.totals;
+    ok("summary cards render", $$("#mbcards .card").length === 6);
+    ok("units won matches the bundle",
+       $("#mbcards").textContent.includes(t.units_won.toFixed(2)), String(t.units_won));
+    ok("ROI is shown", t.roi == null || $("#mbcards").textContent.includes(t.roi.toFixed(1)));
+    // Break-even must come from HIS prices. 52.38% appearing here for a book with
+    // plus-money in it would be the textbook number leaking in.
+    ok("break-even reflects the prices taken",
+       t.break_even == null || $("#mbcards").textContent.includes(String(t.break_even)),
+       String(t.break_even));
+    ok("bad sheet rows are surfaced, not swallowed",
+       (M.problems || []).length === 0 || $("#mbproblems .banner") !== null);
+    ok("the bankroll curve draws", $("#mbcurve").innerHTML.includes("<svg"));
+
+    const all = rows("#mblist");
+    ok("every bet is listed", all === M.bets.length, `${all} vs ${M.bets.length}`);
+    $("#mbmarket").value = "spread"; fire($("#mbmarket"), "change");
+    const sp = rows("#mblist");
+    ok("market filter narrows", sp > 0 && sp <= all, `${sp} of ${all}`);
+    ok("...to spreads only",
+       M.bets.filter(b => b.market === "spread").length === sp);
+    $("#mbmarket").value = ""; fire($("#mbmarket"), "change");
+    $("#mbresult").value = "W"; fire($("#mbresult"), "change");
+    ok("result filter narrows to wins", rows("#mblist") === t.w, `${rows("#mblist")} vs ${t.w}`);
+    $("#mbresult").value = ""; fire($("#mbresult"), "change");
+
+    // Units are the unit of account; dollars are a display multiplication only.
+    const before = $("#mbcards").textContent;
+    $("#unitsize").value = "250"; fire($("#unitsize"));
+    ok("changing the unit size changes the dollar figures",
+       $("#mbcards").textContent !== before);
+    ok("...but not the units", $("#mbcards").textContent.includes(t.units_won.toFixed(2)));
+    $("#unitsize").value = "50"; fire($("#unitsize"));
+  }
 }
 
 console.log("\n── grade freshness ──");

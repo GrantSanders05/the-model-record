@@ -73,6 +73,10 @@ def lock(conn, sport, picks, config_label, now=None):
             "ats_pick": p.get("ats_pick"),
             "ml_pick": p.get("ml_pick"),
             "ou_pick": p.get("ou_pick"),
+            # The price is part of the pick. Without it a moneyline record cannot
+            # be scored at all -- a 50% hit rate is excellent at +150 and ruinous
+            # at -150 -- so it is locked at the same moment and never revised.
+            "ml_odds_at_pick": p.get("ml_odds"),
         })
     if rows:
         # OR IGNORE, not ON CONFLICT UPDATE: an existing pick is final.
@@ -80,11 +84,12 @@ def lock(conn, sport, picks, config_label, now=None):
             """INSERT OR IGNORE INTO picks_log
                (game_id, sport, season, week, home_team, away_team, kickoff,
                 published_at, config_label, model_margin, market_margin_at_pick,
-                model_total, market_total_at_pick, ats_pick, ml_pick, ou_pick)
+                model_total, market_total_at_pick, ats_pick, ml_pick, ou_pick,
+                ml_odds_at_pick)
                VALUES (:game_id, :sport, :season, :week, :home_team, :away_team,
                        :kickoff, :published_at, :config_label, :model_margin,
                        :market_margin_at_pick, :model_total, :market_total_at_pick,
-                       :ats_pick, :ml_pick, :ou_pick)""", rows)
+                       :ats_pick, :ml_pick, :ou_pick, :ml_odds_at_pick)""", rows)
         conn.commit()
     inserted = conn.execute(
         "SELECT COUNT(*) c FROM picks_log WHERE sport=? AND published_at=?",
@@ -98,8 +103,10 @@ def grade(conn, sport, now=None):
     rows = conn.execute(
         """SELECT p.game_id, p.model_margin, p.market_margin_at_pick,
                   p.model_total, p.market_total_at_pick,
+                  p.ml_pick, p.home_team, p.away_team,
                   g.home_score, g.away_score,
-                  l.home_margin AS closing_margin, l.total AS closing_total
+                  l.home_margin AS closing_margin, l.total AS closing_total,
+                  l.home_ml, l.away_ml
            FROM picks_log p
            JOIN games g ON g.game_id = p.game_id
            LEFT JOIN lines l ON l.game_id = p.game_id
@@ -137,10 +144,25 @@ def grade(conn, sport, now=None):
             else:
                 ou = "W" if (edge > 0) == (diff > 0) else "L"
 
+        # Moneyline. A tie is a push everywhere it can happen; college football
+        # cannot tie in regulation, but grading it as a loss on the one occasion
+        # the data says 0 would be a silent wrong answer rather than a rare one.
+        ml = None
+        if r["ml_pick"]:
+            if actual_margin == 0:
+                ml = "P"
+            elif r["ml_pick"] == r["home_team"]:
+                ml = "W" if actual_margin > 0 else "L"
+            elif r["ml_pick"] == r["away_team"]:
+                ml = "W" if actual_margin < 0 else "L"
+        close_ml = (r["home_ml"] if r["ml_pick"] == r["home_team"]
+                    else r["away_ml"] if r["ml_pick"] == r["away_team"] else None)
+
         updates.append({
             "game_id": r["game_id"], "closing_margin": close_m, "closing_total": close_t,
             "actual_margin": actual_margin, "actual_total": actual_total,
-            "ats_result": ats, "ou_result": ou, "graded_at": now.isoformat(),
+            "ats_result": ats, "ou_result": ou, "ml_result": ml,
+            "closing_ml": close_ml, "graded_at": now.isoformat(),
         })
 
     if updates:
@@ -149,7 +171,9 @@ def grade(conn, sport, now=None):
             """UPDATE picks_log SET
                  closing_margin=:closing_margin, closing_total=:closing_total,
                  actual_margin=:actual_margin, actual_total=:actual_total,
-                 ats_result=:ats_result, ou_result=:ou_result, graded_at=:graded_at
+                 ats_result=:ats_result, ou_result=:ou_result,
+                 ml_result=:ml_result, closing_ml=:closing_ml,
+                 graded_at=:graded_at
                WHERE game_id=:game_id""", updates)
         conn.commit()
     return len(updates)
