@@ -46,8 +46,35 @@ def latest_season_with(conn, table, sport, prefer):
     return row["s"] if row and row["s"] else prefer
 
 
+SEVEN = ["qb", "rb", "wr", "ol", "dl", "lb", "db"]
+
+
+def conferences(season):
+    """
+    {team: conference} for the season's alignment, from the CFBD cache.
+
+    Read from the same cached file the workbook builder uses, so the sheet and
+    the site cannot disagree about who plays where -- which matters in a year
+    when a third of the country moved.
+    """
+    path = os.path.join(ROOT, "data", "cache", "teams-fbs_year-%d.json" % season)
+    if not os.path.exists(path):
+        return {}
+    try:
+        data = json.load(open(path))
+    except ValueError:
+        return {}
+    import team_aliases
+    out = {}
+    for t in data:
+        name = team_aliases.canonical("cfb", t.get("school") or "")
+        if name:
+            out[name] = t.get("conference") or "Independent"
+    return out
+
+
 def team_snapshot(conn, sport, season):
-    """Latest grade per team, plus the week each grade came from."""
+    """Latest grade per team, with its conference, TOTAL and national rank."""
     out = {}
     for r in conn.execute(
             "SELECT week, team, position, grade FROM grades "
@@ -55,6 +82,34 @@ def team_snapshot(conn, sport, season):
         t = out.setdefault(r["team"], {"grades": {}, "week": r["week"]})
         t["grades"][r["position"]] = r["grade"]
         t["week"] = max(t["week"], r["week"])
+
+    conf = conferences(season)
+    for team, blob in out.items():
+        g = blob["grades"]
+        blob["conference"] = conf.get(team, "Independent")
+        # The sheet's own TOTAL, recomputed here so the rankings table and the
+        # spreadsheet agree without the browser having to know the formula.
+        if all(p in g for p in SEVEN):
+            blob["total"] = round(
+                2 * sum(g[p] for p in SEVEN) + g.get("coach_st", 0.0)
+                + g.get("_win_points", 0.0) - g.get("_loss_points", 0.0), 1)
+        else:
+            blob["total"] = None
+
+    ranked = sorted((t for t in out if out[t]["total"] is not None),
+                    key=lambda t: -out[t]["total"])
+    for i, team in enumerate(ranked, start=1):
+        out[team]["rank"] = i
+    # Rank within the conference too — "3rd in the Big Ten" is the question
+    # actually being asked when a conference filter is on.
+    by_conf = {}
+    for team in ranked:
+        c = out[team]["conference"]
+        by_conf.setdefault(c, []).append(team)
+    for c, teams in by_conf.items():
+        for i, team in enumerate(teams, start=1):
+            out[team]["conf_rank"] = i
+            out[team]["conf_size"] = len(teams)
     return out
 
 

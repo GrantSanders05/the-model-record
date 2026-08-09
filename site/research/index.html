@@ -1,288 +1,398 @@
-<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title>The Model — Research</title>
-<meta name="robots" content="noindex,nofollow">
 <style>
-/* Single brand hue for every data mark: #00922E passed the palette validator's
-   lightness, chroma and contrast checks against BOTH the light and dark
-   surfaces, so no per-mode swap is needed. Win/loss is never encoded by colour
-   — a green/orange pair failed deutan separation at deltaE 3.1, and letters
-   carry the meaning instead. Sharp angles, no radii, per the brand. */
+/* ─────────────────────────────────────────────────────────────────────────
+   Design notes, so the next change keeps the reasoning.
+
+   SURFACES come in three levels — page, panel, raised — separated by tone and
+   a hairline, never by a heavy shadow. Depth here is for grouping, not for
+   decoration; a table that floats on a drop shadow reads as a widget, and this
+   is meant to read as an instrument.
+
+   NUMBERS are the entire point of the page, so every numeric cell is
+   tabular-nums and right-aligned. Proportional digits make a column of figures
+   ragged, and a ragged column is unreadable at a glance no matter how pretty
+   the rest is.
+
+   COLOUR is nearly absent by design. One brand green carries identity and
+   positive value; one warm red carries negative. Both ALWAYS appear beside a
+   sign or a label, never as the only signal — that is what keeps the page
+   legible to a colour-blind reader and in print.
+   ───────────────────────────────────────────────────────────────────────── */
 :root{
-  --brand:#00922E; --brand-dim:#00922E33;
-  --surface:#fcfcfb; --panel:#fff; --line:#e6e6e2; --line2:#f0f0ec;
-  --ink:#16170f; --ink2:#4a4d40; --ink3:#7a7d70; --warn:#8a5a00; --warnbg:#fff6e0;
+  --brand:#00922E; --brand-ink:#007a26; --brand-wash:#eaf6ee;
+  --pos:#00762a; --neg:#b3341f; --warn:#8a5a00; --warn-bg:#fff8e8; --warn-line:#e8c98a;
+
+  --bg:#f6f7f4; --panel:#fff; --raised:#fbfbf9;
+  --line:#e3e4de; --line-soft:#eeefe9;
+  --ink:#14150f; --ink2:#4e5145; --ink3:#83867a;
+
+  --r:10px; --r-sm:7px;
+  --sh:0 1px 2px rgba(20,21,15,.05), 0 4px 14px rgba(20,21,15,.04);
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
 }
 @media (prefers-color-scheme:dark){
-  :root{ --surface:#0f100c; --panel:#1a1a19; --line:#2c2d27; --line2:#232420;
-         --ink:#f2f3ec; --ink2:#b6b9ab; --ink3:#84887a; --warn:#e8b866; --warnbg:#2a2113; }
+  :root{
+    --brand:#3ecf6a; --brand-ink:#7ee39c; --brand-wash:#12251a;
+    --pos:#4ed17d; --neg:#ff8a6b; --warn:#e8b866; --warn-bg:#241c0d; --warn-line:#4a3a1a;
+    --bg:#0d0e0b; --panel:#161713; --raised:#1c1d18;
+    --line:#2b2c26; --line-soft:#232419;
+    --ink:#f3f4ed; --ink2:#b4b7a9; --ink3:#7f8276;
+    --sh:0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.28);
+  }
 }
+:root[data-theme="dark"]{
+  --brand:#3ecf6a; --brand-ink:#7ee39c; --brand-wash:#12251a;
+  --pos:#4ed17d; --neg:#ff8a6b; --warn:#e8b866; --warn-bg:#241c0d; --warn-line:#4a3a1a;
+  --bg:#0d0e0b; --panel:#161713; --raised:#1c1d18;
+  --line:#2b2c26; --line-soft:#232419;
+  --ink:#f3f4ed; --ink2:#b4b7a9; --ink3:#7f8276;
+  --sh:0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.28);
+}
+:root[data-theme="light"]{
+  --brand:#00922E; --brand-ink:#007a26; --brand-wash:#eaf6ee;
+  --pos:#00762a; --neg:#b3341f; --warn:#8a5a00; --warn-bg:#fff8e8; --warn-line:#e8c98a;
+  --bg:#f6f7f4; --panel:#fff; --raised:#fbfbf9;
+  --line:#e3e4de; --line-soft:#eeefe9;
+  --ink:#14150f; --ink2:#4e5145; --ink3:#83867a;
+  --sh:0 1px 2px rgba(20,21,15,.05), 0 4px 14px rgba(20,21,15,.04);
+}
+
 *{box-sizing:border-box}
-body{margin:0;background:var(--surface);color:var(--ink);
- font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-.wrap{max-width:1140px;margin:0 auto;padding:20px 16px 60px}
-header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
- border-bottom:2px solid var(--brand);padding-bottom:10px;margin-bottom:14px}
-h1{margin:0;font-size:20px;font-weight:800;letter-spacing:-.02em}
-h1 span{color:var(--brand)}
-.meta{color:var(--ink3);font-size:11.5px}
-nav{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:16px;flex-wrap:wrap}
-nav button{flex:1 1 auto;background:var(--panel);border:0;color:var(--ink2);padding:9px 14px;
- font:inherit;font-weight:600;font-size:12.5px;cursor:pointer;letter-spacing:.02em}
-nav button[aria-selected=true]{background:var(--brand);color:#fff}
-.view{display:none} .view.on{display:block}
-.banner{border:1px solid var(--warn);background:var(--warnbg);color:var(--warn);
- padding:11px 13px;margin-bottom:14px;font-size:12.5px}
-.banner b{display:block;font-size:13px;margin-bottom:3px}
-.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-select,input[type=search]{background:var(--panel);color:var(--ink);border:1px solid var(--line);
- padding:7px 9px;font:inherit;font-size:13px;min-width:190px}
-label{font-size:11.5px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em}
-.scroll{overflow-x:auto;border:1px solid var(--line)}
-table{border-collapse:collapse;width:100%;background:var(--panel);font-size:12.5px}
-th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line2);white-space:nowrap}
-th{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink3);
- font-weight:600;position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--line)}
-tbody tr:hover{background:var(--line2)}
-.num{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.pos{color:var(--brand);font-weight:700}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px 72px}
+
+/* ── header ─────────────────────────────────────────────────────────── */
+header{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:saturate(1.6) blur(10px);border-bottom:1px solid var(--line);
+  margin:0 -20px 22px;padding:14px 20px 0}
+.hrow{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  max-width:1140px;margin:0 auto}
+.brand{display:flex;align-items:baseline;gap:8px;font-weight:680;letter-spacing:-.02em;
+  font-size:17px;margin-right:auto}
+.brand em{font-style:normal;color:var(--brand)}
+.brand span{font-weight:450;color:var(--ink3);font-size:13px;letter-spacing:0}
+.meta{font-size:11.5px;color:var(--ink3);font-variant-numeric:tabular-nums;text-align:right}
+.themetog{border:1px solid var(--line);background:var(--panel);color:var(--ink2);
+  width:32px;height:32px;border-radius:var(--r-sm);cursor:pointer;font-size:14px;line-height:1;
+  display:grid;place-items:center;transition:.15s}
+.themetog:hover{color:var(--ink);border-color:var(--ink3)}
+
+nav{display:flex;gap:2px;max-width:1140px;margin:12px auto 0;overflow-x:auto;
+  scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{appearance:none;border:0;background:none;color:var(--ink3);cursor:pointer;
+  font:inherit;font-size:13.5px;font-weight:520;padding:9px 13px 11px;white-space:nowrap;
+  border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
+nav button:hover{color:var(--ink2)}
+nav button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--brand)}
+
+/* ── blocks ─────────────────────────────────────────────────────────── */
+.view{display:none;animation:in .18s ease-out}
+.view.on{display:block}
+@keyframes in{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+
+h2{font-size:15px;font-weight:640;letter-spacing:-.01em;margin:26px 0 3px}
+h2:first-child{margin-top:4px}
+.sub{color:var(--ink3);font-size:12.5px;margin:0 0 14px;max-width:78ch;line-height:1.55}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:var(--sh);overflow:hidden}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin:0 0 16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  padding:13px 14px;box-shadow:var(--sh);transition:border-color .15s}
+.card:hover{border-color:var(--ink3)}
+.card .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink3);
+  font-weight:600;margin-bottom:5px}
+.card .v{font-size:23px;font-weight:640;letter-spacing:-.025em;font-variant-numeric:tabular-nums;
+  line-height:1.1}
+.card .s{font-size:11px;color:var(--ink3);margin-top:3px;font-variant-numeric:tabular-nums}
+
+/* ── controls ───────────────────────────────────────────────────────── */
+.bar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:0 0 14px}
+.field{display:flex;flex-direction:column;gap:4px}
+.field>label{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--ink3);font-weight:600}
+select,input[type=search],input[type=text],input[type=password],input[type=number]{
+  appearance:none;font:inherit;font-size:13px;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 10px;min-width:110px;
+  transition:border-color .15s,box-shadow .15s}
+select{padding-right:26px;
+  background-image:linear-gradient(45deg,transparent 50%,var(--ink3) 50%),
+    linear-gradient(135deg,var(--ink3) 50%,transparent 50%);
+  background-position:calc(100% - 14px) 52%,calc(100% - 9px) 52%;
+  background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+select:focus,input:focus{outline:none;border-color:var(--brand);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 16%,transparent)}
+.chipset{display:flex;gap:5px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:var(--panel);color:var(--ink2);
+  border-radius:100px;padding:5px 11px;font-size:12px;font-weight:520;cursor:pointer;
+  transition:.14s;white-space:nowrap}
+.chip:hover{border-color:var(--ink3);color:var(--ink)}
+/* The pressed chip sits on the brand hue, so its text must flip with the theme:
+   white on the dark-green light-mode brand, near-black on the bright dark-mode
+   brand. Stated once per theme rather than as a selector list, which cannot
+   contain an @media. */
+.chip[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+@media (prefers-color-scheme:dark){.chip[aria-pressed="true"]{color:#07130c}}
+:root[data-theme="dark"] .chip[aria-pressed="true"]{color:#07130c}
+:root[data-theme="light"] .chip[aria-pressed="true"]{color:#fff}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:var(--r-sm);
+  padding:7px 13px;font:inherit;font-size:13px;font-weight:530;cursor:pointer;transition:.15s}
+.btn:hover{border-color:var(--ink3)}
+.btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.btn:disabled{opacity:.45;cursor:default}
+
+/* ── tables ─────────────────────────────────────────────────────────── */
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px}
+thead th{position:sticky;top:0;z-index:2;background:var(--raised);text-align:left;
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3);
+  font-weight:650;padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap}
+thead th.sortable{cursor:pointer;user-select:none}
+thead th.sortable:hover{color:var(--ink)}
+thead th .arrow{opacity:.35;margin-left:3px;font-size:9px}
+thead th[aria-sort] .arrow{opacity:1;color:var(--brand)}
+tbody td{padding:8px 11px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr{transition:background .12s}
+tbody tr:hover{background:var(--raised)}
+.num{text-align:right;font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+.mono{font-family:var(--mono);font-size:12px}
+.pos{color:var(--pos);font-weight:600}
+.neg{color:var(--neg);font-weight:600}
 .muted{color:var(--ink3)}
-.cards{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
-.card{flex:1 1 130px;background:var(--panel);padding:11px 13px}
-.card .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3)}
-.card .v{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
-.card .s{font-size:10.5px;color:var(--ink3)}
-svg{display:block;width:100%;height:auto;overflow:visible}
-.grid{stroke:var(--line);stroke-width:1}
-.axis{fill:var(--ink3);font-size:10px}
-.mark{fill:none;stroke:var(--brand);stroke-width:2;stroke-linecap:square}
-.mark2{fill:none;stroke:var(--ink3);stroke-width:1.5;stroke-dasharray:4 3}
-.dot{fill:var(--brand)}
-figcaption{color:var(--ink3);font-size:11px;margin-top:5px}
-.sliders{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:9px;margin:12px 0}
-.sl{background:var(--panel);border:1px solid var(--line);padding:8px 10px}
-.sl .t{display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:5px}
-.sl .t b{font-variant-numeric:tabular-nums}
-.sl input{width:100%;accent-color:var(--brand)}
-.delta{font-weight:700;font-variant-numeric:tabular-nums}
-footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
- color:var(--ink3);font-size:11.5px;max-width:76ch}
-.empty{color:var(--ink3);border:1px dashed var(--line);padding:15px;font-size:12.5px}
-.gatebox{border:1px solid var(--line);border-radius:8px;padding:20px;max-width:44ch;margin:28px auto}
-.gatebox b{display:block;font-size:14px;margin-bottom:6px}
-.gatebox p{color:var(--ink2);font-size:12.5px;line-height:1.5;margin:0 0 14px}
+.strong{font-weight:640}
+td.team{font-weight:560;white-space:nowrap}
+
+.rk{display:inline-grid;place-items:center;min-width:26px;height:22px;padding:0 6px;
+  border-radius:6px;font-size:11.5px;font-weight:680;font-variant-numeric:tabular-nums;
+  background:var(--raised);color:var(--ink2);border:1px solid var(--line)}
+.rk.t1{background:var(--brand);color:#fff;border-color:var(--brand)}
+.rk.t2{background:var(--brand-wash);color:var(--brand-ink);border-color:color-mix(in srgb,var(--brand) 30%,transparent)}
+.conf{display:inline-block;padding:2px 7px;border-radius:100px;font-size:10.5px;
+  font-weight:600;background:var(--raised);color:var(--ink2);border:1px solid var(--line);
+  white-space:nowrap}
+.bar-cell{position:relative}
+.bar-cell i{position:absolute;left:0;top:50%;transform:translateY(-50%);height:16px;
+  background:color-mix(in srgb,var(--brand) 13%,transparent);border-radius:3px;z-index:0}
+.bar-cell span{position:relative;z-index:1}
+
+.empty{color:var(--ink3);font-size:12.5px;padding:22px;text-align:center;
+  border:1px dashed var(--line);border-radius:var(--r);background:var(--panel)}
+footer.note{color:var(--ink3);font-size:11.5px;line-height:1.55;margin:9px 0 0;max-width:80ch}
+
+/* ── banners ────────────────────────────────────────────────────────── */
+.banner{border:1px solid var(--warn-line);background:var(--warn-bg);color:var(--warn);
+  border-radius:var(--r);padding:12px 14px;font-size:12.5px;line-height:1.55;margin:0 0 10px}
+.banner b{display:block;font-size:13px;margin-bottom:3px;color:var(--warn)}
+#banner:not(:empty){margin-bottom:18px}
+
+/* ── gate ───────────────────────────────────────────────────────────── */
+#gate{display:grid;place-items:center;min-height:62vh}
+.gatebox{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:28px;max-width:400px;width:100%;box-shadow:var(--sh)}
+.gatebox b{display:block;font-size:16px;font-weight:640;letter-spacing:-.02em;margin-bottom:7px}
+.gatebox p{color:var(--ink2);font-size:12.5px;line-height:1.6;margin:0 0 16px}
 .gaterow{display:flex;gap:8px}
-.gaterow input{flex:1;min-width:0;padding:8px 10px;font:inherit;font-size:13px;
-  border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
-.gaterow button{padding:8px 16px;font:inherit;font-size:13px;border:1px solid var(--line);
-  border-radius:6px;background:var(--ink);color:var(--bg);cursor:pointer}
-.gaterow button:disabled{opacity:.5;cursor:default}
-.gateopt{display:block;margin-top:10px;color:var(--ink3);font-size:12px}
-.gatemsg{margin-top:10px;color:var(--warn);font-size:12.5px;min-height:1em}
-</style></head><body>
+.gaterow input{flex:1;min-width:0}
+.gateopt{display:flex;align-items:center;gap:7px;margin-top:11px;color:var(--ink3);font-size:12px}
+.gatemsg{margin-top:11px;color:var(--neg);font-size:12.5px;min-height:1.2em}
+
+/* ── charts ─────────────────────────────────────────────────────────── */
+svg{display:block;width:100%;height:auto}
+.grid{stroke:var(--line);stroke-width:1}
+.mark{fill:none;stroke:var(--brand);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.area{fill:color-mix(in srgb,var(--brand) 10%,transparent)}
+.dot{fill:var(--panel);stroke:var(--brand);stroke-width:1.6}
+.axis{fill:var(--ink3);font-size:10px;font-family:var(--sans);font-variant-numeric:tabular-nums}
+
+/* ── sliders ────────────────────────────────────────────────────────── */
+.sliders{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:13px}
+.sl{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:11px 13px}
+.sl .t{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;
+  color:var(--ink2);margin-bottom:7px}
+.sl .t b{font-variant-numeric:tabular-nums;font-size:13px;color:var(--ink)}
+input[type=range]{width:100%;appearance:none;height:3px;border-radius:2px;
+  background:var(--line);outline:none;margin:5px 0}
+input[type=range]::-webkit-slider-thumb{appearance:none;width:15px;height:15px;border-radius:50%;
+  background:var(--brand);cursor:pointer;border:2px solid var(--panel);
+  box-shadow:0 1px 3px rgba(0,0,0,.25)}
+input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:var(--brand);
+  cursor:pointer;border:2px solid var(--panel)}
+
+@media (max-width:640px){
+  .wrap{padding:0 13px 56px} header{margin:0 -13px 18px;padding:12px 13px 0}
+  .card .v{font-size:20px} .meta{display:none}
+}
+</style>
+
 <div class="wrap">
+
 <header>
-  <h1>The <span>Model</span> — Research</h1>
-  <div class="meta" id="meta">loading…</div>
+  <div class="hrow">
+    <div class="brand">The <em>Model</em> <span>Research</span></div>
+    <div class="meta" id="meta">loading…</div>
+    <button class="themetog" id="themetog" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
+  </div>
+  <nav role="tablist" id="nav" hidden>
+    <button role="tab" data-v="rank"   aria-selected="true">Rankings</button>
+    <button role="tab" data-v="bets"   aria-selected="false">Best bets</button>
+    <button role="tab" data-v="teams"  aria-selected="false">Team</button>
+    <button role="tab" data-v="move"   aria-selected="false">Line movement</button>
+    <button role="tab" data-v="whatif" aria-selected="false">What-if</button>
+    <button role="tab" data-v="alerts" aria-selected="false">Roster news</button>
+  </nav>
 </header>
 
 <section id="gate" hidden>
   <div class="gatebox">
     <b>This bundle is encrypted</b>
-    <p>The page is public; the grades are not. Enter the research passphrase to
-    decrypt it in your browser — nothing is sent anywhere.</p>
+    <p>The page is public; the grades are not. Enter the research passphrase and it
+       decrypts in your browser — nothing is sent anywhere.</p>
     <div class="gaterow">
       <input id="gate-pass" type="password" autocomplete="current-password"
              placeholder="Research passphrase" aria-label="Research passphrase">
-      <button id="gate-btn">Unlock</button>
+      <button class="btn primary" id="gate-btn">Unlock</button>
     </div>
-    <label class="gateopt"><input id="gate-remember" type="checkbox" checked>
-      Remember on this device</label>
-    <div class="gatemsg" id="gate-msg"></div>
+    <label class="gateopt"><input id="gate-remember" type="checkbox" checked> Remember on this device</label>
+    <div class="gatemsg" id="gate-msg" role="status"></div>
   </div>
 </section>
 
-<!-- Hidden until a bundle is actually open. Rendering the shell first and then
-     hiding it flashes the app for anyone who has not authenticated. -->
 <div id="app" hidden>
-<nav role="tablist">
-  <button role="tab" data-v="bets" aria-selected="true">Best bets</button>
-  <button role="tab" data-v="teams" aria-selected="false">Teams</button>
-  <button role="tab" data-v="move" aria-selected="false">Line movement</button>
-  <button role="tab" data-v="whatif" aria-selected="false">What-if</button>
-  <button role="tab" data-v="alerts" aria-selected="false">Roster news</button>
-</nav>
-
 <div id="banner"></div>
 
-<section class="view" id="v-alerts">
-  <div class="scroll"><table id="alerttbl"></table></div>
-  <footer id="alertnote"></footer>
-  <h3 style="font-size:13px;margin:22px 0 8px">Most load-bearing players</h3>
-  <footer style="margin:0 0 10px">Who each team can least afford to lose, in points
-  of spread. Computed by removing the player and re-rating all 138 teams — so it
-  is the model's own answer, not a guess.</footer>
-  <div class="scroll"><table id="watchtbl"></table></div>
+<!-- ── RANKINGS ────────────────────────────────────────────────────── -->
+<section class="view on" id="v-rank">
+  <h2>Power rankings</h2>
+  <p class="sub" id="ranksub"></p>
+  <div class="bar">
+    <div class="field"><label for="q">Search</label>
+      <input id="q" type="search" placeholder="Team name…" autocomplete="off"></div>
+    <div class="field"><label for="conf">Conference</label><select id="conf"></select></div>
+    <div class="field"><label for="rsort">Sort by</label><select id="rsort"></select></div>
+    <div class="field"><label for="rdir">Order</label>
+      <select id="rdir"><option value="desc">High → low</option><option value="asc">Low → high</option></select></div>
+    <div class="field"><label for="rlimit">Show</label>
+      <select id="rlimit"><option value="0">All</option><option>25</option><option>50</option><option>100</option></select></div>
+    <div class="field"><label>&nbsp;</label><button class="btn" id="rreset">Reset</button></div>
+  </div>
+  <div class="chipset" id="confchips" style="margin:-6px 0 14px"></div>
+  <div class="panel scroll"><table id="ranktbl"></table></div>
+  <footer class="note" id="ranknote"></footer>
 </section>
 
-<section class="view on" id="v-bets">
+<!-- ── BEST BETS ───────────────────────────────────────────────────── -->
+<section class="view" id="v-bets">
+  <h2>Best bets</h2>
+  <p class="sub">Moneyline value is expected value with the vig removed; spread value is
+     raw disagreement with the closing number. Everything here is a hypothesis being
+     tracked, not a bet known to be good.</p>
   <div class="cards" id="betcards"></div>
-  <div class="row">
-    <label for="sortby">Rank by</label>
-    <select id="sortby">
-      <option value="ml">Moneyline EV (vig removed)</option>
-      <option value="spread">Spread disagreement</option>
-    </select>
-    <label for="wk">Week</label><select id="wk"></select>
-    <label for="bank">Bankroll</label><input id="bank" type="search" value="1000" style="min-width:90px">
+  <div class="bar">
+    <div class="field"><label for="sortby">Rank by</label>
+      <select id="sortby">
+        <option value="ml">Moneyline EV (vig removed)</option>
+        <option value="spread">Spread disagreement</option>
+      </select></div>
+    <div class="field"><label for="wk">Week</label><select id="wk"></select></div>
+    <div class="field"><label for="bank">Bankroll</label>
+      <input id="bank" type="number" min="0" step="50" value="1000"></div>
   </div>
-  <div class="scroll"><table id="bets"></table></div>
-  <footer>
-    Moneyline EV strips the bookmaker's margin before comparing — raw implied
-    probabilities sum to about 105%, so without that step nearly every game
-    looks like value. Stakes are quarter-Kelly capped at 2% of bankroll.
-    Spread disagreement is the weaker signal: the model's biggest disagreements
-    have historically been its <em>worst</em> bets, not its best.
-  </footer>
+  <div class="panel scroll"><table id="bets"></table></div>
+  <footer class="note">Stakes are quarter-Kelly with a 2% cap. Break-even at −110 is 52.38%.</footer>
 </section>
 
+<!-- ── TEAM ────────────────────────────────────────────────────────── -->
 <section class="view" id="v-teams">
-  <div class="row">
-    <label for="team">Team</label><select id="team"></select>
-  </div>
+  <h2>Team detail</h2>
+  <p class="sub">Grades, efficiency trend and every completed game against the closing line.</p>
+  <div class="bar"><div class="field"><label for="team">Team</label><select id="team"></select></div></div>
   <div class="cards" id="teamcards"></div>
-  <div class="row" style="gap:24px;align-items:flex-start">
-    <figure style="flex:1 1 340px;margin:0">
-      <div id="effchart"></div>
-      <figcaption>Offensive efficiency (PPA per play) by week. Higher is better.</figcaption>
-    </figure>
-  </div>
-  <div class="scroll" style="margin-top:12px"><table id="teamgames"></table></div>
+  <h2>Offensive efficiency by week</h2>
+  <p class="sub">Predicted points added per play — the objective counterpart to the eye test.</p>
+  <div class="panel" style="padding:12px" id="effchart"></div>
+  <h2>Results</h2>
+  <div class="panel scroll"><table id="teamgames"></table></div>
 </section>
 
+<!-- ── LINE MOVEMENT ───────────────────────────────────────────────── -->
 <section class="view" id="v-move">
-  <div class="row"><label for="game">Game</label><select id="game"></select></div>
-  <div id="movechart"></div>
-  <div class="scroll" style="margin-top:12px"><table id="movetbl"></table></div>
-  <footer>
-    Closing-line value is the leading indicator of a real edge — it separates
-    from noise months before a win rate does. History only exists from the day
-    capture started, so this fills in as the season runs.
-  </footer>
+  <h2>Line movement</h2>
+  <p class="sub">Every captured observation of a number. Closing-line value separates from
+     noise months before a win rate does, which is why this is recorded from day one.</p>
+  <div class="bar"><div class="field"><label for="game">Game</label><select id="game"></select></div></div>
+  <div class="panel" style="padding:12px" id="movechart"></div>
+  <div class="panel scroll" style="margin-top:12px"><table id="movetbl"></table></div>
 </section>
 
+<!-- ── WHAT-IF ─────────────────────────────────────────────────────── -->
 <section class="view" id="v-whatif">
-  <div class="row">
-    <label for="wteam">Team</label><select id="wteam"></select>
-    <button id="reset" style="background:var(--panel);border:1px solid var(--line);
-      color:var(--ink2);padding:7px 12px;font:inherit;font-size:12.5px;cursor:pointer">Reset</button>
+  <h2>What-if editor</h2>
+  <p class="sub">Move a position grade and every one of that team's games re-prices live.
+     The arithmetic is the engine's own, read from the exported config, so the two cannot drift.</p>
+  <div class="bar">
+    <div class="field"><label for="wteam">Team</label><select id="wteam"></select></div>
+    <div class="field"><label>&nbsp;</label><button class="btn" id="reset">Reset grades</button></div>
   </div>
-  <div class="sliders" id="sliders"></div>
   <div class="cards" id="wcards"></div>
-  <div class="scroll"><table id="wgames"></table></div>
-  <footer>
-    Re-prices every one of this team's games live, using the same arithmetic the
-    engine uses: <span class="num">2×(QB+RB+WR+OL+DL+LB+DB) + Coach/ST + WinPts − LossPts</span>,
-    then home total − away total + home-field. Nothing here writes back to the
-    spreadsheet — it is a scratchpad for seeing what a grade change would do.
-  </footer>
+  <div class="sliders" id="sliders"></div>
+  <h2>Effect on upcoming games</h2>
+  <div class="panel scroll"><table id="wgames"></table></div>
 </section>
-</div>
+
+<!-- ── ROSTER NEWS ─────────────────────────────────────────────────── -->
+<section class="view" id="v-alerts">
+  <h2>Roster news that moves the model</h2>
+  <p class="sub">Not headlines — points. Each player is removed and all 138 teams re-rated,
+     so the number is how far this team's line should move if he does not play.</p>
+  <div class="panel scroll"><table id="alerttbl"></table></div>
+  <footer class="note" id="alertnote"></footer>
+  <h2>Most load-bearing players</h2>
+  <p class="sub">Who each team can least afford to lose.</p>
+  <div class="panel scroll"><table id="watchtbl"></table></div>
+</section>
+
+</div><!-- /#app -->
+</div><!-- /.wrap -->
 
 <script>
-const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
-const fmt=(v,d=1)=>v==null||isNaN(v)?"—":(v>0?"+":"")+Number(v).toFixed(d);
-const abs=(v,d=1)=>v==null||isNaN(v)?"—":Number(v).toFixed(d);
+"use strict";
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const POS=["qb","rb","wr","ol","dl","lb","db","coach_st"];
 const LABEL={qb:"QB",rb:"RB",wr:"WR",ol:"OL",dl:"DL",lb:"LB",db:"DB",coach_st:"Coach/ST"};
-const MAXV={qb:15,ol:15,dl:15,coach_st:15,rb:10,wr:10,lb:10,db:10};
-let D=null, EDITS={};
+const MAXV={qb:15,rb:10,wr:10,ol:15,dl:15,lb:10,db:10,coach_st:15};
+let D=null, EDITS={}, RANK={sort:"rank",dir:"asc",conf:"",q:"",limit:0};
 
-/* ── loading the bundle ────────────────────────────────────────────────────
-   Two shapes are accepted. `data.json` is the plaintext bundle, used when the
-   site is served from somewhere that gates it (Vercel + middleware.js) or off
-   a laptop. `data.enc.json` is the same bundle encrypted, used when the host is
-   public — GitHub Pages on a free account can only serve from a public repo and
-   cannot do Basic auth, so the page is public and the data is not.
-   Encrypted is preferred when both exist: never fall back to plaintext, because
-   a stale data.json sitting next to a live data.enc.json would silently serve
-   the grades in the clear. */
-const PASS_KEY = "tm_research_pass";
+/* ── formatting ──────────────────────────────────────────────────── */
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num=(v,d=1)=>v==null||Number.isNaN(v)?"—":(+v).toFixed(d);
+const sgn=(v,d=1)=>v==null||Number.isNaN(v)?"—":((+v>0?"+":"")+(+v).toFixed(d));
+const cls=v=>v==null?"muted":(+v>0?"pos":(+v<0?"neg":"muted"));
 
-async function deriveKey(pass, salt, iterations){
-  const base = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    {name:"PBKDF2", salt, iterations, hash:"SHA-256"},
-    base, {name:"AES-GCM", length:256}, false, ["decrypt"]);
-}
-const b64 = s => Uint8Array.from(atob(s), c=>c.charCodeAt(0));
+/* ── theme ───────────────────────────────────────────────────────── */
+(function(){
+  const saved=localStorage.getItem("tm_theme");
+  if(saved) document.documentElement.setAttribute("data-theme",saved);
+  document.addEventListener("click",e=>{
+    if(e.target.id!=="themetog") return;
+    const now=document.documentElement.getAttribute("data-theme");
+    const sysDark=matchMedia("(prefers-color-scheme:dark)").matches;
+    const next=now?(now==="dark"?"light":"dark"):(sysDark?"light":"dark");
+    document.documentElement.setAttribute("data-theme",next);
+    localStorage.setItem("tm_theme",next);
+  });
+})();
 
-async function decryptBundle(blob, pass){
-  const key = await deriveKey(pass, b64(blob.salt), blob.iterations);
-  const plain = await crypto.subtle.decrypt(
-    {name:"AES-GCM", iv:b64(blob.iv)}, key, b64(blob.ct));
-  return JSON.parse(new TextDecoder().decode(plain));
-}
-
-async function load(){
-  let blob=null;
-  try{
-    const r = await fetch("data.enc.json", {cache:"no-store"});
-    if(r.ok) blob = await r.json();
-  }catch(e){ /* not deployed encrypted — fall through to plaintext */ }
-
-  if(!blob){
-    const r = await fetch("data.json", {cache:"no-store"});
-    if(!r.ok) throw new Error("no bundle found");
-    D = await r.json();
-    return boot();
-  }
-
-  // A saved passphrase is tried silently first; a wrong one just re-prompts.
-  const saved = localStorage.getItem(PASS_KEY);
-  if(saved){
-    try{ D = await decryptBundle(blob, saved); return boot(); }
-    catch(e){ localStorage.removeItem(PASS_KEY); }
-  }
-  showGate(blob);
-}
-
-function showGate(blob){
-  const el = $("#gate");
-  el.hidden = false;
-  $("#app").hidden = true;
-  const submit = async () => {
-    const pass = $("#gate-pass").value;
-    if(!pass) return;
-    $("#gate-msg").textContent = "decrypting…";
-    $("#gate-btn").disabled = true;
-    try{
-      D = await decryptBundle(blob, pass);
-      if($("#gate-remember").checked) localStorage.setItem(PASS_KEY, pass);
-      el.hidden = true; $("#app").hidden = false;
-      boot();
-    }catch(e){
-      // GCM authentication failing IS the wrong-passphrase signal; there is no
-      // separate check and no way to distinguish it from tampering, which is
-      // the property that makes the gate worth anything.
-      $("#gate-msg").textContent = "That passphrase does not open this bundle.";
-      $("#gate-btn").disabled = false;
-    }
-  };
-  $("#gate-btn").onclick = submit;
-  $("#gate-pass").onkeydown = e => { if(e.key==="Enter") submit(); };
-  $("#gate-pass").focus();
-}
-
-load().catch(e=>{
-  $("#meta").textContent = "could not load the research bundle";
-  console.error(e);
-});
-
-/* The model's arithmetic, reimplemented exactly. Constants come from the
-   exported config, not hard-coded, so this cannot drift from the engine. */
+/* ── the model's own arithmetic, from the exported config ────────── */
 function teamTotal(g,cfg){
   if(!g) return null;
   const seven=["qb","rb","wr","ol","dl","lb","db"].reduce((s,p)=>s+(+g[p]||0),0);
@@ -290,243 +400,415 @@ function teamTotal(g,cfg){
        + (+g._win_points||0) + cfg.loss_sign*(+g._loss_points||0)
        + cfg.raw_wl*((+g._wins||0)-(+g._losses||0));
 }
-function margin(hg,ag,cfg,neutral){
-  const h=teamTotal(hg,cfg), a=teamTotal(ag,cfg);
-  if(h==null||a==null) return null;
-  return (h-a)*cfg.scale + (neutral?cfg.neutral_hfa:cfg.hfa);
+
+/* ── loading ─────────────────────────────────────────────────────── */
+const PASS_KEY="tm_research_pass";
+const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+async function deriveKey(pass,salt,iterations){
+  const base=await crypto.subtle.importKey("raw",new TextEncoder().encode(pass),
+    "PBKDF2",false,["deriveKey"]);
+  return crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations,hash:"SHA-256"},
+    base,{name:"AES-GCM",length:256},false,["decrypt"]);
 }
+async function decryptBundle(blob,pass){
+  const key=await deriveKey(pass,b64(blob.salt),blob.iterations);
+  const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:b64(blob.iv)},key,b64(blob.ct));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+async function load(){
+  let blob=null;
+  try{ const r=await fetch("data.enc.json",{cache:"no-store"}); if(r.ok) blob=await r.json(); }
+  catch(e){}
+  if(!blob){
+    const r=await fetch("data.json",{cache:"no-store"});
+    if(!r.ok) throw new Error("no bundle found");
+    D=await r.json(); return boot();
+  }
+  const saved=localStorage.getItem(PASS_KEY);
+  if(saved){ try{ D=await decryptBundle(blob,saved); return boot(); }
+             catch(e){ localStorage.removeItem(PASS_KEY); } }
+  showGate(blob);
+}
+function showGate(blob){
+  $("#gate").hidden=false; $("#app").hidden=true; $("#nav").hidden=true;
+  const go=async()=>{
+    const pass=$("#gate-pass").value; if(!pass) return;
+    $("#gate-msg").textContent="decrypting…"; $("#gate-btn").disabled=true;
+    try{
+      D=await decryptBundle(blob,pass);
+      if($("#gate-remember").checked) localStorage.setItem(PASS_KEY,pass);
+      boot();
+    }catch(e){
+      /* GCM authentication failing IS the wrong-passphrase signal. There is no
+         separate check, and no way to tell a wrong key from tampering — which is
+         exactly the property that makes the gate worth having. */
+      $("#gate-msg").textContent="That passphrase does not open this bundle.";
+      $("#gate-btn").disabled=false;
+    }
+  };
+  $("#gate-btn").onclick=go;
+  $("#gate-pass").onkeydown=e=>{ if(e.key==="Enter") go(); };
+  $("#gate-pass").focus();
+}
+load().catch(e=>{ $("#meta").textContent="could not load the research bundle"; console.error(e); });
 
+/* ── boot ────────────────────────────────────────────────────────── */
 function boot(){
-  $("#gate").hidden = true;
-  $("#app").hidden = false;
-  $("#meta").textContent =
-    `${D.sport.toUpperCase()} ${D.season} · grades ${D.grade_season} · `+
-    `updated ${D.generated_utc.slice(0,16).replace("T"," ")} UTC`;
+  $("#gate").hidden=true; $("#app").hidden=false; $("#nav").hidden=false;
+  $("#meta").innerHTML=
+    `${esc(D.sport.toUpperCase())} ${D.season} &nbsp;·&nbsp; grades ${D.grade_season}`+
+    ` &nbsp;·&nbsp; ${esc((D.generated_utc||"").slice(0,16).replace("T"," "))} UTC`;
 
-  if(D.grade_season!==D.season) addBanner(
-    `Showing ${D.grade_season} grades`,
-    `No ${D.season} grades have been synced yet. Upload the new workbook and the `+
-    `sync will pick it up — everything below still reflects ${D.grade_season}.`);
-  if(D.preseason) addBanner(
-    "Season has not started — track these, do not bet them",
-    `Win and loss points are all zero, so every rating below is a preseason `+
-    `estimate and nothing more. Replaying 2025 with the film grades, on games `+
-    `inside ${D.blowout_line} pts: <b style="display:inline">week 1 went 48.7% ATS</b> `+
-    `against 57.6% in weeks 4–8 and 55.1% for the season. One season proves little, `+
-    `but the mechanism is real — in week 1 half the formula is literally zero.`);
-  else if(D.dispersion && !D.dispersion.ok) addBanner(
-    "These picks are not usable yet",
-    `Across ${D.dispersion.n} bettable games, model margins vary `+
-    `${D.dispersion.sd_model.toFixed(1)} pts against the market's `+
-    `${D.dispersion.sd_market.toFixed(1)} (ratio ${D.dispersion.ratio.toFixed(2)}). `+
-    `The ratings can barely tell teams apart, so every underdog looks like value — `+
-    `that is the flaw showing up in the EV column, not an edge. Check that the `+
-    `grades imported and are not all sitting near the column mean.`);
-  if(D.excluded_blowouts) addBanner(
-    `${D.excluded_blowouts} game${D.excluded_blowouts===1?"":"s"} left off the board`,
-    `The line is wider than ${D.blowout_line} points. A grade sheet spans about 30 `+
-    `rating points end to end, so it cannot express a 45-point spread — those games `+
-    `produce the biggest EV numbers on the page and every one of them is an artefact.`);
-
-  $$("nav button").forEach(b=>b.onclick=()=>{
-    $$("nav button").forEach(x=>x.setAttribute("aria-selected",x===b));
+  banners();
+  $$("#nav button").forEach(b=>b.onclick=()=>{
+    $$("#nav button").forEach(x=>x.setAttribute("aria-selected",String(x===b)));
     $$(".view").forEach(v=>v.classList.remove("on"));
     $("#v-"+b.dataset.v).classList.add("on");
   });
 
+  const teams=Object.keys(D.teams).sort();
   const weeks=[...new Set(D.bets.map(b=>b.week))].sort((a,b)=>a-b);
   $("#wk").innerHTML='<option value="">All</option>'+weeks.map(w=>`<option>${w}</option>`).join("");
-  const teams=Object.keys(D.teams).sort();
-  $("#team").innerHTML=teams.map(t=>`<option>${t}</option>`).join("");
-  $("#wteam").innerHTML=teams.map(t=>`<option>${t}</option>`).join("");
-  const games=Object.keys(D.movement);
-  $("#game").innerHTML=games.map(g=>{
+  $("#team").innerHTML=teams.map(t=>`<option>${esc(t)}</option>`).join("");
+  $("#wteam").innerHTML=teams.map(t=>`<option>${esc(t)}</option>`).join("");
+  $("#game").innerHTML=Object.keys(D.movement).map(g=>{
     const b=D.bets.find(x=>x.game_id===g);
-    return `<option value="${g}">${b?b.away+" @ "+b.home:g}</option>`;}).join("");
+    return `<option value="${esc(g)}">${esc(b?b.away+" @ "+b.home:g)}</option>`;}).join("");
 
+  initRank();
   ["#sortby","#wk","#bank"].forEach(s=>$(s).oninput=drawBets);
   $("#team").oninput=drawTeam; $("#game").oninput=drawMove;
   $("#wteam").oninput=()=>{EDITS={};drawWhatIf()};
   $("#reset").onclick=()=>{EDITS={};drawWhatIf()};
-  drawBets();drawTeam();drawMove();drawWhatIf();drawAlerts();
+
+  drawRank();drawBets();drawTeam();drawMove();drawWhatIf();drawAlerts();
 }
 
-function drawAlerts(){
-  const A = D.alerts;
-  const note = $("#alertnote");
-  if(!A){
-    $("#alerttbl").innerHTML="";
-    note.textContent = "The roster watcher has not run yet, so this is unknown — "+
-      "which is not the same as “nobody is hurt”.";
-    $("#watchtbl").innerHTML=""; return;
-  }
-  const rows = A.alerts||[];
-  if(!rows.length){
-    $("#alerttbl").innerHTML =
-      `<tr><td class="empty">Nothing listed as out moves any rating by `+
-      `${A.min_points} points or more.</td></tr>`;
-    note.textContent = "College football has no mandatory injury report, so an "+
-      "empty board in the preseason is the expected answer rather than a broken feed. "+
-      `Checked ${(A.generated_utc||"").slice(0,16).replace("T"," ")} UTC.`;
-  }else{
-    $("#alerttbl").innerHTML =
-      `<tr><th>Team</th><th>Player</th><th>Pos</th><th class="num">Line moves</th><th>Status</th></tr>`+
-      rows.map(a=>`<tr><td>${a.team}</td><td>${a.player}</td><td>${a.pos}</td>`+
-        `<td class="num">${(-a.points).toFixed(2)}</td>`+
-        `<td>${[a.status,a.detail].filter(Boolean).join(" · ")}</td></tr>`).join("");
-    note.textContent = "How far this team's number should move if he does not play. "+
-      `Checked ${(A.generated_utc||"").slice(0,16).replace("T"," ")} UTC.`;
-  }
-  const w = A.watchlist||[];
-  $("#watchtbl").innerHTML = w.length
-    ? `<tr><th>Team</th><th>Player</th><th>Pos</th><th class="num">OVR</th><th class="num">Points</th></tr>`+
-      w.slice(0,60).map(r=>`<tr><td>${r.team}</td><td>${r.player}</td><td>${r.pos}</td>`+
-        `<td class="num">${r.ovr}</td><td class="num">${r.points.toFixed(2)}</td></tr>`).join("")
-    : "";
+function banners(){
+  const add=(t,b)=>{const d=document.createElement("div");d.className="banner";
+    d.innerHTML=`<b>${t}</b>${b}`;$("#banner").appendChild(d);};
+  if(D.grade_season!==D.season) add(`Showing ${D.grade_season} grades`,
+    `No ${D.season} grades have synced yet — everything below reflects ${D.grade_season}.`);
+  if(D.preseason) add("Season has not started — track these, do not bet them",
+    `Win and loss points are all zero, so every rating is a preseason estimate. Replaying `+
+    `2025 with the film grades, on games inside ${D.blowout_line} pts: week 1 went `+
+    `<b style="display:inline">48.7% ATS</b> against 57.6% in weeks 4–8 and 55.1% for the `+
+    `season. One season proves little, but the mechanism is real — in week 1 half the `+
+    `formula is literally zero.`);
+  else if(D.dispersion && !D.dispersion.ok) add("These picks are not usable yet",
+    `Across ${D.dispersion.n} bettable games, model margins vary `+
+    `${num(D.dispersion.sd_model)} pts against the market's ${num(D.dispersion.sd_market)} `+
+    `(ratio ${num(D.dispersion.ratio,2)}). Every underdog looks like value — that is the `+
+    `flaw showing in the EV column, not an edge.`);
+  if(D.excluded_blowouts) add(
+    `${D.excluded_blowouts} game${D.excluded_blowouts===1?"":"s"} left off the board`,
+    `The line is wider than ${D.blowout_line} points. A grade sheet spans about 30 rating `+
+    `points end to end, so it cannot express a 45-point spread — those games carry the `+
+    `biggest EV numbers on the page and every one is an artefact.`);
 }
 
-function addBanner(title,body){
-  const d=document.createElement("div");
-  d.className="banner"; d.innerHTML=`<b>${title}</b>${body}`;
-  $("#banner").appendChild(d);
+/* ── RANKINGS ────────────────────────────────────────────────────── */
+const RANK_COLS=[
+  {k:"rank",     t:"#",         n:true,  w:"1%"},
+  {k:"team",     t:"Team",      n:false},
+  {k:"conference",t:"Conference",n:false},
+  ...POS.map(p=>({k:p,t:LABEL[p],n:true,grade:true})),
+  {k:"total",    t:"Total",     n:true,  bar:true},
+];
+function rankRows(){
+  return Object.entries(D.teams).map(([team,v])=>{
+    const o={team, conference:v.conference||"—", rank:v.rank??999,
+             total:v.total, conf_rank:v.conf_rank, conf_size:v.conf_size, week:v.week};
+    POS.forEach(p=>o[p]=v.grades[p]);
+    return o;
+  });
+}
+function initRank(){
+  const confs=[...new Set(Object.values(D.teams).map(t=>t.conference||"—"))].sort();
+  $("#conf").innerHTML='<option value="">All conferences</option>'+
+    confs.map(c=>`<option>${esc(c)}</option>`).join("");
+  $("#confchips").innerHTML=confs.map(c=>
+    `<button class="chip" data-c="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join("");
+  $("#rsort").innerHTML=RANK_COLS.filter(c=>c.k!=="conference")
+    .map(c=>`<option value="${c.k}">${c.t==="#"?"Rank":c.t}</option>`).join("");
+
+  $("#q").oninput=e=>{RANK.q=e.target.value.trim().toLowerCase();drawRank()};
+  $("#conf").onchange=e=>{RANK.conf=e.target.value;syncChips();drawRank()};
+  $("#rsort").onchange=e=>{RANK.sort=e.target.value;
+    RANK.dir=e.target.value==="rank"?"asc":"desc";$("#rdir").value=RANK.dir;drawRank()};
+  $("#rdir").onchange=e=>{RANK.dir=e.target.value;drawRank()};
+  $("#rlimit").onchange=e=>{RANK.limit=+e.target.value;drawRank()};
+  $("#rreset").onclick=()=>{
+    RANK={sort:"rank",dir:"asc",conf:"",q:"",limit:0};
+    $("#q").value="";$("#conf").value="";$("#rsort").value="rank";
+    $("#rdir").value="asc";$("#rlimit").value="0";syncChips();drawRank();
+  };
+  $$("#confchips .chip").forEach(b=>b.onclick=()=>{
+    RANK.conf = RANK.conf===b.dataset.c ? "" : b.dataset.c;
+    $("#conf").value=RANK.conf; syncChips(); drawRank();
+  });
+  $("#rsort").value="rank"; $("#rdir").value="asc";
+}
+function syncChips(){
+  $$("#confchips .chip").forEach(b=>
+    b.setAttribute("aria-pressed",String(b.dataset.c===RANK.conf)));
+}
+function drawRank(){
+  let rows=rankRows();
+  const total=rows.length;
+  if(RANK.conf) rows=rows.filter(r=>r.conference===RANK.conf);
+  if(RANK.q)    rows=rows.filter(r=>r.team.toLowerCase().includes(RANK.q));
+
+  const k=RANK.sort, dir=RANK.dir==="asc"?1:-1;
+  rows.sort((a,b)=>{
+    const x=a[k], y=b[k];
+    if(x==null&&y==null) return 0;
+    if(x==null) return 1;            // blanks always sink, either direction
+    if(y==null) return -1;
+    return (typeof x==="string" ? x.localeCompare(y) : x-y)*dir;
+  });
+  const shown = RANK.limit>0 ? rows.slice(0,RANK.limit) : rows;
+
+  const maxTotal=Math.max(...rankRows().map(r=>r.total||0));
+  const minTotal=Math.min(...rankRows().map(r=>r.total||0));
+  const span=(maxTotal-minTotal)||1;
+
+  $("#ranktbl").innerHTML=
+    `<thead><tr>${RANK_COLS.map(c=>{
+      const on=c.k===RANK.sort;
+      return `<th class="sortable ${c.n?"num":""}" data-k="${c.k}"`+
+        (on?` aria-sort="${RANK.dir==="asc"?"ascending":"descending"}"`:"")+
+        `>${c.t}<span class="arrow">${on?(RANK.dir==="asc"?"▲":"▼"):"▲"}</span></th>`;
+    }).join("")}</tr></thead><tbody>${
+      shown.length ? shown.map(r=>{
+        const tier=r.rank<=25?"t1":(r.rank<=50?"t2":"");
+        const pct=r.total!=null?((r.total-minTotal)/span)*100:0;
+        return `<tr>
+          <td class="num"><span class="rk ${tier}">${r.rank??"—"}</span></td>
+          <td class="team">${esc(r.team)}</td>
+          <td><span class="conf">${esc(r.conference)}</span>${
+            r.conf_rank?` <span class="muted" style="font-size:11px">#${r.conf_rank}/${r.conf_size}</span>`:""}</td>
+          ${POS.map(p=>`<td class="num">${num(r[p])}</td>`).join("")}
+          <td class="num bar-cell strong"><i style="width:${pct.toFixed(1)}%"></i><span>${num(r.total)}</span></td>
+        </tr>`;
+      }).join("")
+      : `<tr><td colspan="${RANK_COLS.length}"><div class="empty">No team matches those filters.</div></td></tr>`
+    }</tbody>`;
+
+  $$("#ranktbl th.sortable").forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k;
+    if(RANK.sort===k) RANK.dir = RANK.dir==="asc"?"desc":"asc";
+    else { RANK.sort=k; RANK.dir = (k==="rank"||k==="team"||k==="conference")?"asc":"desc"; }
+    $("#rsort").value=RANK_COLS.some(c=>c.k===k&&c.k!=="conference")?k:$("#rsort").value;
+    $("#rdir").value=RANK.dir;
+    drawRank();
+  });
+
+  $("#ranksub").textContent =
+    `All ${total} FBS teams, ranked by the sheet's own TOTAL. Grades are from `+
+    `week ${shown[0]?shown[0].week:"—"} of ${D.grade_season}. `+
+    `Sort any column, filter by conference, or search.`;
+  $("#ranknote").textContent =
+    `Showing ${shown.length} of ${total}. TOTAL = 2 × (QB+RB+WR+OL+DL+LB+DB) + Coach/ST `+
+    `+ Win Points − Loss Points, which is exactly what the model bets — the sheet and the `+
+    `picks are the same number.`;
 }
 
+/* ── BEST BETS ───────────────────────────────────────────────────── */
 function drawBets(){
   const by=$("#sortby").value, wk=$("#wk").value, bank=+$("#bank").value||1000;
   let rows=D.bets.filter(b=>!wk||String(b.week)===wk);
   rows = by==="ml"
     ? rows.filter(b=>b.ml_ev!=null).sort((a,b)=>b.ml_ev-a.ml_ev)
     : rows.filter(b=>b.spread_edge!=null).sort((a,b)=>Math.abs(b.spread_edge)-Math.abs(a.spread_edge));
-
   const pos=rows.filter(r=>by==="ml"?r.ml_ev>0:true).length;
+
   $("#betcards").innerHTML=`
     <div class="card"><div class="k">Games</div><div class="v">${rows.length}</div></div>
-    <div class="card"><div class="k">${by==="ml"?"Positive EV":"With a line"}</div><div class="v">${pos}</div></div>
-    <div class="card"><div class="k">Record</div><div class="v">${
-      D.record.ats_pct!=null?D.record.ats_pct.toFixed(1)+"%":"—"}</div>
-      <div class="s">${D.record.ats_w||0}-${D.record.ats_l||0}-${D.record.ats_push||0} live</div></div>`;
+    <div class="card"><div class="k">${by==="ml"?"Positive EV":"With a line"}</div>
+      <div class="v">${pos}</div></div>
+    <div class="card"><div class="k">Live record</div>
+      <div class="v">${D.record.ats_pct!=null?num(D.record.ats_pct)+"%":"—"}</div>
+      <div class="s">${D.record.ats_w||0}–${D.record.ats_l||0}–${D.record.ats_push||0} ATS</div></div>
+    <div class="card"><div class="k">Locked</div>
+      <div class="v">${D.record.n_locked??D.bets.length}</div>
+      <div class="s">before kickoff</div></div>`;
 
   const head = by==="ml"
-    ? ["Wk","Away","Home","Pick","Odds","Model","Fair","EV%","Stake"]
-    : ["Wk","Away","Home","Model","Line","Edge","Pick","Tot","Mkt","O/U"];
-  const body = rows.slice(0,120).map(r=> by==="ml" ? `<tr>
-      <td>${r.week}</td><td>${r.away}</td><td>${r.home}</td>
-      <td>${r.ml_pick||"—"}</td><td class="num">${r.ml_odds??"—"}</td>
-      <td class="num">${abs(r.model_prob)}%</td><td class="num">${abs(r.ml_fair_prob)}%</td>
-      <td class="num ${r.ml_ev>0?"pos":"muted"}">${fmt(r.ml_ev,2)}</td>
+    ? ["Wk","Away","Home","Pick","Odds","Model","Fair","EV %","Stake"]
+    : ["Wk","Away","Home","Model","Line","Edge","Pick","Total","Mkt","O/U"];
+  const body = rows.slice(0,150).map(r=> by==="ml" ? `<tr>
+      <td class="num">${r.week}</td><td>${esc(r.away)}</td><td class="team">${esc(r.home)}</td>
+      <td class="strong">${esc(r.ml_pick||"—")}</td>
+      <td class="num mono">${r.ml_odds==null?"—":(r.ml_odds>0?"+":"")+r.ml_odds}</td>
+      <td class="num">${num(r.model_prob)}%</td><td class="num muted">${num(r.ml_fair_prob)}%</td>
+      <td class="num ${cls(r.ml_ev)}">${sgn(r.ml_ev,2)}</td>
       <td class="num">${r.ml_ev>0?"$"+(bank/1000*(r.stake||0)).toFixed(2):"—"}</td></tr>`
-    : `<tr><td>${r.week}</td><td>${r.away}</td><td>${r.home}</td>
-      <td class="num">${fmt(r.model_margin)}</td><td class="num">${fmt(r.market_margin)}</td>
-      <td class="num">${fmt(r.spread_edge)}</td><td>${r.ats_pick||"—"}</td>
-      <td class="num">${abs(r.model_total)}</td><td class="num">${abs(r.market_total)}</td>
-      <td>${r.ou_pick||"—"}</td></tr>`).join("");
-  $("#bets").innerHTML=`<thead><tr>${head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${body}</tbody>`;
+    : `<tr><td class="num">${r.week}</td><td>${esc(r.away)}</td><td class="team">${esc(r.home)}</td>
+      <td class="num">${sgn(r.model_margin)}</td><td class="num muted">${sgn(r.market_margin)}</td>
+      <td class="num ${cls(r.spread_edge)}">${sgn(r.spread_edge)}</td>
+      <td class="strong">${esc(r.ats_pick||"—")}</td>
+      <td class="num">${num(r.model_total)}</td><td class="num muted">${num(r.market_total)}</td>
+      <td>${esc(r.ou_pick||"—")}</td></tr>`).join("");
+  $("#bets").innerHTML= rows.length
+    ? `<thead><tr>${head.map((h,i)=>`<th class="${i>2?"num":""}">${h}</th>`).join("")}</tr></thead><tbody>${body}</tbody>`
+    : `<tbody><tr><td><div class="empty">No games match that filter.</div></td></tr></tbody>`;
 }
 
+/* ── TEAM ────────────────────────────────────────────────────────── */
 function drawTeam(){
   const t=$("#team").value, info=D.teams[t]; if(!info) return;
   const g=info.grades, cfg=D.config;
   $("#teamcards").innerHTML=
+    `<div class="card"><div class="k">National rank</div><div class="v">${info.rank??"—"}</div>
+      <div class="s">${esc(info.conference||"")}${info.conf_rank?` · #${info.conf_rank} in conf`:""}</div></div>`+
     POS.map(p=>`<div class="card"><div class="k">${LABEL[p]}</div>
-      <div class="v">${g[p]!=null?g[p].toFixed(1):"—"}</div>
-      <div class="s">of ${MAXV[p]}</div></div>`).join("")+
-    `<div class="card"><div class="k">Total</div><div class="v">${abs(teamTotal(g,cfg))}</div>
+      <div class="v">${num(g[p])}</div><div class="s">of ${MAXV[p]}</div></div>`).join("")+
+    `<div class="card"><div class="k">Total</div><div class="v">${num(teamTotal(g,cfg))}</div>
       <div class="s">as of wk ${info.week}</div></div>`;
 
   const eff=D.efficiency[t]||[];
   $("#effchart").innerHTML = eff.length>1
-    ? lineChart(eff.map(e=>e.week), eff.map(e=>e.off), "PPA/play")
-    : `<div class="empty">No efficiency data for ${t} yet.</div>`;
+    ? lineChart(eff.map(e=>e.week), eff.map(e=>e.off), "PPA per play", "wk")
+    : `<div class="empty">No efficiency data for ${esc(t)} yet.</div>`;
 
   const res=(D.results[t]||[]).filter(r=>r.margin!=null);
   $("#teamgames").innerHTML = res.length
-    ? `<thead><tr><th>Wk</th><th>Opponent</th><th>H/A</th><th>Result</th><th>Line</th><th>vs Line</th></tr></thead>
+    ? `<thead><tr><th class="num">Wk</th><th>Opponent</th><th>H/A</th>
+        <th class="num">Result</th><th class="num">Line</th><th class="num">vs Line</th></tr></thead>
        <tbody>${res.map(r=>{
          const ats = r.line!=null? r.margin - r.line : null;
-         return `<tr><td>${r.week}</td><td>${r.opp}</td><td>${r.home?"H":"A"}</td>
-           <td class="num">${fmt(r.margin,0)}</td><td class="num">${fmt(r.line)}</td>
-           <td class="num ${ats>0?"pos":"muted"}">${fmt(ats)}</td></tr>`}).join("")}</tbody>`
-    : `<tbody><tr><td class="muted">No completed games yet.</td></tr></tbody>`;
+         return `<tr><td class="num">${r.week}</td><td>${esc(r.opp)}</td>
+           <td class="muted">${r.home?"H":"A"}</td>
+           <td class="num ${cls(r.margin)}">${sgn(r.margin,0)}</td>
+           <td class="num muted">${sgn(r.line)}</td>
+           <td class="num ${cls(ats)}">${sgn(ats)}</td></tr>`}).join("")}</tbody>`
+    : `<tbody><tr><td><div class="empty">No completed games yet.</div></td></tr></tbody>`;
 }
 
+/* ── LINE MOVEMENT ───────────────────────────────────────────────── */
 function drawMove(){
   const id=$("#game").value, hist=D.movement[id]||[];
   if(hist.length<2){
     $("#movechart").innerHTML=`<div class="empty">Only ${hist.length} observation so far — `+
-      `movement appears once the line has been captured more than once.</div>`;
+      `movement appears once a line has been captured more than once.</div>`;
     $("#movetbl").innerHTML=""; return;
   }
-  $("#movechart").innerHTML=lineChart(hist.map((_,i)=>i), hist.map(h=>h.margin), "spread");
-  $("#movetbl").innerHTML=`<thead><tr><th>Observed</th><th>Spread</th><th>Total</th></tr></thead>
-    <tbody>${hist.map(h=>`<tr><td class="num">${h.at}</td>
-      <td class="num">${fmt(h.margin)}</td><td class="num">${abs(h.total)}</td></tr>`).join("")}</tbody>`;
+  $("#movechart").innerHTML=lineChart(hist.map((_,i)=>i), hist.map(h=>h.margin), "spread","obs");
+  $("#movetbl").innerHTML=`<thead><tr><th>Observed</th><th class="num">Spread</th>
+    <th class="num">Total</th></tr></thead><tbody>${hist.map(h=>
+      `<tr><td class="mono">${esc(h.at)}</td><td class="num">${sgn(h.margin)}</td>
+       <td class="num">${num(h.total)}</td></tr>`).join("")}</tbody>`;
 }
 
+/* ── WHAT-IF ─────────────────────────────────────────────────────── */
 function drawWhatIf(){
   const t=$("#wteam").value, info=D.teams[t]; if(!info) return;
-  const base=info.grades, cfg=D.config;
-  const cur=Object.assign({},base,EDITS);
+  const base=info.grades, cfg=D.config, cur=Object.assign({},base,EDITS);
 
   $("#sliders").innerHTML=POS.map(p=>{
     const v=cur[p]!=null?cur[p]:0, changed=EDITS[p]!=null&&EDITS[p]!==base[p];
     return `<div class="sl"><div class="t"><span>${LABEL[p]}</span>
-      <b class="${changed?"pos":""}">${v.toFixed(1)}${changed?" ("+fmt(v-(base[p]||0))+")":""}</b></div>
-      <input type="range" min="0" max="${MAXV[p]}" step="0.1" value="${v}" data-p="${p}"></div>`;
+      <b class="${changed?cls(v-(base[p]||0)):""}">${num(v)}${
+        changed?" ("+sgn(v-(base[p]||0))+")":""}</b></div>
+      <input type="range" min="0" max="${MAXV[p]}" step="0.1" value="${v}" data-p="${p}"
+        aria-label="${LABEL[p]} grade"></div>`;
   }).join("");
   $$("#sliders input").forEach(i=>i.oninput=e=>{
     EDITS[e.target.dataset.p]=+e.target.value; drawWhatIf();
   });
 
-  const t0=teamTotal(base,cfg), t1=teamTotal(cur,cfg);
+  const t0=teamTotal(base,cfg), t1=teamTotal(cur,cfg), d=t1-t0;
   $("#wcards").innerHTML=`
-    <div class="card"><div class="k">Current total</div><div class="v">${abs(t0)}</div></div>
-    <div class="card"><div class="k">Adjusted total</div><div class="v">${abs(t1)}</div></div>
-    <div class="card"><div class="k">Change</div>
-      <div class="v ${t1-t0>0?"pos":""}">${fmt(t1-t0)}</div>
+    <div class="card"><div class="k">Current total</div><div class="v">${num(t0)}</div></div>
+    <div class="card"><div class="k">Adjusted total</div><div class="v">${num(t1)}</div></div>
+    <div class="card"><div class="k">Change</div><div class="v ${cls(d)}">${sgn(d)}</div>
       <div class="s">points of rating</div></div>
     <div class="card"><div class="k">Per game</div>
-      <div class="v ${t1-t0>0?"pos":""}">${fmt((t1-t0)*cfg.scale)}</div>
+      <div class="v ${cls(d*cfg.scale)}">${sgn(d*cfg.scale)}</div>
       <div class="s">points of spread</div></div>`;
 
-  const shift=(t1-t0)*cfg.scale;
-  const games=D.bets.filter(b=>b.home===t||b.away===t);
+  const shift=d*cfg.scale, games=D.bets.filter(b=>b.home===t||b.away===t);
   $("#wgames").innerHTML = games.length
-    ? `<thead><tr><th>Wk</th><th>Matchup</th><th>Model</th><th>Adjusted</th><th>Line</th><th>New edge</th></tr></thead>
+    ? `<thead><tr><th class="num">Wk</th><th>Matchup</th><th class="num">Model</th>
+        <th class="num">Adjusted</th><th class="num">Line</th><th class="num">New edge</th></tr></thead>
        <tbody>${games.map(b=>{
-          const dir = b.home===t? 1 : -1;
-          const adj = b.model_margin + dir*shift;
-          const edge = b.market_margin!=null ? adj-b.market_margin : null;
-          return `<tr><td>${b.week}</td><td>${b.away} @ ${b.home}</td>
-            <td class="num">${fmt(b.model_margin)}</td>
-            <td class="num delta ${dir*shift>0?"pos":""}">${fmt(adj)}</td>
-            <td class="num">${fmt(b.market_margin)}</td>
-            <td class="num">${fmt(edge)}</td></tr>`}).join("")}</tbody>`
-    : `<tbody><tr><td class="muted">No upcoming games for ${t}.</td></tr></tbody>`;
+          const dir=b.home===t?1:-1, adj=b.model_margin+dir*shift;
+          const edge=b.market_margin!=null?adj-b.market_margin:null;
+          return `<tr><td class="num">${b.week}</td>
+            <td>${esc(b.away)} @ <b>${esc(b.home)}</b></td>
+            <td class="num muted">${sgn(b.model_margin)}</td>
+            <td class="num ${cls(dir*shift)}">${sgn(adj)}</td>
+            <td class="num muted">${sgn(b.market_margin)}</td>
+            <td class="num ${cls(edge)}">${sgn(edge)}</td></tr>`}).join("")}</tbody>`
+    : `<tbody><tr><td><div class="empty">No upcoming games for ${esc(t)}.</div></td></tr></tbody>`;
 }
 
-/* Single-series line chart. One brand hue, recessive grid, square caps,
-   no legend (the caption names the series). */
-function lineChart(xs, ys, label){
-  const W=760,H=200,P=34;
+/* ── ROSTER NEWS ─────────────────────────────────────────────────── */
+function drawAlerts(){
+  const A=D.alerts, note=$("#alertnote");
+  if(!A){
+    $("#alerttbl").innerHTML=`<tbody><tr><td><div class="empty">The roster watcher has not run yet.</div></td></tr></tbody>`;
+    note.textContent="Not the same as “nobody is hurt” — it means this has not been checked.";
+    $("#watchtbl").innerHTML=""; return;
+  }
+  const rows=A.alerts||[];
+  if(!rows.length){
+    $("#alerttbl").innerHTML=`<tbody><tr><td><div class="empty">Nothing listed as out moves `+
+      `any rating by ${A.min_points} points or more.</div></td></tr></tbody>`;
+    note.textContent="College football has no mandatory injury report, so an empty board in "+
+      "the preseason is the expected answer rather than a broken feed. Checked "+
+      `${(A.generated_utc||"").slice(0,16).replace("T"," ")} UTC.`;
+  }else{
+    $("#alerttbl").innerHTML=`<thead><tr><th>Team</th><th>Player</th><th>Pos</th>
+      <th class="num">Line moves</th><th>Status</th></tr></thead><tbody>${
+      rows.map(a=>`<tr><td class="team">${esc(a.team)}</td><td>${esc(a.player)}</td>
+        <td class="muted">${esc(a.pos)}</td>
+        <td class="num neg">${sgn(-a.points,2)}</td>
+        <td class="muted">${esc([a.status,a.detail].filter(Boolean).join(" · "))}</td></tr>`).join("")}</tbody>`;
+    note.textContent="How far this team's number should move if he does not play. Checked "+
+      `${(A.generated_utc||"").slice(0,16).replace("T"," ")} UTC.`;
+  }
+  const w=A.watchlist||[];
+  $("#watchtbl").innerHTML = w.length
+    ? `<thead><tr><th>Team</th><th>Player</th><th>Pos</th><th class="num">OVR</th>
+        <th class="num">Points</th></tr></thead><tbody>${
+       w.slice(0,80).map(r=>`<tr><td class="team">${esc(r.team)}</td><td>${esc(r.player)}</td>
+         <td class="muted">${esc(r.pos)}</td><td class="num">${r.ovr}</td>
+         <td class="num strong">${num(r.points,2)}</td></tr>`).join("")}</tbody>`
+    : `<tbody><tr><td><div class="empty">No watchlist in this bundle.</div></td></tr></tbody>`;
+}
+
+/* ── chart ───────────────────────────────────────────────────────────
+   One series, one hue, recessive grid, a soft area to give the line weight.
+   No legend: the caption names the series, so a legend would be a second copy
+   of the same fact. */
+function lineChart(xs,ys,label,xlabel){
+  const W=880,H=210,P=38;
   const good=ys.map((v,i)=>[xs[i],v]).filter(p=>p[1]!=null);
   if(good.length<2) return `<div class="empty">Not enough points to plot.</div>`;
   const yv=good.map(p=>p[1]);
   let lo=Math.min(...yv), hi=Math.max(...yv);
   if(lo===hi){lo-=1;hi+=1}
-  const pad=(hi-lo)*.15; lo-=pad; hi+=pad;
+  const pad=(hi-lo)*.18; lo-=pad; hi+=pad;
   const xlo=Math.min(...good.map(p=>p[0])), xhi=Math.max(...good.map(p=>p[0]));
   const X=v=>P+(W-2*P)*((v-xlo)/((xhi-xlo)||1));
-  const Y=v=>P+(H-2*P)*(1-(v-lo)/(hi-lo));
+  const Y=v=>P/1.6+(H-P*1.5)*(1-(v-lo)/(hi-lo));
   const pts=good.map(p=>`${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ");
-  const grid=[0.25,0.5,0.75].map(f=>
-    `<line class="grid" x1="${P}" y1="${Y(lo+(hi-lo)*f).toFixed(1)}" x2="${W-P}" y2="${Y(lo+(hi-lo)*f).toFixed(1)}"/>`).join("");
-  const dots=good.map(p=>`<circle class="dot" cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="2.5"><title>${p[0]}: ${p[1]}</title></circle>`).join("");
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${label} over time">
-    ${grid}
-    <text class="axis" x="${P}" y="${Y(hi).toFixed(1)}" dy="-6">${hi.toFixed(2)}</text>
-    <text class="axis" x="${P}" y="${Y(lo).toFixed(1)}" dy="12">${lo.toFixed(2)}</text>
-    <polyline class="mark" points="${pts}"/>${dots}</svg>`;
+  const area=`${X(good[0][0]).toFixed(1)},${Y(lo).toFixed(1)} ${pts} `+
+             `${X(good[good.length-1][0]).toFixed(1)},${Y(lo).toFixed(1)}`;
+  const grid=[0,.25,.5,.75,1].map(f=>{
+    const y=Y(lo+(hi-lo)*f).toFixed(1);
+    return `<line class="grid" x1="${P}" y1="${y}" x2="${W-P/2}" y2="${y}"/>`+
+      `<text class="axis" x="${P-6}" y="${y}" dy="3.5" text-anchor="end">${(lo+(hi-lo)*f).toFixed(2)}</text>`;
+  }).join("");
+  const dots=good.map(p=>
+    `<circle class="dot" cx="${X(p[0]).toFixed(1)}" cy="${Y(p[1]).toFixed(1)}" r="3">`+
+    `<title>${xlabel||"x"} ${p[0]}: ${p[1]}</title></circle>`).join("");
+  const xticks=good.filter((_,i)=>i%Math.ceil(good.length/8)===0).map(p=>
+    `<text class="axis" x="${X(p[0]).toFixed(1)}" y="${H-6}" text-anchor="middle">${p[0]}</text>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)} over time">
+    ${grid}<polygon class="area" points="${area}"/>
+    <polyline class="mark" points="${pts}"/>${dots}${xticks}</svg>`;
 }
 </script>
-</div>
-</body></html>

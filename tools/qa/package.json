@@ -1,0 +1,15 @@
+{
+  "name": "the-model-qa",
+  "private": true,
+  "type": "module",
+  "description": "Loads the built pages in a real DOM and exercises every control. Dev-only; nothing here ships to the site.",
+  "scripts": {
+    "research": "node research.mjs",
+    "public": "node public.mjs",
+    "all": "node research.mjs && node public.mjs"
+  },
+  "//": "jsdom 24 hands Node's WebCrypto a typed array from its own realm, which Node rejects; every decrypt then threw and was indistinguishable from a wrong passphrase, so the gate tests passed vacuously. 30.x interops correctly. Do not loosen this floor without re-running the encrypted-bundle tests.",
+  "devDependencies": {
+    "jsdom": "^30.0.0"
+  }
+}

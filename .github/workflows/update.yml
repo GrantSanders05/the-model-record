@@ -220,6 +220,17 @@ jobs:
           fi
           find _site -type f | sed 's/^/  /'
 
+      # Load the built pages in a real DOM and work every control. A page that
+      # merely renders is not the bar -- a JS error part-way through a draw
+      # leaves the previous view's markup on screen looking perfectly fine.
+      # This gates the deploy: a broken site should not replace a working one.
+      - name: Exercise the site in a real DOM
+        run: |
+          cd tools/qa && npm install --no-fund --no-audit --silent
+          cd "$GITHUB_WORKSPACE"
+          node tools/qa/public.mjs
+          if [ -f output/research/data.json ]; then node tools/qa/research.mjs; fi
+
       - name: Upload track record page
         uses: actions/upload-pages-artifact@v3
         with:

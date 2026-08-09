@@ -25,3 +25,7 @@ output/
 *.pyc
 __pycache__/
 .DS_Store
+
+# Dev-only QA harness dependencies; never shipped to the site.
+node_modules/
+tools/qa/package-lock.json

@@ -95,29 +95,36 @@ def picks_table(rows, graded):
         return ('<p class="empty">%s</p>'
                 % ("No graded picks yet." if graded else
                    "No locked picks pending — check back when the schedule posts."))
-    head = (["Locked", "Wk", "Matchup", "Model", "Line", "Pick", "Result", "Final"]
-            if graded else ["Locked", "Wk", "Kickoff", "Matchup", "Model", "Line", "Pick"])
-    out = ["<div class='scroll'><table><thead><tr>"]
-    out += ["<th>%s</th>" % h for h in head]
+    # Numeric columns are right-aligned and tabular so a column of figures reads
+    # as a column rather than as ragged text. `num` marks which ones those are.
+    head = ([("Locked", ""), ("Wk", "num"), ("Matchup", ""), ("Model", "num"),
+             ("Line", "num"), ("Pick", ""), ("Result", ""), ("Final", "num")]
+            if graded else
+            [("Locked", ""), ("Wk", "num"), ("Kickoff", ""), ("Matchup", ""),
+             ("Model", "num"), ("Line", "num"), ("Pick", "")])
+    out = ["<div class='panel scroll'><table><thead><tr>"]
+    out += ["<th class='%s'>%s</th>" % (c, h) for h, c in head]
     out.append("</tr></thead><tbody>")
     for r in rows:
         lock = (r["published_at"] or "")[:10]
-        match = "%s @ %s" % (html.escape(r["away_team"] or ""), html.escape(r["home_team"] or ""))
+        match = "%s @ <b>%s</b>" % (html.escape(r["away_team"] or ""),
+                                    html.escape(r["home_team"] or ""))
         if graded:
             res = r["ats_result"] or "—"
             cls = {"W": "res-w", "L": "res-l", "P": "res-p"}.get(res, "")
             out.append(
-                "<tr><td class='mono'>%s</td><td>%s</td><td>%s</td>"
-                "<td class='mono'>%s</td><td class='mono'>%s</td><td>%s</td>"
-                "<td class='%s'>%s</td><td class='mono'>%s</td></tr>"
+                "<tr><td class='mono'>%s</td><td class='num'>%s</td><td>%s</td>"
+                "<td class='num mono'>%s</td><td class='num mono'>%s</td><td>%s</td>"
+                "<td><span class='%s'>%s</span></td><td class='num mono'>%s</td></tr>"
                 % (lock, r["week"], match,
                    _fmt(r["model_margin"], "%+.1f"), _fmt(r["closing_margin"], "%+.1f"),
                    html.escape(r["ats_pick"] or "—"), cls, res,
                    _fmt(r["actual_margin"], "%+.0f")))
         else:
             out.append(
-                "<tr><td class='mono'>%s</td><td>%s</td><td class='mono'>%s</td><td>%s</td>"
-                "<td class='mono'>%s</td><td class='mono'>%s</td><td>%s</td></tr>"
+                "<tr><td class='mono'>%s</td><td class='num'>%s</td>"
+                "<td class='mono'>%s</td><td>%s</td>"
+                "<td class='num mono'>%s</td><td class='num mono'>%s</td><td>%s</td></tr>"
                 % (lock, r["week"], (r["kickoff"] or "")[:10], match,
                    _fmt(r["model_margin"], "%+.1f"),
                    _fmt(r["market_margin_at_pick"], "%+.1f"),
@@ -201,60 +208,102 @@ TEMPLATE = """<!doctype html>
 <title>The Model — Track Record</title>
 <meta name="description" content="Every pick, locked before kickoff, graded automatically against the closing line.">
 <style>
+/* Shares its design language with the research app: three surface levels
+   separated by tone and a hairline, tabular numerals on every figure, and
+   almost no colour. Outcome is encoded as the letters W and L in text tokens,
+   never by hue -- a green/orange pair failed deutan separation at deltaE 3.1,
+   and the accessible fix is to stop encoding outcome by colour at all. */
 :root{
-  --brand:%(brand)s;
-  --surface:#fcfcfb; --panel:#ffffff; --line:#e6e6e2;
-  --ink:#16170f; --ink2:#4a4d40; --ink3:#7a7d70;
+  --brand:%(brand)s; --brand-ink:#007a26; --brand-wash:#eaf6ee;
+  --bg:#f6f7f4; --panel:#fff; --raised:#fbfbf9;
+  --line:#e3e4de; --line-soft:#eeefe9;
+  --ink:#14150f; --ink2:#4e5145; --ink3:#83867a;
+  --r:10px; --sh:0 1px 2px rgba(20,21,15,.05), 0 4px 14px rgba(20,21,15,.04);
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
 }
 @media (prefers-color-scheme:dark){
-  :root{ --surface:#0f100c; --panel:#1a1a19; --line:#2c2d27;
-         --ink:#f2f3ec; --ink2:#b6b9ab; --ink3:#84887a; }
+  :root{ --brand:#3ecf6a; --brand-ink:#7ee39c; --brand-wash:#12251a;
+         --bg:#0d0e0b; --panel:#161713; --raised:#1c1d18;
+         --line:#2b2c26; --line-soft:#232419;
+         --ink:#f3f4ed; --ink2:#b4b7a9; --ink3:#7f8276;
+         --sh:0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.28); }
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--surface);color:var(--ink);
-  font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-.wrap{max-width:960px;margin:0 auto;padding:32px 20px 64px}
-header{border-bottom:2px solid var(--brand);padding-bottom:16px;margin-bottom:24px}
-h1{margin:0;font-size:26px;letter-spacing:-.02em;font-weight:800}
+html{-webkit-text-size-adjust:100%%}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto;padding:38px 20px 72px}
+header{margin-bottom:26px}
+.eyebrow{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:650;
+  text-transform:uppercase;letter-spacing:.09em;color:var(--brand-ink);
+  background:var(--brand-wash);border:1px solid color-mix(in srgb,var(--brand) 24%%,transparent);
+  border-radius:100px;padding:4px 11px;margin-bottom:13px}
+.eyebrow i{width:6px;height:6px;border-radius:50%%;background:var(--brand);display:block}
+h1{margin:0;font-size:34px;line-height:1.1;letter-spacing:-.035em;font-weight:700}
 h1 span{color:var(--brand)}
-.upd{color:var(--ink3);font-size:12px;margin-top:4px}
-h2{font-size:17px;margin:34px 0 8px;font-weight:700}
-.tag{font-size:11px;font-weight:600;color:var(--ink2);border:1px solid var(--line);
-  padding:2px 7px;margin-left:6px;vertical-align:middle;text-transform:uppercase;letter-spacing:.05em}
-.hero{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);margin:16px 0}
-.stat{flex:1 1 150px;background:var(--panel);padding:14px 16px;display:flex;flex-direction:column;gap:2px}
-.stat .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3)}
-.stat .v{font-size:24px;font-weight:800;letter-spacing:-.02em;
+.upd{color:var(--ink3);font-size:12px;margin-top:9px;font-variant-numeric:tabular-nums}
+h2{font-size:16px;margin:38px 0 4px;font-weight:640;letter-spacing:-.015em;
+  display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.tag{font-size:10px;font-weight:650;color:var(--ink3);border:1px solid var(--line);
+  background:var(--raised);border-radius:100px;padding:3px 9px;
+  text-transform:uppercase;letter-spacing:.06em}
+.hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin:18px 0}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:var(--sh);padding:15px 16px;transition:border-color .15s}
+.stat:hover{border-color:var(--ink3)}
+.stat .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink3);
+  font-weight:600;margin-bottom:6px}
+.stat .v{font-size:27px;font-weight:660;letter-spacing:-.03em;line-height:1.05;
   font-variant-numeric:tabular-nums}
-.hero.small .stat .v{font-size:19px}
-.stat .sub{font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums}
-.verdict{color:var(--ink2);font-size:13px;margin:10px 0 0;max-width:64ch}
-.note{color:var(--ink3);font-size:12.5px;max-width:70ch;margin:6px 0 0}
-.chartwrap{margin:20px 0 0;position:relative}
+.hero.small .stat .v{font-size:21px}
+.stat .sub{font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums;margin-top:4px}
+.verdict{color:var(--ink2);font-size:13px;margin:12px 0 0;max-width:70ch;line-height:1.6}
+.note{color:var(--ink3);font-size:12.5px;max-width:76ch;margin:6px 0 0;line-height:1.6}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:var(--sh);overflow:hidden}
+.chartwrap{margin:18px 0 0;position:relative;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh);padding:14px}
 .chart{width:100%%;height:auto;display:block;overflow:visible}
 .grid{stroke:var(--line);stroke-width:1}
 .zero{stroke:var(--ink3);stroke-width:1;stroke-dasharray:3 3}
-.equity{fill:none;stroke:var(--brand);stroke-width:2;stroke-linecap:square;stroke-linejoin:miter}
+.equity{fill:none;stroke:var(--brand);stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .hot{fill:transparent;cursor:crosshair}
 .cross{stroke:var(--ink3);stroke-width:1}
-.axis{fill:var(--ink3);font-size:10px}
-figcaption{color:var(--ink3);font-size:11.5px;margin-top:6px}
-.tip{position:absolute;background:var(--panel);border:1px solid var(--line);
-  padding:6px 9px;font-size:12px;pointer-events:none;font-variant-numeric:tabular-nums}
-.scroll{overflow-x:auto;border:1px solid var(--line);margin-top:10px}
-table{border-collapse:collapse;width:100%%;font-size:13px;background:var(--panel)}
-th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
-th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink3);font-weight:600}
+.axis{fill:var(--ink3);font-size:10px;font-variant-numeric:tabular-nums}
+figcaption{color:var(--ink3);font-size:11.5px;margin-top:8px}
+.tip{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:7px;
+  padding:7px 10px;font-size:12px;pointer-events:none;font-variant-numeric:tabular-nums;
+  box-shadow:var(--sh);z-index:5}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:12px}
+table{border-collapse:separate;border-spacing:0;width:100%%;font-size:13px}
+thead th{position:sticky;top:0;background:var(--raised);text-align:left;padding:9px 11px;
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3);
+  font-weight:650;border-bottom:1px solid var(--line);white-space:nowrap}
+tbody td{padding:8px 11px;border-bottom:1px solid var(--line-soft);white-space:nowrap}
 tbody tr:last-child td{border-bottom:0}
-.mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-.res-w,.res-l,.res-p{font-weight:800}
-.res-l{color:var(--ink3)}
-.empty{color:var(--ink3);font-size:13px;border:1px dashed var(--line);padding:16px;margin-top:10px}
-footer{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);
-  color:var(--ink3);font-size:12px;max-width:72ch}
+tbody tr{transition:background .12s}
+tbody tr:hover{background:var(--raised)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.mono{font-variant-numeric:tabular-nums;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.res-w,.res-l,.res-p{font-weight:700;display:inline-grid;place-items:center;
+  width:20px;height:20px;border-radius:5px;font-size:11px}
+.res-w{background:var(--brand-wash);color:var(--brand-ink);
+  border:1px solid color-mix(in srgb,var(--brand) 28%%,transparent)}
+.res-l{background:var(--raised);color:var(--ink3);border:1px solid var(--line)}
+.res-p{background:var(--raised);color:var(--ink2);border:1px solid var(--line)}
+.empty{color:var(--ink3);font-size:13px;border:1px dashed var(--line);border-radius:var(--r);
+  padding:24px;margin-top:12px;text-align:center;background:var(--panel)}
+footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);
+  color:var(--ink3);font-size:12px;max-width:78ch;line-height:1.65}
+footer strong{color:var(--ink2)}
+@media (max-width:640px){
+  .wrap{padding:26px 14px 56px} h1{font-size:26px} .stat .v{font-size:23px}
+}
 </style></head><body>
 <div class="wrap">
 <header>
+  <div class="eyebrow"><i></i> Live &amp; automated</div>
   <h1>The <span>Model</span> — Track Record</h1>
   <div class="upd">Generated automatically · %(updated)s</div>
 </header>
