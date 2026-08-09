@@ -381,7 +381,17 @@ ok("reset restores base grades", $("#wcards").textContent === before);
 
 console.log("\n── roster news ──");
 ok("alerts table renders", $("#alerttbl").innerHTML.length > 20);
-ok("watchlist renders", rows("#watchtbl") > 0, `got ${rows("#watchtbl")}`);
+// roster_watch is a separate job that hits ESPN 138 times, and it deliberately does
+// not run on the fast refresh path. So "no alerts file" is a legitimate state, and
+// asserting rows unconditionally turned that into a red build that blocked a deploy
+// for a file the job was never going to produce. Assert the branch that applies --
+// and never let "absent" pass silently as if the board were simply quiet.
+{
+  const wl = JSON.parse(bundle).alerts?.watchlist;
+  ok(wl ? "watchlist renders" : "no alerts file, and the page says so rather than showing an empty board",
+     wl ? rows("#watchtbl") > 0 : ($("#alertnote").textContent || "").length > 20,
+     wl ? `got ${rows("#watchtbl")}` : $("#alertnote").textContent.slice(0, 60));
+}
 ok("alert note explains empty board", ($("#alertnote").textContent||"").length > 20);
 
 console.log("\n── tab navigation ──");

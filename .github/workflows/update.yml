@@ -69,6 +69,7 @@ jobs:
             data/cache
             data/model.db
             data/api_budget.json
+            output/alerts.json
           # The prefix is a version. Bumping it abandons the old cache and
           # rebuilds from scratch, which is the only way to discard a database
           # that has bad rows in an append-only table. v2 exists because a run

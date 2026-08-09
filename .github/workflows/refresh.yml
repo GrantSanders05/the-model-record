@@ -63,6 +63,7 @@ jobs:
             data/cache
             data/model.db
             data/api_budget.json
+            output/alerts.json
           key: model-data-v3-
           restore-keys: |
             model-data-v3-

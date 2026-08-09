@@ -31,17 +31,24 @@ import predict
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def latest_season_with(conn, table, sport, prefer):
+def latest_season_with(conn, table, sport, prefer, where=""):
     """
-    Newest season at or before `prefer` that actually has rows.
+    Newest season at or before `prefer` that actually has USABLE rows.
 
     The upcoming season has no grades or efficiency data until it starts, so
     naively exporting `prefer` yields an empty research app. Falling back keeps
     every view populated with the most recent real data, and the caller records
     which season that was so the UI can say so rather than implying it is current.
+
+    "Has rows" was too weak a test and it cost the efficiency chart. Once the new
+    season's schedule is fetched, team_game_stats holds 2026 rows whose PPA columns
+    are all NULL -- games exist, nobody has played one. This picked 2026, found rows,
+    and returned a season the trend view could render nothing from, silently dropping
+    136 teams of 2025 history. `where` lets the caller say what usable means for its
+    own table; the default keeps the old behaviour for tables where existing is enough.
     """
     row = conn.execute(
-        "SELECT MAX(season) s FROM %s WHERE sport=? AND season<=?" % table,
+        "SELECT MAX(season) s FROM %s WHERE sport=? AND season<=? %s" % (table, where),
         (sport, prefer)).fetchone()
     return row["s"] if row and row["s"] else prefer
 
@@ -358,7 +365,8 @@ def main():
         (args.sport, season)).fetchone()["n"] == 0
 
     grade_season = latest_season_with(conn, "grades", args.sport, season)
-    eff_season = latest_season_with(conn, "team_game_stats", args.sport, season)
+    eff_season = latest_season_with(conn, "team_game_stats", args.sport, season,
+                                    where="AND off_ppa IS NOT NULL")
 
     bundle = {
         "generated_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
