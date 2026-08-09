@@ -248,8 +248,17 @@ def main():
         r = _sp.run([sys.executable, os.path.join(ROOT, "src", "research_export.py"),
                      "--sport", args.sport, "--config", cfg_path],
                     capture_output=True, text=True, cwd=ROOT)
-        print("  " + (r.stdout.strip().splitlines() or ["(no output)"])[0]
-              if r.returncode == 0 else "  FAILED: %s" % r.stderr[-300:])
+        # ALL of it, not just the first line. Taking [0] kept the one-line "bundle ->
+        # path (size)" and threw away every count and warning underneath it — which
+        # is how "no PPA data at all, the efficiency view will be empty for every
+        # team" was emitted on each run and read by nobody. A step that summarises a
+        # child process by discarding everything except its first line is not
+        # summarising, it is hiding.
+        if r.returncode == 0:
+            for line in (r.stdout.strip().splitlines() or ["(no output)"]):
+                print("  " + line)
+        else:
+            print("  FAILED: %s" % r.stderr[-300:])
     except Exception as e:
         print("  FAILED: %s: %s" % (type(e).__name__, e))
 
