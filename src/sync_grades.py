@@ -70,9 +70,18 @@ def _providers(sheet_id):
 
     import grades_link
     sid = grades_link.sheet_id(sheet_id)
-    return ("link-shared CSV",
-            lambda: grades_link.list_week_tabs(sid),
-            lambda title: grades_link.read_tab(sid, title))
+    # One download of the whole workbook, reused for the listing and every read.
+    # Per-tab fetching here was what allowed 26 imaginary tabs to be "found":
+    # asking Google for a tab by name cannot tell you whether that tab exists.
+    cache = {}
+
+    def tabs():
+        cache.update(grades_link.read_tabs(sid))
+        return sorted(
+            ((t, int(grades_link.WEEK_RE.match(t.strip()).group(1))) for t in cache),
+            key=lambda x: x[1])
+
+    return ("link-shared workbook export", tabs, lambda title: cache.get(title))
 
 
 def sync(conn, sheet_id, sport, season, week_offset=1, dry_run=False, verbose=True):

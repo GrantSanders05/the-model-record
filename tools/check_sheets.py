@@ -70,7 +70,7 @@ def check_link(args):
           % (len(res["tabs"]), ", ".join(t for t, _ in res["tabs"])))
 
     title, _ = res["tabs"][0]
-    rows = grades_link.read_tab(sid, title)
+    rows = grades_link.read_tabs(sid).get(title)
     print("[ok]   read %d row(s) from %r" % (len(rows or []), title))
 
     import import_workbook as iw

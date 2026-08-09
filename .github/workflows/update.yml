@@ -75,9 +75,13 @@ jobs:
           # with an empty grades table locked 888 Elo picks into the ledger as
           # grade-model picks; run_update now refuses that, but the rows it
           # already wrote had to go.
-          key: model-data-v2-${{ github.run_id }}
+          # v3: the link-shared sync probed for "Week 0..25 Data" and gviz serves
+          # the default sheet for a name that does not exist, so one snapshot was
+          # imported 26 times under invented week numbers. The grades table and
+          # every pick locked from it had to go.
+          key: model-data-v3-${{ github.run_id }}
           restore-keys: |
-            model-data-v2-
+            model-data-v3-
 
       - name: Seed history if the cache was empty
         env:

@@ -88,52 +88,130 @@ def read_tab(sid, tab, timeout=45):
     return rows or None
 
 
-def list_week_tabs(sid, max_week=25):
+def export_workbook(sid, timeout=90):
     """
-    Which 'Week N Data' tabs exist.
+    The whole document as .xlsx — real tab names, in one request.
 
-    There is no way to enumerate tabs without authenticating, so this probes.
-    Cheap enough at once a day, and it fails in the right direction: a tab that
-    is named wrongly is simply not found, which is the same outcome as under the
-    authenticated path.
+    THIS REPLACED A PROBE, AND THE PROBE WAS WRONG.
+    The first version asked gviz for "Week 0 Data" … "Week 25 Data" and kept
+    whatever came back. gviz does not 404 on a tab name that does not exist --
+    it serves the default sheet instead. So all 26 names returned data, the same
+    snapshot was imported 26 times stamped as weeks 1 through 26, and the run
+    reported "synced 46,644 grade rows from 26 weekly tabs" as a success.
+
+    Fictional week numbers are not a cosmetic problem. The week is what stops a
+    grade being used to predict a game it was made after; inventing 25 of them
+    quietly destroys the guarantee the whole backtest rests on.
+
+    Exporting the workbook removes the guesswork: the tab names are whatever the
+    document actually contains, and the bytes are read by the same xlsx reader
+    the offline importer uses.
     """
-    found = []
-    for n in range(0, max_week + 1):
-        title = "Week %d Data" % n
-        rows = read_tab(sid, title)
-        if rows:
-            found.append((title, n))
-    return found
+    url = "%s/%s/export?format=xlsx" % (BASE, sid)
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            body = r.read()
+            ctype = r.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 404):
+            return None
+        if e.code in (401, 403):
+            raise PermissionError(
+                "Google refused the export (HTTP %d). The sheet is not shared.\n"
+                "Open it, press Share, and set General access to\n"
+                "  'Anyone with the link'  ->  Viewer." % e.code)
+        raise
+    except urllib.error.URLError as e:
+        raise RuntimeError("could not reach Google: %s" % e)
+
+    # A private document answers with a sign-in page, not a spreadsheet. An xlsx
+    # is a zip, so it always starts "PK".
+    if "html" in ctype.lower() or not body[:2] == b"PK":
+        raise PermissionError(
+            "Google returned a web page instead of a spreadsheet, which means "
+            "the sheet is private.\nOpen it, press Share, and set General access to\n"
+            "  'Anyone with the link'  ->  Viewer.")
+    return body
+
+
+def _workbook(sid):
+    import os
+    import tempfile
+    sys_path_added = False
+    try:
+        from xlsx import Workbook
+    except ImportError:                       # pragma: no cover - path setup
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from xlsx import Workbook
+        sys_path_added = True
+    del sys_path_added
+
+    body = export_workbook(sid)
+    if body is None:
+        return None
+    fd, path = tempfile.mkstemp(suffix=".xlsx")
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(body)
+    return Workbook(path), path
+
+
+def list_week_tabs(sid):
+    """The 'Week N Data' tabs the document actually has, with their numbers."""
+    got = _workbook(sid)
+    if not got:
+        return []
+    wb, path = got
+    try:
+        out = []
+        for title in wb.sheet_names:
+            m = WEEK_RE.match(title.strip())
+            if m:
+                out.append((title, int(m.group(1))))
+        return sorted(out, key=lambda t: t[1])
+    finally:
+        _cleanup(path)
+
+
+def read_tabs(sid):
+    """{tab title: rows} for every 'Week N Data' tab, from one download."""
+    got = _workbook(sid)
+    if not got:
+        return {}
+    wb, path = got
+    try:
+        return {t: list(wb.rows(t)) for t in wb.sheet_names
+                if WEEK_RE.match(t.strip())}
+    finally:
+        _cleanup(path)
+
+
+def _cleanup(path):
+    import os
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def document_reachable(sid):
     """
-    Is the DOCUMENT itself readable, separately from any tab in it?
+    Is the DOCUMENT itself readable, separately from the tabs inside it?
 
-    Omitting the sheet parameter returns the first tab, so this answers "does
-    this ID resolve and is it shared" on its own. Without splitting the two
-    questions, a nonexistent document and a correctly-shared document with
-    badly-named tabs produce the identical empty result -- and the check then
-    tells you to go rename tabs in a document that does not exist.
+    Splitting the two questions matters: a nonexistent document and a properly
+    shared one with badly-named tabs otherwise produce the same empty result,
+    and the check then tells you to go rename tabs in a document that does not
+    exist.
     """
     try:
-        with urllib.request.urlopen(
-                "%s/%s/gviz/tq?tqx=out:csv" % (BASE, sid), timeout=45) as r:
-            body = r.read(4096).decode("utf-8", "replace")
-            ctype = r.headers.get("Content-Type", "")
-    except urllib.error.HTTPError as e:
-        if e.code in (400, 404):
-            return False, ("No document with that ID, or it is not shared at all.\n"
-                           "Check the ID, and that General access is set to\n"
-                           "  'Anyone with the link'  ->  Viewer.")
-        return False, "Google returned HTTP %d." % e.code
-    except urllib.error.URLError as e:
-        return False, "could not reach Google: %s" % e
-
-    head = body.lstrip()[:200].lower()
-    if "text/html" in ctype or head.startswith("<!doctype") or "<html" in head:
-        return False, ("The document exists but is PRIVATE — Google served a "
-                       "sign-in page.\nOpen it, press Share, and set General access to\n"
+        body = export_workbook(sid)
+    except PermissionError as e:
+        return False, str(e)
+    except RuntimeError as e:
+        return False, str(e)
+    if body is None:
+        return False, ("No document with that ID, or it is not shared at all.\n"
+                       "Check the ID, and that General access is set to\n"
                        "  'Anyone with the link'  ->  Viewer.")
     return True, ""
 
