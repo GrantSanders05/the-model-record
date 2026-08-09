@@ -114,6 +114,25 @@ jobs:
             echo "::warning::  gh secret set CFBD_API_KEY"
           fi
 
+      # PPA backfill. fetch_ppa existed but was never called, so this table has been
+      # empty in CI from the start and the efficiency view shipped blank. The seed
+      # step above cannot cover it: it fires on the GAMES count, which has been
+      # healthy for weeks, so a new empty table would never trigger it. Costs one
+      # cached-forever request per season, and only ever runs once.
+      - name: Backfill efficiency data if the table is empty
+        if: ${{ env.HAS_CFBD == 'true' }}
+        continue-on-error: true
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+        run: |
+          PPA=$(python3 tools/db_count.py cfb team_game_stats)
+          echo "cached ppa rows: $PPA"
+          if [ "$PPA" -lt 100 ]; then
+            echo "Backfilling PPA — the seasons' games and lines are already cached,"
+            echo "so this costs one request per season for the new endpoint only."
+            python3 src/fetch_cfb.py --seasons 2021-2026
+          fi
+
       # This gate is deliberately hard: if the harness cannot prove it still
       # detects real edges and rejects noise, no picks should ship. But it
       # validates against COLLEGE games, so with no CFBD key there is nothing to

@@ -249,8 +249,21 @@ def fetch_season(conn, season, key, refresh=False, postseason=True):
     if rrows:
         db.upsert_rankings(conn, rrows)
 
-    print("     %s  games+lines+rankings loaded (%d lines)"
-          % ("(cached)" if cached_all else "(fetched)", len(lrows)))
+    # PPA. This call existed and was never wired to anything, so team_game_stats was
+    # empty everywhere except the one laptop that had run it by hand -- which is why
+    # the research app's efficiency chart was blank in production and nowhere else,
+    # and why nothing looked broken locally. One request per season, cached like the
+    # rest. Allowed to fail: efficiency is a supporting view, and losing it must not
+    # cost the games and lines the picks are actually made from.
+    try:
+        n_ppa, hit = fetch_ppa(conn, season, key, refresh)
+        cached_all &= hit
+    except Exception as e:                          # noqa: BLE001 - report anything
+        n_ppa = 0
+        print("     PPA unavailable for %d (%s: %s)" % (season, type(e).__name__, e))
+
+    print("     %s  games+lines+rankings+ppa loaded (%d lines, %d ppa)"
+          % ("(cached)" if cached_all else "(fetched)", len(lrows), n_ppa))
 
 
 def parse_seasons(spec):

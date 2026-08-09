@@ -46,11 +46,19 @@ def latest_season_with(conn, table, sport, prefer, where=""):
     and returned a season the trend view could render nothing from, silently dropping
     136 teams of 2025 history. `where` lets the caller say what usable means for its
     own table; the default keeps the old behaviour for tables where existing is enough.
+
+    Returns None when NOTHING matches, rather than falling back to `prefer`. That
+    fallback was the dangerous branch and it hid a dead feature: fetch_ppa was never
+    called from anywhere, so team_game_stats was empty on every machine except the one
+    laptop that had run it by hand, and this dutifully answered "2026" -- a real season
+    number, printed as `0 with efficiency (2026)`, which reads like the new season has
+    not started rather than like the table is empty. The caller decides the fallback
+    and can now say which of the two happened.
     """
     row = conn.execute(
         "SELECT MAX(season) s FROM %s WHERE sport=? AND season<=? %s" % (table, where),
         (sport, prefer)).fetchone()
-    return row["s"] if row and row["s"] else prefer
+    return row["s"] if row and row["s"] else None
 
 
 SEVEN = ["qb", "rb", "wr", "ol", "dl", "lb", "db"]
@@ -364,9 +372,10 @@ def main():
         "SELECT COUNT(*) n FROM games WHERE sport=? AND season=? AND home_score IS NOT NULL",
         (args.sport, season)).fetchone()["n"] == 0
 
-    grade_season = latest_season_with(conn, "grades", args.sport, season)
-    eff_season = latest_season_with(conn, "team_game_stats", args.sport, season,
-                                    where="AND off_ppa IS NOT NULL")
+    grade_season = latest_season_with(conn, "grades", args.sport, season) or season
+    eff_found = latest_season_with(conn, "team_game_stats", args.sport, season,
+                                   where="AND off_ppa IS NOT NULL")
+    eff_season = eff_found or season
 
     bundle = {
         "generated_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -407,9 +416,13 @@ def main():
         json.dump(bundle, fh, separators=(",", ":"))
     kb = os.path.getsize(out) / 1024.0
     print("research bundle -> %s  (%.0f KB)" % (out, kb))
-    print("  %d upcoming games | %d teams graded (%d) | %d with efficiency (%d)"
+    print("  %d upcoming games | %d teams graded (%d) | %d with efficiency (%s)"
           % (len(bets), len(bundle["teams"]), grade_season,
-             len(bundle["efficiency"]), eff_season))
+             len(bundle["efficiency"]),
+             eff_season if eff_found else "NO PPA DATA AT ALL"))
+    if not eff_found:
+        print("  WARNING: team_game_stats holds no usable PPA for any season, so the")
+        print("  efficiency view will be empty for every team. Run fetch_cfb.py to load it.")
     if grade_season != season:
         print("  NOTE: no %d grades yet — showing %d. Upload the new workbook and sync."
               % (season, grade_season))
