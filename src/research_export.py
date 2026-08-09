@@ -51,19 +51,36 @@ SEVEN = ["qb", "rb", "wr", "ol", "dl", "lb", "db"]
 
 def conferences(season):
     """
-    {team: conference} for the season's alignment, from the CFBD cache.
+    {team: conference} for the season's alignment.
 
-    Read from the same cached file the workbook builder uses, so the sheet and
+    Reads the same cached CFBD file the workbook builder uses, so the sheet and
     the site cannot disagree about who plays where -- which matters in a year
     when a third of the country moved.
+
+    THE CACHE IS NOT GUARANTEED TO EXIST. It is written by build_season_sheet.py,
+    which runs on Grant's machine and never in CI, so on a fresh runner the file
+    is simply absent. Returning {} there was silently wrong in the worst way: every
+    team fell back to "Independent", the site showed ONE conference containing all
+    138 teams, and nothing errored. So the fetch is done here when the cache is
+    missing, and a genuine failure is reported rather than flattened.
     """
     path = os.path.join(ROOT, "data", "cache", "teams-fbs_year-%d.json" % season)
-    if not os.path.exists(path):
-        return {}
-    try:
-        data = json.load(open(path))
-    except ValueError:
-        return {}
+    data = None
+    if os.path.exists(path):
+        try:
+            data = json.load(open(path))
+        except ValueError:
+            data = None
+    if not data:
+        try:
+            import build_season_sheet
+            import fetch_cfb
+            data = build_season_sheet.fbs_teams(season, fetch_cfb.load_key())
+        except Exception as e:                     # noqa: BLE001 - report anything
+            print("  WARNING: no conference data (%s). The rankings view will "
+                  "show a single conference." % e)
+            return {}
+
     import team_aliases
     out = {}
     for t in data:

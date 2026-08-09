@@ -14,7 +14,7 @@ import path from "node:path";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
 const html = fs.readFileSync(path.join(ROOT, "site/research/index.html"), "utf8");
-const bundle = fs.readFileSync(path.join(ROOT, "output/research/data.json"), "utf8");
+const bundle = fs.readFileSync(process.env.QA_BUNDLE || path.join(ROOT, "output/research/data.json"), "utf8");
 
 const errors = [];
 const vc = new VirtualConsole();
@@ -67,8 +67,13 @@ console.log("\n── rankings ──");
 const allRows = rows("#ranktbl");
 ok("all 138 teams listed", allRows === 138, `got ${allRows}`);
 ok("rank column has tier badges", $$("#ranktbl .rk").length === 138);
-ok("conference chips built", $$("#confchips .chip").length === 11,
-   String($$("#confchips .chip").length));
+// A single chip means every team fell back to "Independent" — which is exactly
+// what a missing conference cache looks like, and it does not error anywhere.
+// Asserting "more than one" rather than an exact count keeps this honest through
+// realignment without letting the all-Independent failure through.
+const chipCount = $$("#confchips .chip").length;
+ok("conference chips built (not all one bucket)", chipCount >= 8,
+   `${chipCount} conference(s) — 1 means the conference data is missing`);
 ok("total bar rendered", $$("#ranktbl .bar-cell i").length === 138);
 const firstTeam = () => $("#ranktbl tbody tr td.team")?.textContent;
 ok("default sort is rank 1 first", firstTeam() === "Ohio State", firstTeam());
@@ -84,17 +89,31 @@ ok("no-match shows empty state", $("#ranktbl .empty") !== null);
 $("#q").value = ""; fire($("#q"));
 ok("clearing search restores all", rows("#ranktbl") === 138);
 
-$("#conf").value = "SEC"; fire($("#conf"), "change");
-ok("conference filter works", rows("#ranktbl") === 16, `got ${rows("#ranktbl")}`);
-ok("chip reflects the select", $('#confchips .chip[aria-pressed="true"]')?.dataset.c === "SEC");
+// Drive the filter off whatever conferences the bundle actually has, so this
+// keeps working through realignment instead of hard-coding this year's names.
+const someConf = $$("#confchips .chip")[0]?.dataset.c;
+const confSize = someConf
+  ? [...$$("#ranktbl tbody tr")].filter(tr =>
+      tr.children[2].textContent.includes(someConf)).length
+  : 0;
+$("#conf").value = someConf; fire($("#conf"), "change");
+ok("conference filter narrows to that conference",
+   someConf && rows("#ranktbl") === confSize && confSize < 138,
+   `${rows("#ranktbl")} rows for ${someConf}, expected ${confSize}`);
+ok("chip reflects the select",
+   $('#confchips .chip[aria-pressed="true"]')?.dataset.c === someConf);
 $("#conf").value = ""; fire($("#conf"), "change");
 ok("clearing conference restores all", rows("#ranktbl") === 138);
 
-const chip = $$("#confchips .chip").find(c => c.dataset.c === "Big Ten");
-chip.dispatchEvent(new window.Event("click", { bubbles: true }));
-ok("chip filters", rows("#ranktbl") === 18, `got ${rows("#ranktbl")}`);
-chip.dispatchEvent(new window.Event("click", { bubbles: true }));
-ok("chip toggles off", rows("#ranktbl") === 138);
+const chip = $$("#confchips .chip").find(c => c.dataset.c === someConf);
+if (chip) {
+  chip.dispatchEvent(new window.Event("click", { bubbles: true }));
+  ok("chip filters", rows("#ranktbl") === confSize, `got ${rows("#ranktbl")}`);
+  chip.dispatchEvent(new window.Event("click", { bubbles: true }));
+  ok("chip toggles off", rows("#ranktbl") === 138);
+} else {
+  ok("chip filters", false, "no conference chips to click");
+}
 
 $("#rsort").value = "qb"; fire($("#rsort"), "change");
 const qbCells = () => $$("#ranktbl tbody tr").map(tr => parseFloat(tr.children[3].textContent));
