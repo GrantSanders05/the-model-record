@@ -186,6 +186,25 @@ def read_tabs(sid):
         _cleanup(path)
 
 
+def read_all_tabs(sid):
+    """
+    {tab title: rows} for EVERY tab, from one download.
+
+    The weekly snapshots are not the only tab that matters -- "Team Data" is the one
+    a human actually edits, and filtering to `Week N Data` here is what made a real
+    edit to it vanish with no error anywhere. The caller decides which titles it
+    cares about; this just refuses to hide any of them.
+    """
+    got = _workbook(sid)
+    if not got:
+        return {}
+    wb, path = got
+    try:
+        return {t: list(wb.rows(t)) for t in wb.sheet_names}
+    finally:
+        _cleanup(path)
+
+
 def _cleanup(path):
     import os
     try:

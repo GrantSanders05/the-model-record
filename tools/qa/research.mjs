@@ -75,7 +75,15 @@ ok("app is really displayed", disp("#app") !== "none", `computed: ${disp("#app")
 ok("stylesheet forces [hidden] to outrank author display rules",
    /\[hidden\]\s*\{\s*display\s*:\s*none\s*!important/.test(html));
 ok("meta populated", ($("#meta").textContent || "").includes("CFB"), $("#meta").textContent);
-ok("6 tabs present", $$("#nav button").length === 6, String($$("#nav button").length));
+// Naming them beats counting them: a count passes just as happily when a tab has
+// been renamed into nonsense or two tabs point at the same view.
+{
+  const want = ["Rankings","Schedule","Best bets","Team","Line movement","What-if","Roster news"];
+  const got = $$("#nav button").map(b => b.textContent.trim());
+  ok("every tab is present and named", JSON.stringify(got) === JSON.stringify(want), got.join(" | "));
+  ok("every tab points at a view that exists",
+     $$("#nav button").every(b => $("#v-" + b.dataset.v) !== null));
+}
 
 console.log("\n── rankings ──");
 const allRows = rows("#ranktbl");
@@ -146,6 +154,94 @@ ok("reset restores everything", rows("#ranktbl") === 138 && firstTeam() === "Ohi
 const th = $$("#ranktbl th.sortable").find(t => t.dataset.k === "total");
 th.dispatchEvent(new window.Event("click", { bubbles: true }));
 ok("header click sorts", $("#ranktbl th[aria-sort]") !== null);
+
+console.log("\n── schedule ──");
+{
+  const B = JSON.parse(bundle);
+  ok("schedule shipped in the bundle", Array.isArray(B.schedule) && B.schedule.length > 0,
+     `${B.schedule?.length} games`);
+  // The point of this view is that it is WIDER than the bets board. If it ever ends
+  // up the same size, it has quietly become a second copy of the bets board.
+  ok("schedule is wider than the bets board", B.schedule.length > B.bets.length,
+     `${B.schedule.length} scheduled vs ${B.bets.length} on the board`);
+  ok("games the model will not price are present, not dropped",
+     B.schedule.some(g => g.status === "blowout"));
+
+  // Week 0 is derived from a calendar gap, so assert the SHAPE rather than a date:
+  // week 0 exists, and it is a small slate ahead of a much larger week 1.
+  const w0 = B.schedule.filter(g => g.week === 0).length;
+  const w1 = B.schedule.filter(g => g.week === 1).length;
+  ok("a week 0 exists", B.week0 === true && w0 > 0, `${w0} games`);
+  ok("week 0 is the small early slate, not half of week 1", w0 > 0 && w0 < w1,
+     `week 0 has ${w0}, week 1 has ${w1}`);
+  // CFBD files both under week 1; the split must be a LABEL, never a rewrite of the
+  // key the ledger stamps its locked picks with.
+  ok("week 0 keeps its original CFBD week for the model",
+     B.schedule.filter(g => g.week === 0).every(g => g.cfbd_week === 1));
+  ok("the bets board uses the same labels",
+     B.bets.every(b => {
+       const g = B.schedule.find(s => s.game_id === b.game_id);
+       return !g || g.week === b.week;
+     }));
+
+  ok("week selector offers every scheduled week",
+     $$("#swk option").length === new Set(B.schedule.map(g => g.week)).size + 1,
+     `${$$("#swk option").length} options`);
+  ok("it opens on a week with games still to play",
+     $("#swk").value !== "" && rows("#schedtbl") > 0, `week ${$("#swk").value}`);
+
+  const oneWeek = rows("#schedtbl");
+  $("#swk").value = ""; fire($("#swk"), "change");
+  ok("all-weeks shows every game", rows("#schedtbl") === B.schedule.length,
+     `${rows("#schedtbl")} of ${B.schedule.length}`);
+  ok("a single week is a strict subset", oneWeek < rows("#schedtbl"));
+
+  $("#swk").value = "0"; fire($("#swk"), "change");
+  ok("week 0 is selectable and renders", rows("#schedtbl") === w0, `${rows("#schedtbl")} rows`);
+
+  $("#swk").value = ""; fire($("#swk"), "change");
+  $("#sshow").value = "line"; fire($("#sshow"), "change");
+  const lined = rows("#schedtbl");
+  ok("the with-a-line filter narrows", lined > 0 && lined < B.schedule.length, `${lined} rows`);
+  $("#sshow").value = "bet"; fire($("#sshow"), "change");
+  ok("the on-the-board filter matches the bets board",
+     rows("#schedtbl") === B.bets.filter(b =>
+       B.schedule.some(s => s.game_id === b.game_id)).length, `${rows("#schedtbl")} rows`);
+  $("#sshow").value = "all"; fire($("#sshow"), "change");
+
+  const conf0 = $$("#sconf option")[1]?.value;
+  $("#sconf").value = conf0; fire($("#sconf"), "change");
+  const inConf = rows("#schedtbl");
+  ok("conference filter narrows the slate", inConf > 0 && inConf < B.schedule.length,
+     `${inConf} rows for ${conf0}`);
+  // A conference filter on a SCHEDULE must match either side — filtering on the home
+  // team only would silently hide every road game a conference plays.
+  ok("conference filter matches away teams too",
+     [...$$("#schedtbl tbody tr")].some(tr =>
+       B.teams[tr.children[1].textContent.trim()]?.conference === conf0));
+  $("#sconf").value = ""; fire($("#sconf"), "change");
+
+  $("#sq").value = "ohio state"; fire($("#sq"));
+  const found = rows("#schedtbl");
+  ok("team search finds that team's games", found > 0 && found < 20, `${found} games`);
+  $("#sq").value = "zzzznope"; fire($("#sq"));
+  ok("no match shows the empty state", $("#schedtbl .empty") !== null);
+  $("#sreset").dispatchEvent(new window.Event("click", { bubbles: true }));
+  ok("reset returns to the default week",
+     $("#sq").value === "" && $("#swk").value !== "" && rows("#schedtbl") > 0);
+}
+
+console.log("\n── grade freshness ──");
+ok("the header names the tabs the grades came from",
+   ($("#meta").textContent || "").includes("sheet read"), $("#meta").textContent.slice(0, 80));
+{
+  const B = JSON.parse(bundle);
+  const live = B.grades_sync?.tabs?.some(t => t.kind === "live tab");
+  ok("the live tab is read, or the page says it is missing",
+     live ? !$("#meta").textContent.includes("no live tab")
+          : $("#meta").innerHTML.includes("no live tab"),
+     `live tab present: ${live}`);
+}
 
 console.log("\n── best bets ──");
 ok("bet cards render", $$("#betcards .card").length === 6, String($$("#betcards .card").length));

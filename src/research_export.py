@@ -90,6 +90,100 @@ def conferences(season):
     return out
 
 
+def display_weeks(conn, sport, season, min_gap_days=3):
+    """
+    {game_id: label} — the week a human would call it.
+
+    CFBD has no week 0. The late-August slate that everyone calls Week 0 is filed
+    under week 1, so the site showed one 211-game "week 1" spanning twelve days and
+    two distinct weekends. Splitting it back out is a DISPLAY concern only: games.week
+    is the walk-forward guard and the key the ledger's locked picks are stamped with,
+    so it is never rewritten. Only the label changes.
+
+    The split is found in the calendar rather than hard-coded, because the date moves
+    every year: inside week 1, look for a gap of `min_gap_days` or more between
+    consecutive kickoff dates. There is exactly one in a real schedule -- the empty
+    week between the Week 0 games and Labor Day weekend -- and if there is none (a
+    season with no Week 0 at all) nothing is relabelled.
+    """
+    rows = [dict(r) for r in conn.execute(
+        "SELECT game_id, kickoff FROM games "
+        "WHERE sport=? AND season=? AND week=1 AND kickoff IS NOT NULL "
+        "ORDER BY kickoff", (sport, season))]
+    if not rows:
+        return {}
+    days = sorted({r["kickoff"][:10] for r in rows})
+    cut = None
+    for a, b in zip(days, days[1:]):
+        da, db_ = dt.date.fromisoformat(a), dt.date.fromisoformat(b)
+        if (db_ - da).days >= min_gap_days:
+            cut = b
+            break
+    if not cut:
+        return {}
+    return {r["game_id"]: 0 for r in rows if r["kickoff"][:10] < cut}
+
+
+def schedule(conn, sport, season, priced, labels, rated=()):
+    """
+    Every game of the season, not only the ones worth betting.
+
+    The bets board is deliberately narrow: it drops games the ratings cannot reach,
+    because a 45-point line produces a huge fake EV that would otherwise top the
+    board. That makes it the wrong place to answer "who plays this week", which is a
+    different question and needs the opposite treatment -- show everything, and be
+    explicit about which games the model is not pricing and why.
+
+    "Everything" still means everything in THIS model's world. CFBD's schedule
+    carries all divisions, and 750 of the season's 1,638 games are FCS or Division II
+    fixtures with no FBS team in them -- Ohio Dominican at Morehead State. They are
+    not games Grant is missing; they are games he has no rating for and never will.
+    Keeping them would double the bundle and bury the 888 that matter. A game with
+    ONE FBS team is kept: he does have a view on those.
+    """
+    rated = set(rated)
+    out = []
+    for r in conn.execute(
+            """SELECT g.game_id, g.week, g.kickoff, g.home_team, g.away_team,
+                      g.home_score, g.away_score, g.neutral_site,
+                      l.home_margin, l.total
+               FROM games g LEFT JOIN lines l ON l.game_id=g.game_id
+               WHERE g.sport=? AND g.season=? ORDER BY g.kickoff, g.game_id""",
+            (sport, season)):
+        if rated and r["home_team"] not in rated and r["away_team"] not in rated:
+            continue
+        p = priced.get(r["game_id"])
+        played = r["home_score"] is not None
+        rec = {
+            "game_id": r["game_id"],
+            "week": labels.get(r["game_id"], r["week"]),
+            "cfbd_week": r["week"],
+            "kickoff": r["kickoff"],
+            "away": r["away_team"], "home": r["home_team"],
+            "neutral": bool(r["neutral_site"]),
+            "line": r["home_margin"], "total": r["total"],
+            "model_margin": p["model_margin"] if p else None,
+            "model_total": p["model_total"] if p else None,
+            "edge": p["spread_edge"] if p else None,
+            "ats_pick": p["ats_pick"] if p else None,
+            "ou_pick": p["ou_pick"] if p else None,
+            "ml_pick": p["ml_pick"] if p else None,
+            "ml_ev": p["ml_ev"] if p else None,
+            "no_bet": bool(p["no_bet"]) if p else False,
+            "home_score": r["home_score"], "away_score": r["away_score"],
+        }
+        if played:
+            rec["result_margin"] = r["home_score"] - r["away_score"]
+        # Why a game carries no model number, in the game's own row. "—" with no
+        # reason reads as a bug; these are three different situations and only one
+        # of them is a gap in the data.
+        rec["status"] = ("final" if played else
+                         "blowout" if rec["no_bet"] else
+                         "priced" if p else "unrated")
+        out.append(rec)
+    return out
+
+
 def team_snapshot(conn, sport, season):
     """Latest grade per team, with its conference, TOTAL and national rank."""
     out = {}
@@ -184,6 +278,17 @@ def line_movement(conn, sport, season, limit_games=400):
     return {k: v for k, v in list(out.items())[:limit_games]}
 
 
+def load_json(rel):
+    """Optional sidecar file, or None. Absent is a normal state, not an error."""
+    p = rel if os.path.isabs(rel) else os.path.join(ROOT, rel)
+    if not os.path.exists(p):
+        return None
+    try:
+        return json.load(open(p))
+    except ValueError:
+        return None
+
+
 def load_alerts(path="output/alerts.json"):
     """
     Roster news from `roster_watch.py`, if it has run.
@@ -226,6 +331,18 @@ def main():
     disp = best_bets.dispersion_check(bets)
     rec = ledger.record(conn, args.sport)
 
+    # Labels first: the bets board and the schedule must agree about what week a game
+    # is in, or the same fixture appears under two different weeks on two tabs.
+    labels = display_weeks(conn, args.sport, season)
+    priced = {b["game_id"]: b for b in bets}
+    grade_season_for_teams = latest_season_with(conn, "grades", args.sport, season)
+    rated = [r["team"] for r in conn.execute(
+        "SELECT DISTINCT team FROM grades WHERE sport=? AND season=?",
+        (args.sport, grade_season_for_teams))]
+    slate = schedule(conn, args.sport, season, priced, labels, rated=rated)
+    for b in bets:
+        b["week"] = labels.get(b["game_id"], b["week"])
+
     # Games the ratings cannot reach are dropped from the board rather than
     # shipped with a flag: they carry the largest EV numbers on the page, and a
     # badge is not enough to stop a number that big from being read as the best
@@ -267,6 +384,9 @@ def main():
         "record": {k: v for k, v in rec.items() if k not in ("rows", "curve")},
         "curve": rec.get("curve", []),
         "bets": bets,
+        "schedule": slate,
+        "week0": bool(labels),
+        "grades_sync": load_json("output/grades_sync.json"),
         "teams": team_snapshot(conn, args.sport, grade_season),
         "efficiency": efficiency_trend(conn, args.sport, eff_season),
         "results": team_results(conn, args.sport, eff_season),

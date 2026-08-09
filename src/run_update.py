@@ -141,8 +141,17 @@ def main():
         print("  using %d grade rows already in the database." % n_existing)
     else:
         try:
-            total, tabs = sync_grades.sync(conn, grades_sheet, args.sport, season, verbose=False)
-            print("  synced %d grade rows from %d weekly tab(s)" % (total, tabs))
+            total, tabs, report = sync_grades.sync(
+                conn, grades_sheet, args.sport, season, verbose=False)
+            print("  synced %d grade rows from %d tab(s)" % (total, tabs))
+            # Name every tab and the week it landed on. "1 weekly tab" was true and
+            # useless: it could not distinguish a sheet whose live edits are being
+            # read from one where they are silently ignored.
+            for r in report:
+                print("    %-18s -> week %-3s %5d rows  [%s]%s"
+                      % (r["tab"], r["week"], r["rows"], r["kind"],
+                         "  " + r["note"] if r["note"] else ""))
+            sync_grades.write_sync_report(report, how_many=total)
             checked, bad = sync_grades.iw.verify_formula(conn, args.sport, season)
             print("  formula check: %d team-weeks, %d mismatches%s"
                   % (checked, bad, "" if bad == 0 else "  <-- INVESTIGATE"))

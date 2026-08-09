@@ -89,7 +89,9 @@ header{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 8
   font-size:17px;margin-right:auto}
 .brand em{font-style:normal;color:var(--brand)}
 .brand span{font-weight:450;color:var(--ink3);font-size:13px;letter-spacing:0}
-.meta{font-size:11.5px;color:var(--ink3);font-variant-numeric:tabular-nums;text-align:right}
+.meta{font-size:11.5px;color:var(--ink3);font-variant-numeric:tabular-nums;text-align:right;
+  line-height:1.5}
+.meta .fresh{font-size:10.5px;color:var(--ink3);opacity:.9}
 .themetog{border:1px solid var(--line);background:var(--panel);color:var(--ink2);
   width:32px;height:32px;border-radius:var(--r-sm);cursor:pointer;font-size:14px;line-height:1;
   display:grid;place-items:center;transition:.15s}
@@ -186,6 +188,10 @@ tbody tr:hover{background:var(--raised)}
 .neg{color:var(--neg);font-weight:600}
 .muted{color:var(--ink3)}
 .strong{font-weight:640}
+.nowrap{white-space:nowrap}
+/* "No bet" is a decision the model made, not a warning about the site, so it gets a
+   quiet pill rather than the alarm colour used for banners. */
+.warnpill{color:var(--warn);font-size:11px;font-weight:600;white-space:nowrap}
 td.team{font-weight:560;white-space:nowrap}
 
 .rk{display:inline-grid;place-items:center;min-width:26px;height:22px;padding:0 6px;
@@ -260,6 +266,7 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
   </div>
   <nav role="tablist" id="nav" hidden>
     <button role="tab" data-v="rank"   aria-selected="true">Rankings</button>
+    <button role="tab" data-v="sched"  aria-selected="false">Schedule</button>
     <button role="tab" data-v="bets"   aria-selected="false">Best bets</button>
     <button role="tab" data-v="teams"  aria-selected="false">Team</button>
     <button role="tab" data-v="move"   aria-selected="false">Line movement</button>
@@ -304,6 +311,29 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
   <div class="chipset" id="confchips" style="margin:-6px 0 14px"></div>
   <div class="panel scroll"><table id="ranktbl"></table></div>
   <footer class="note" id="ranknote"></footer>
+</section>
+
+<!-- ── SCHEDULE ────────────────────────────────────────────────────── -->
+<section class="view" id="v-sched">
+  <h2>Full schedule</h2>
+  <p class="sub" id="schedsub"></p>
+  <div class="bar">
+    <div class="field"><label for="swk">Week</label><select id="swk"></select></div>
+    <div class="field"><label for="sconf">Conference</label><select id="sconf"></select></div>
+    <div class="field"><label for="sq">Team</label>
+      <input id="sq" type="search" placeholder="Team name…" autocomplete="off"></div>
+    <div class="field"><label for="sshow">Show</label>
+      <select id="sshow">
+        <option value="all">Every game</option>
+        <option value="line">Only games with a line</option>
+        <option value="edge">Only where the model disagrees by 3+</option>
+        <option value="bet">Only games on the bets board</option>
+      </select></div>
+    <div class="field"><label>&nbsp;</label><button class="btn" id="sreset">Reset</button></div>
+  </div>
+  <div class="cards" id="schedcards"></div>
+  <div class="panel scroll"><table id="schedtbl"></table></div>
+  <footer class="note" id="schednote"></footer>
 </section>
 
 <!-- ── BEST BETS ───────────────────────────────────────────────────── -->
@@ -481,9 +511,22 @@ load().catch(e=>{ $("#meta").textContent="could not load the research bundle"; c
 /* ── boot ────────────────────────────────────────────────────────── */
 function boot(){
   $("#gate").hidden=true; $("#app").hidden=false; $("#nav").hidden=false;
+  /* Freshness is the first question this page gets asked -- "I changed the sheet, is
+     this showing it?" -- so the answer is in the header, naming the tab the grades
+     came from and when it was last read. Without it, "the site did not update" and
+     "the site updated and the number is the same" look identical. */
+  const gs=D.grades_sync, live=gs&&gs.tabs&&gs.tabs.find(t=>t.kind==="live tab");
+  const ago=iso=>{
+    if(!iso) return "";
+    const m=Math.max(0,Math.round((Date.now()-new Date(iso).getTime())/60000));
+    return m<60?`${m}m ago`:m<1440?`${Math.round(m/60)}h ago`:`${Math.round(m/1440)}d ago`;
+  };
   $("#meta").innerHTML=
     `${esc(D.sport.toUpperCase())} ${D.season} &nbsp;·&nbsp; grades ${D.grade_season}`+
-    ` &nbsp;·&nbsp; ${esc((D.generated_utc||"").slice(0,16).replace("T"," "))} UTC`;
+    ` &nbsp;·&nbsp; built ${esc((D.generated_utc||"").slice(0,16).replace("T"," "))} UTC`+
+    (gs?`<br><span class="fresh">sheet read ${esc(ago(gs.synced_utc))}`+
+        ` — ${esc(gs.tabs.map(t=>t.tab).join(", "))||"no tabs"}`+
+        `${live?"":' <b class="warnpill">no live tab</b>'}</span>`:"");
 
   banners();
   $$("#nav button").forEach(b=>b.onclick=()=>{
@@ -501,6 +544,28 @@ function boot(){
     const b=D.bets.find(x=>x.game_id===g);
     return `<option value="${esc(g)}">${esc(b?b.away+" @ "+b.home:g)}</option>`;}).join("");
 
+  /* Schedule controls. The week list comes from the schedule rather than the bets,
+     because a week whose games are all unpriced still exists and still has to be
+     selectable — that is most of the season in August. */
+  const sweeks=schedWeeks();
+  $("#swk").innerHTML='<option value="">All weeks</option>'+
+    sweeks.map(w=>`<option value="${w}">Week ${w}</option>`).join("");
+  $("#swk").value=String(defaultWeek());
+  const sconfs=[...new Set(Object.values(D.teams).map(t=>t.conference).filter(Boolean))].sort();
+  $("#sconf").innerHTML='<option value="">All conferences</option>'+
+    sconfs.map(c=>`<option>${esc(c)}</option>`).join("");
+  ["#swk","#sconf","#sq","#sshow"].forEach(s=>{
+    $(s).oninput=drawSched; $(s).onchange=drawSched;
+  });
+  $("#sreset").onclick=()=>{
+    $("#swk").value=String(defaultWeek()); $("#sconf").value="";
+    $("#sq").value=""; $("#sshow").value="all"; drawSched();
+  };
+  $("#schedsub").textContent=
+    `Every game involving an FBS team — ${D.schedule.length} of them — with the model's `+
+    `number beside the market's. This is the whole slate, not the bets board: nothing `+
+    `is filtered out for being a bad bet.`;
+
   initRank();
   loadBetPrefs();
   /* Both events: `input` fires per keystroke in the number boxes, `change` is what a
@@ -513,7 +578,7 @@ function boot(){
   $("#wteam").oninput=()=>{EDITS={};drawWhatIf()};
   $("#reset").onclick=()=>{EDITS={};drawWhatIf()};
 
-  drawRank();drawBets();drawTeam();drawMove();drawWhatIf();drawAlerts();
+  drawRank();drawSched();drawBets();drawTeam();drawMove();drawWhatIf();drawAlerts();
 }
 
 function banners(){
@@ -644,6 +709,95 @@ function drawRank(){
     `Showing ${shown.length} of ${total}. TOTAL = 2 × (QB+RB+WR+OL+DL+LB+DB) + Coach/ST `+
     `+ Win Points − Loss Points, which is exactly what the model bets — the sheet and the `+
     `picks are the same number.`;
+}
+
+/* ── SCHEDULE ─────────────────────────────────────────────────────
+   The whole slate, which is a different question from "what should I bet".
+   The bets board answers the second and is deliberately narrow; this answers the
+   first and hides nothing, including the games the model refuses to price. Those
+   are labelled with the REASON rather than left as an em dash, because a blank
+   cell reads as missing data when it is actually a decision.                     */
+const SCHED_STATUS = {
+  final:   ["Final",   "muted"],
+  blowout: ["No bet",  "warnpill"],
+  unrated: ["Unrated", "muted"],
+  priced:  ["",        ""],
+};
+function kickoffLabel(k){
+  if(!k) return "TBD";
+  /* Kickoffs are stored as UTC. Rendering them in the viewer's own zone is the
+     only reading that is never wrong for the person looking at it -- and a 7pm ET
+     Saturday game shown as Sunday 00:00 is exactly the kind of small wrongness
+     that makes someone stop trusting the rest of the page. */
+  const d=new Date(k.endsWith("Z")||k.includes("+")?k:k+"Z");
+  if(isNaN(d)) return esc(k.slice(0,16).replace("T"," "));
+  return d.toLocaleString(undefined,{weekday:"short",month:"short",day:"numeric",
+                                     hour:"numeric",minute:"2-digit"});
+}
+function schedWeeks(){ return [...new Set(D.schedule.map(g=>g.week))].sort((a,b)=>a-b); }
+function defaultWeek(){
+  /* Open on the week Grant is actually looking at: the earliest with a game still
+     to play, or the last week of the season once they are all done. */
+  const upcoming=D.schedule.filter(g=>g.status!=="final").map(g=>g.week);
+  return upcoming.length?Math.min(...upcoming):Math.max(...schedWeeks());
+}
+function drawSched(){
+  const wk=$("#swk").value, conf=$("#sconf").value;
+  const q=($("#sq").value||"").trim().toLowerCase(), show=$("#sshow").value;
+  const confOf=t=>D.teams[t]?.conference||null;
+  const betIds=new Set(D.bets.map(b=>b.game_id));
+
+  let rows=D.schedule.filter(g=>{
+    if(wk!=="" && String(g.week)!==wk) return false;
+    if(conf && confOf(g.home)!==conf && confOf(g.away)!==conf) return false;
+    if(q && !(g.home.toLowerCase().includes(q)||g.away.toLowerCase().includes(q))) return false;
+    if(show==="line" && g.line==null) return false;
+    if(show==="edge" && !(g.edge!=null && Math.abs(g.edge)>=3)) return false;
+    if(show==="bet"  && !betIds.has(g.game_id)) return false;
+    return true;
+  });
+
+  const withLine=rows.filter(g=>g.line!=null).length;
+  const disagree=rows.filter(g=>g.edge!=null&&Math.abs(g.edge)>=3).length;
+  $("#schedcards").innerHTML=`
+    <div class="card"><div class="k">Games</div><div class="v">${rows.length}</div>
+      <div class="s">${wk===""?"all weeks":"week "+wk}</div></div>
+    <div class="card"><div class="k">With a line</div><div class="v">${withLine}</div>
+      <div class="s">${rows.length?Math.round(100*withLine/rows.length):0}% priced</div></div>
+    <div class="card"><div class="k">Model disagrees 3+</div><div class="v">${disagree}</div>
+      <div class="s">of ${withLine} with a line</div></div>
+    <div class="card"><div class="k">On the bets board</div>
+      <div class="v">${rows.filter(g=>betIds.has(g.game_id)).length}</div>
+      <div class="s">priced &amp; bettable</div></div>`;
+
+  const head=["Kickoff","Away","Home","Model","Line","Edge","ATS pick","Total","Mkt","O/U",""];
+  const body=rows.map(g=>{
+    const [label,klass]=SCHED_STATUS[g.status]||["",""];
+    const result=g.status==="final"
+      ? `${esc(g.away)} ${g.away_score} — ${esc(g.home)} ${g.home_score}` : "";
+    return `<tr>
+      <td class="mono nowrap">${kickoffLabel(g.kickoff)}</td>
+      <td>${esc(g.away)}</td>
+      <td class="team">${esc(g.home)}${g.neutral?' <span class="muted">(N)</span>':""}</td>
+      <td class="num">${g.model_margin==null?"—":sgn(g.model_margin)}</td>
+      <td class="num muted">${g.line==null?"—":sgn(g.line)}</td>
+      <td class="num ${cls(g.edge)}">${g.edge==null?"—":sgn(g.edge)}</td>
+      <td class="strong">${esc(g.ats_pick||"—")}</td>
+      <td class="num">${g.model_total==null?"—":num(g.model_total)}</td>
+      <td class="num muted">${g.total==null?"—":num(g.total)}</td>
+      <td>${esc(g.ou_pick||"—")}</td>
+      <td class="${klass}" title="${esc(result)}">${label}</td></tr>`;
+  }).join("");
+
+  $("#schedtbl").innerHTML= rows.length
+    ? `<thead><tr>${head.map((h,i)=>`<th class="${i>=3&&i<=8?"num":""}">${h}</th>`).join("")}</tr></thead>`+
+      `<tbody>${body}</tbody>`
+    : `<tbody><tr><td><div class="empty">No games match those filters.</div></td></tr></tbody>`;
+
+  $("#schednote").textContent=
+    `${rows.length} game(s). Lines appear as books post them, so most of the season `+
+    `reads "—" until its week gets close. Games the ratings cannot reach are marked `+
+    `"No bet" rather than hidden. Only games involving an FBS team are listed.`;
 }
 
 /* ── BEST BETS ───────────────────────────────────────────────────── */

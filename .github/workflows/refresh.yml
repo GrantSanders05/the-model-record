@@ -1,0 +1,141 @@
+name: The Model — refresh grades & republish
+
+# The fast path, for the loop that actually happens day to day: Grant edits a grade
+# in the sheet and wants to see it on the site.
+#
+# The main update workflow does everything — fetch results, refresh lines, re-price,
+# LOCK picks into the append-only ledger, publish. That is right for a scheduled run
+# and wrong to do every twenty minutes: locking is not idempotent in spirit even
+# where it is in code, and the CFBD key is capped at 1,000 requests a month.
+#
+# So this one does strictly less, and can therefore run often:
+#   - reads the grade sheet             (Google only — costs no CFBD budget)
+#   - re-prices from the database it already has  (no network at all)
+#   - rebuilds and redeploys both pages
+# It never fetches from CFBD, and it never writes to the ledger. Nothing it does can
+# change the recorded track record; the worst case is a page rebuilt from the same
+# numbers.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"      # every half hour — a sheet edit is live within one cycle
+  workflow_dispatch:            # or immediately, from the Actions tab
+
+# Shares the main workflow's group so a refresh and a full update can never deploy
+# over each other. Queued rather than cancelled: a refresh that is dropped silently
+# is exactly the "I updated the sheet and nothing happened" complaint again.
+concurrency:
+  group: model-update
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      # RESTORE ONLY. This job must never save the cache: it does not fetch results,
+      # so its database is by definition no fresher than the one the full update
+      # wrote, and letting it overwrite the shared cache would let a half-populated
+      # DB become the base every later run restores from. That is the exact shape of
+      # the poisoning bug that hid an empty CFB table for days.
+      - name: Restore data cache (read-only)
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/cache
+            data/model.db
+            data/api_budget.json
+          key: model-data-v3-
+          restore-keys: |
+            model-data-v3-
+
+      # With no database there is nothing to re-price, and publishing an empty site
+      # over a working one is worse than doing nothing. Stop, loudly, and let the
+      # next full update seed it.
+      - name: Require a seeded database
+        run: |
+          CFB=$(python3 tools/db_count.py cfb)
+          echo "cached cfb games: $CFB"
+          if [ "$CFB" -lt 100 ]; then
+            echo "::warning::No cached CFB history yet — skipping the refresh."
+            echo "SKIP=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Re-read the grade sheet
+        if: ${{ env.SKIP != 'true' }}
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          MODEL_GRADES_SHEET_ID: ${{ secrets.MODEL_GRADES_SHEET_ID }}
+        run: |
+          if [ -z "$MODEL_GRADES_SHEET_ID" ]; then
+            echo "::warning::MODEL_GRADES_SHEET_ID is not set — nothing to read."
+            exit 0
+          fi
+          python3 src/sync_grades.py --sheet "$MODEL_GRADES_SHEET_ID" \
+            --sport cfb --season 2026
+
+      # Re-price and rebuild. No --fetch anywhere in here: every number comes from
+      # the restored database plus the grades just read.
+      - name: Rebuild both pages
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          python3 src/research_export.py --sport cfb --out output/research/data.json
+          python3 src/publish.py
+
+      - name: Assemble site
+        if: ${{ env.SKIP != 'true' }}
+        env:
+          RESEARCH_PASS: ${{ secrets.RESEARCH_PASS }}
+        run: |
+          rm -rf _site && mkdir -p _site
+          cp -r output/site/. _site/ 2>/dev/null || echo "no public page produced"
+          if [ -z "$RESEARCH_PASS" ]; then
+            echo "::warning::RESEARCH_PASS is not set — the research app is NOT published."
+          elif [ -f output/research/data.json ]; then
+            mkdir -p _site/research
+            cp site/research/index.html _site/research/index.html
+            node tools/encrypt_bundle.mjs output/research/data.json _site/research/data.enc.json
+            if find _site -name 'data.json' | grep -q .; then
+              echo "::error::plaintext data.json found in _site — refusing to publish"; exit 1
+            fi
+          fi
+          find _site -type f | sed 's/^/  /'
+
+      # Same gate as the full update. A fast path that skips the tests is a fast path
+      # to shipping a broken page.
+      - name: Exercise the site in a real DOM
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          cd tools/qa && npm install --no-fund --no-audit --silent
+          cd "$GITHUB_WORKSPACE"
+          node tools/qa/public.mjs
+          if [ -f output/research/data.json ]; then node tools/qa/research.mjs; fi
+
+      - name: Upload
+        if: ${{ env.SKIP != 'true' }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        if: ${{ env.SKIP != 'true' }}
+        id: pages
+        uses: actions/deploy-pages@v4
