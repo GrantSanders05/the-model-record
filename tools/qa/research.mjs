@@ -56,6 +56,22 @@ const ok = (name, cond, detail = "") => {
 const rows = sel => $$(`${sel} tbody tr`).length;
 const fire = (el, type = "input") => el.dispatchEvent(new window.Event(type, { bubbles: true }));
 
+// Resolve columns by their HEADER, never by a hard-coded index. Index-based reads
+// broke every assertion in two sections the moment a column was inserted, and the
+// failures looked like app bugs ("0 plays sized") when the app was correct -- the
+// summary card next to the column had the right number the whole time.
+const col = (sel, header) => {
+  const i = $$(`${sel} thead th`).findIndex(
+    th => th.textContent.trim().toLowerCase() === header.toLowerCase());
+  if (i < 0) throw new Error(`no "${header}" column in ${sel} — headers: ` +
+    $$(`${sel} thead th`).map(t => t.textContent.trim()).join(" | "));
+  return i;
+};
+const cellText = (tr, i) => (tr.children[i]?.textContent || "").trim();
+// The matchup cell holds both teams; the away one is the first .mu-t span.
+const teamsOf = tr => [...(tr.querySelector("td.mu")?.querySelectorAll(".mu-t") || [])]
+  .map(s => s.textContent.trim());
+
 console.log("\n── app boots ──");
 ok("app is visible", $("#app") && !$("#app").hasAttribute("hidden"));
 ok("gate is hidden", $("#gate").hasAttribute("hidden"));
@@ -218,7 +234,8 @@ console.log("\n── schedule ──");
   // team only would silently hide every road game a conference plays.
   ok("conference filter matches away teams too",
      [...$$("#schedtbl tbody tr")].some(tr =>
-       B.teams[tr.children[1].textContent.trim()]?.conference === conf0));
+       B.teams[teamsOf(tr)[0]]?.conference === conf0),
+     `sample away team: ${teamsOf($$("#schedtbl tbody tr")[0] || {})[0]}`);
   $("#sconf").value = ""; fire($("#sconf"), "change");
 
   $("#sq").value = "ohio state"; fire($("#sq"));
@@ -229,6 +246,95 @@ console.log("\n── schedule ──");
   $("#sreset").dispatchEvent(new window.Event("click", { bubbles: true }));
   ok("reset returns to the default week",
      $("#sq").value === "" && $("#swk").value !== "" && rows("#schedtbl") > 0);
+}
+
+console.log("\n── readable without decoding a sign ──");
+{
+  const B = JSON.parse(bundle);
+  $("#swk").value = ""; fire($("#swk"), "change");
+  $("#sshow").value = "line"; fire($("#sshow"), "change");
+  // Must be a HOSTED game: at a neutral site nobody is emphasised, on purpose, so
+  // taking row 0 blindly tested the wrong rule (row 0 here is a Dublin kickoff).
+  const neutralIds = new Set(B.schedule.filter(x => x.neutral).map(x => x.home + "|" + x.away));
+  const tr = $$("#schedtbl tbody tr").find(
+    t => !neutralIds.has(teamsOf(t)[1] + "|" + teamsOf(t)[0]));
+  const [away, home] = teamsOf(tr);
+  const g = B.schedule.find(x => x.away === away && x.home === home && x.line != null);
+  ok("matchup names both teams", !!away && !!home, `${away} @ ${home}`);
+  ok("the host is the emphasised team",
+     tr.querySelector(".mu-home")?.textContent.trim() === home, `${away} @ ${home}`);
+  ok("a hosted game shows @", tr.querySelector(".mu-at").textContent.trim() === "@");
+
+  // The point of the change: the spread is shown as FAVOURITE and a negative
+  // number, so it reads the way it is spoken. A home-perspective "+6.5" against a
+  // column header is what it replaced.
+  const cM = col("#schedtbl", "Market has it");
+  const shown = cellText(tr, cM);
+  const wantTeam = g.line > 0 ? home : away;
+  ok("the market column names the favourite, not the home team",
+     shown.startsWith(wantTeam), `shows "${shown}", favourite is ${wantTeam}`);
+  ok("the favourite's number is negative",
+     shown.includes("−") && Math.abs(parseFloat(shown.replace(/[^0-9.]/g, "")) - Math.abs(g.line)) < 0.06,
+     shown);
+
+  // Edge is a magnitude now; the side lives in the pick, so a sign would be noise.
+  const cE = col("#schedtbl", "Edge");
+  ok("edge is shown as a magnitude", !cellText(tr, cE).includes("−") &&
+     !cellText(tr, cE).includes("+"), cellText(tr, cE));
+
+  // A pick without its number does not tell you if you are laying or taking points.
+  const withPick = $$("#schedtbl tbody tr").find(t => {
+    const c = cellText(t, col("#schedtbl", "Spread pick"));
+    return c && c !== "—";
+  });
+  const pickTxt = cellText(withPick, col("#schedtbl", "Spread pick"));
+  ok("the spread pick carries its number", /[+−]\d|PK/.test(pickTxt), pickTxt);
+
+  // A "No bet" game must not also show an edge and a pick. Those edges are the
+  // largest on the board and they are artifacts — the exact number the rule exists
+  // to throw away. A label beside a big number loses to the big number.
+  {
+    const nb = B.schedule.find(x => x.no_bet);
+    $("#sshow").value = "all"; fire($("#sshow"), "change");
+    $("#sq").value = nb.home; fire($("#sq"));
+    const ntr = $$("#schedtbl tbody tr").find(t => teamsOf(t)[1] === nb.home &&
+                                                   teamsOf(t)[0] === nb.away);
+    ok("a No-bet game withholds its edge and pick",
+       ntr && cellText(ntr, col("#schedtbl", "Edge")) === "—" &&
+       cellText(ntr, col("#schedtbl", "Spread pick")) === "—",
+       ntr ? `edge="${cellText(ntr, col("#schedtbl","Edge"))}" pick="${cellText(ntr, col("#schedtbl","Spread pick"))}"` : "row not found");
+    ok("but it still says why", ntr && cellText(ntr, 8).includes("No bet"));
+    $("#sq").value = ""; fire($("#sq"));
+  }
+
+  $("#sshow").value = "all"; fire($("#sshow"), "change");
+  const neu = B.schedule.find(x => x.neutral);
+  if (neu) {
+    $("#sq").value = neu.home; fire($("#sq"));
+    const ntr = $$("#schedtbl tbody tr").find(t => teamsOf(t)[1] === neu.home);
+    ok("a neutral-site game says vs, not @, and flags neutral",
+       ntr && ntr.querySelector(".mu-at").textContent.trim() === "vs" &&
+       ntr.querySelector(".mu-n") !== null);
+    ok("neither team is emphasised at a neutral site",
+       ntr && ntr.querySelector(".mu-home") === null);
+    $("#sq").value = ""; fire($("#sq"));
+  }
+  $("#sreset").dispatchEvent(new window.Event("click", { bubbles: true }));
+
+  // Best bets: the side you are backing must say whether it is home or away.
+  $$("#nav button").find(b => b.dataset.v === "bets")
+    .dispatchEvent(new window.Event("click", { bubbles: true }));
+  $("#sortby").value = "ml"; fire($("#sortby"), "change");
+  const btr = $$("#bets tbody tr")[0];
+  const bet = JSON.parse(bundle).bets.find(x =>
+    x.away === teamsOf(btr)[0] && x.home === teamsOf(btr)[1]);
+  const sideTag = btr.querySelector(".side")?.textContent.trim();
+  ok("the bet names home or away", ["home", "away"].includes(sideTag), String(sideTag));
+  ok("that tag matches which team the bet is on",
+     sideTag === (bet.ml_pick === bet.home ? "home" : "away"),
+     `${bet.ml_pick} tagged ${sideTag}`);
+  ok("both tables carry a legend", $("#schednote .legend") !== null &&
+     $("#betnote .legend") !== null);
 }
 
 console.log("\n── grade freshness ──");
@@ -276,12 +382,13 @@ $("#bank").value = "1000"; fire($("#bank"));
 console.log("\n── stake sizing ──");
 // Read the money out of the table rather than trusting a summary card — the card and
 // the column are computed from the same map, so a card alone would agree with itself.
-const STAKE_COL = 8;
-const stakeRows = () => $$("#bets tbody tr")
-  .map(tr => ({ week: tr.children[0]?.textContent.trim(),
-                stake: tr.children[STAKE_COL]?.textContent.trim() }))
-  .filter(r => r.stake && r.stake !== "—")
-  .map(r => ({ week: r.week, stake: +r.stake.replace(/[$,]/g, "") }));
+const stakeRows = () => {
+  const cW = col("#bets", "Wk"), cS = col("#bets", "Stake");
+  return $$("#bets tbody tr")
+    .map(tr => ({ week: cellText(tr, cW), stake: cellText(tr, cS) }))
+    .filter(r => r.stake && r.stake !== "—")
+    .map(r => ({ week: r.week, stake: +r.stake.replace(/[$,]/g, "") }));
+};
 const totalStaked = () => stakeRows().reduce((s, r) => s + r.stake, 0);
 const near = (a, b, tol = 0.05) => Math.abs(a - b) < tol;
 

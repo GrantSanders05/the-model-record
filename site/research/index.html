@@ -189,6 +189,32 @@ tbody tr:hover{background:var(--raised)}
 .muted{color:var(--ink3)}
 .strong{font-weight:640}
 .nowrap{white-space:nowrap}
+
+/* ── matchup + team/number pairs ─────────────────────────────────────────
+   A pair cell carries an identity and a figure. The name is left-aligned so a
+   column of names scans, the number is pushed right and stays tabular so a
+   column of numbers still lines up -- which is the whole reason the old layout
+   kept them in separate columns. This gets both. */
+td.mu{white-space:nowrap}
+.mu-t{font-weight:520}
+.mu-home{font-weight:680;color:var(--ink)}
+.mu-at{color:var(--ink3);margin:0 6px;font-size:11.5px}
+.mu-n{color:var(--ink3);font-size:10px;text-transform:uppercase;letter-spacing:.06em;
+  margin-left:8px;border:1px solid var(--line);border-radius:4px;padding:1px 4px}
+td.pair{white-space:nowrap}
+td.pair .t{display:inline-block;max-width:13ch;overflow:hidden;text-overflow:ellipsis;
+  vertical-align:bottom}
+td.pair .n{float:right;margin-left:10px;font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum"}
+/* The away/home tag on a bet: which side you are actually backing. */
+.side{font-size:9.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ink3);border:1px solid var(--line);border-radius:4px;padding:1px 4px;
+  margin-right:6px;vertical-align:1px}
+/* A quiet rule between calendar days so a week reads as days, not as 91 rows. */
+tr.daybreak>td{border-top:1px solid var(--ink3)}
+.legend{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:10px 0 0;
+  color:var(--ink3);font-size:11.5px}
+.legend b{color:var(--ink2);font-weight:600}
 /* "No bet" is a decision the model made, not a warning about the site, so it gets a
    quiet pill rather than the alarm colour used for banners. */
 .warnpill{color:var(--warn);font-size:11px;font-weight:600;white-space:nowrap}
@@ -433,6 +459,60 @@ const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>
 const num=(v,d=1)=>v==null||Number.isNaN(v)?"—":(+v).toFixed(d);
 const sgn=(v,d=1)=>v==null||Number.isNaN(v)?"—":((+v>0?"+":"")+(+v).toFixed(d));
 const cls=v=>v==null?"muted":(+v>0?"pos":(+v<0?"neg":"muted"));
+
+/* ── reading a game without decoding it ───────────────────────────────────
+   Every number in this model is stored from the HOME team's point of view: a
+   margin of +6.5 means the home team by 6.5. That is the right internal
+   convention and the wrong thing to put on a screen, because reading it takes
+   two steps -- work out which column is the home team, then apply the sign.
+   Nobody reads a spread that way. They read "TCU -6.5".
+
+   So the table prints the FAVOURITE and a negative number, always, and the
+   matchup cell says who is at home. The sign convention stops being something
+   you have to hold in your head.                                            */
+function fav(homeMargin, home, away){
+  if(homeMargin==null||Number.isNaN(homeMargin)) return null;
+  const m=+homeMargin;
+  if(Math.abs(m)<0.05) return {team:null,num:"PK"};       // pick'em, no favourite
+  return {team: m>0?home:away, num:"−"+Math.abs(m).toFixed(1)};
+}
+function favCell(homeMargin, home, away, extra=""){
+  const f=fav(homeMargin,home,away);
+  if(!f) return `<td class="pair muted">—</td>`;
+  if(!f.team) return `<td class="pair"><span class="t muted">even</span><span class="n">PK</span></td>`;
+  return `<td class="pair ${extra}" title="${esc(f.team)} ${f.num}">`+
+         `<span class="t">${esc(f.team)}</span><span class="n">${f.num}</span></td>`;
+}
+/* The side to bet, with its number attached. "Texas" alone does not tell you
+   whether you are laying points or taking them, which is the only thing that
+   matters at the window. */
+function pickCell(pickTeam, homeMargin, home, away){
+  if(!pickTeam) return `<td class="pair muted">—</td>`;
+  let n="";
+  if(homeMargin!=null&&!Number.isNaN(homeMargin)){
+    const isHome=pickTeam===home;
+    const line=isHome? -homeMargin : +homeMargin;         // from the pick's side
+    n=(line>0?"+":line<0?"−":"")+Math.abs(line).toFixed(1);
+    if(Math.abs(line)<0.05) n="PK";
+  }
+  return `<td class="pair strong" title="${esc(pickTeam)} ${n}">`+
+         `<span class="t">${esc(pickTeam)}</span><span class="n">${n}</span></td>`;
+}
+function matchupCell(away, home, neutral){
+  /* "@" is load-bearing -- it is the only thing on the row that says who is at
+     home, and home field is worth 4 points to this model. Neutral sites get
+     "vs" and no emphasis, because neither team is hosting. */
+  return `<td class="mu">`+
+    `<span class="mu-t">${esc(away)}</span>`+
+    `<span class="mu-at">${neutral?"vs":"@"}</span>`+
+    `<span class="mu-t ${neutral?"":"mu-home"}">${esc(home)}</span>`+
+    (neutral?`<span class="mu-n">neutral</span>`:"")+`</td>`;
+}
+function ouCell(pick, total){
+  if(!pick) return `<td class="muted">—</td>`;
+  return `<td class="pair strong"><span class="t">${esc(pick)}</span>`+
+         `<span class="n">${total==null?"":num(total)}</span></td>`;
+}
 
 /* ── theme ───────────────────────────────────────────────────────── */
 (function(){
@@ -770,34 +850,51 @@ function drawSched(){
       <div class="v">${rows.filter(g=>betIds.has(g.game_id)).length}</div>
       <div class="s">priced &amp; bettable</div></div>`;
 
-  const head=["Kickoff","Away","Home","Model","Line","Edge","ATS pick","Total","Mkt","O/U",""];
+  const head=["Kickoff","Matchup","Model makes it","Market has it","Edge",
+              "Spread pick","Total","O/U pick",""];
+  let lastDay=null;
   const body=rows.map(g=>{
     const [label,klass]=SCHED_STATUS[g.status]||["",""];
     const result=g.status==="final"
-      ? `${esc(g.away)} ${g.away_score} — ${esc(g.home)} ${g.home_score}` : "";
-    return `<tr>
-      <td class="mono nowrap">${kickoffLabel(g.kickoff)}</td>
-      <td>${esc(g.away)}</td>
-      <td class="team">${esc(g.home)}${g.neutral?' <span class="muted">(N)</span>':""}</td>
-      <td class="num">${g.model_margin==null?"—":sgn(g.model_margin)}</td>
-      <td class="num muted">${g.line==null?"—":sgn(g.line)}</td>
-      <td class="num ${cls(g.edge)}">${g.edge==null?"—":sgn(g.edge)}</td>
-      <td class="strong">${esc(g.ats_pick||"—")}</td>
-      <td class="num">${g.model_total==null?"—":num(g.model_total)}</td>
-      <td class="num muted">${g.total==null?"—":num(g.total)}</td>
-      <td>${esc(g.ou_pick||"—")}</td>
-      <td class="${klass}" title="${esc(result)}">${label}</td></tr>`;
+      ? `${esc(g.away)} ${g.away_score}, ${esc(g.home)} ${g.home_score}` : "";
+    const day=(g.kickoff||"").slice(0,10);
+    const brk = lastDay!==null && day!==lastDay ? " daybreak" : "";
+    lastDay=day;
+    return `<tr class="${brk}">
+      <td class="mono nowrap muted">${kickoffLabel(g.kickoff)}</td>
+      ${matchupCell(g.away,g.home,g.neutral)}
+      ${favCell(g.model_margin,g.home,g.away)}
+      ${favCell(g.line,g.home,g.away,"muted")}
+      ${/* A game the model refuses to price still HAS an arithmetic edge, and it is
+            always a huge one -- a 40-point line against ratings that span 30 produces
+            the biggest numbers on the page. Printing them next to a "No bet" label
+            invites reading the two as a recommendation and a caveat. They are not:
+            the number is the artifact the rule exists to discard. So the edge and the
+            pick are withheld, and the label is the whole answer. */""}
+      ${g.no_bet ? `<td class="num muted">—</td><td class="pair muted">—</td>`
+        : `<td class="num ${g.edge==null?"muted":Math.abs(g.edge)>=3?"pos":""}">${
+             g.edge==null?"—":Math.abs(g.edge).toFixed(1)}</td>`+
+          pickCell(g.ats_pick,g.line,g.home,g.away)}
+      <td class="num">${g.model_total==null?"—":num(g.model_total)}${
+        g.total==null?"":`<span class="muted"> / ${num(g.total)}</span>`}</td>
+      ${ouCell(g.ou_pick,g.total)}
+      <td class="${klass}" title="${esc(result)}">${g.status==="final"?esc(result):label}</td></tr>`;
   }).join("");
 
   $("#schedtbl").innerHTML= rows.length
-    ? `<thead><tr>${head.map((h,i)=>`<th class="${i>=3&&i<=8?"num":""}">${h}</th>`).join("")}</tr></thead>`+
+    ? `<thead><tr>${head.map((h,i)=>`<th class="${i===4||i===6?"num":""}">${h}</th>`).join("")}</tr></thead>`+
       `<tbody>${body}</tbody>`
     : `<tbody><tr><td><div class="empty">No games match those filters.</div></td></tr></tbody>`;
 
-  $("#schednote").textContent=
-    `${rows.length} game(s). Lines appear as books post them, so most of the season `+
-    `reads "—" until its week gets close. Games the ratings cannot reach are marked `+
-    `"No bet" rather than hidden. Only games involving an FBS team are listed.`;
+  $("#schednote").innerHTML=
+    `<span class="legend"><span><b>Away @ Home</b> — the bold team is hosting</span>`+
+    `<span><b>Model makes it / Market has it</b> — the favourite and the points it lays</span>`+
+    `<span><b>Edge</b> — how far apart those two are</span>`+
+    `<span><b>Total</b> — model / market</span></span>`+
+    `<span style="display:block;margin-top:8px">${rows.length} game(s). `+
+    `Lines appear as books post them, so most of the season reads “—” until its week `+
+    `gets close. Games the ratings cannot reach are marked “No bet” rather than hidden. `+
+    `Only games involving an FBS team are listed.</span>`;
 }
 
 /* ── BEST BETS ───────────────────────────────────────────────────── */
@@ -920,26 +1017,41 @@ function drawBets(){
   }else warn.hidden=true;
 
   const head = by==="ml"
-    ? ["Wk","Away","Home","Pick","Odds","Model","Fair","EV %","Stake"]
-    : ["Wk","Away","Home","Model","Line","Edge","Pick","Total","Mkt","O/U"];
+    ? ["Wk","Matchup","Bet on","Odds","Model says","Market says","Edge","Stake"]
+    : ["Wk","Matchup","Model makes it","Market has it","Edge","Spread pick","Total","O/U pick"];
+  const numCols = by==="ml" ? [0,3,4,5,6,7] : [0,4,6];
   const body = rows.slice(0,150).map(r=> by==="ml" ? `<tr>
-      <td class="num">${r.week}</td><td>${esc(r.away)}</td><td class="team">${esc(r.home)}</td>
-      <td class="strong">${esc(r.ml_pick||"—")}</td>
+      <td class="num muted">${r.week}</td>
+      ${matchupCell(r.away,r.home,false)}
+      <td class="pair strong"><span class="side">${r.ml_pick===r.home?"home":"away"}</span>`+
+        `<span class="t">${esc(r.ml_pick||"—")}</span></td>
       <td class="num mono">${r.ml_odds==null?"—":(r.ml_odds>0?"+":"")+r.ml_odds}</td>
       <td class="num">${num(r.model_prob)}%</td><td class="num muted">${num(r.ml_fair_prob)}%</td>
-      <td class="num ${cls(r.ml_ev)}">${sgn(r.ml_ev,2)}</td>
-      <td class="num">${stakes.has(r.game_id)?money(stakes.get(r.game_id)):"—"}</td></tr>`
-    : `<tr><td class="num">${r.week}</td><td>${esc(r.away)}</td><td class="team">${esc(r.home)}</td>
-      <td class="num">${sgn(r.model_margin)}</td><td class="num muted">${sgn(r.market_margin)}</td>
-      <td class="num ${cls(r.spread_edge)}">${sgn(r.spread_edge)}</td>
-      <td class="strong">${esc(r.ats_pick||"—")}</td>
-      <td class="num">${num(r.model_total)}</td><td class="num muted">${num(r.market_total)}</td>
-      <td>${esc(r.ou_pick||"—")}</td></tr>`).join("");
+      <td class="num ${cls(r.ml_ev)}">${sgn(r.ml_ev,2)}%</td>
+      <td class="num strong">${stakes.has(r.game_id)?money(stakes.get(r.game_id)):"—"}</td></tr>`
+    : `<tr><td class="num muted">${r.week}</td>
+      ${matchupCell(r.away,r.home,false)}
+      ${favCell(r.model_margin,r.home,r.away)}
+      ${favCell(r.market_margin,r.home,r.away,"muted")}
+      <td class="num ${r.spread_edge==null?"muted":Math.abs(r.spread_edge)>=3?"pos":""}">${
+        r.spread_edge==null?"—":Math.abs(r.spread_edge).toFixed(1)}</td>
+      ${pickCell(r.ats_pick,r.market_margin,r.home,r.away)}
+      <td class="num">${num(r.model_total)}${
+        r.market_total==null?"":`<span class="muted"> / ${num(r.market_total)}</span>`}</td>
+      ${ouCell(r.ou_pick,r.market_total)}</tr>`).join("");
   $("#bets").innerHTML= rows.length
-    ? `<thead><tr>${head.map((h,i)=>`<th class="${i>2?"num":""}">${h}</th>`).join("")}</tr></thead><tbody>${body}</tbody>`
+    ? `<thead><tr>${head.map((h,i)=>`<th class="${numCols.includes(i)?"num":""}">${h}</th>`).join("")}</tr></thead><tbody>${body}</tbody>`
     : `<tbody><tr><td><div class="empty">No games match that filter.</div></td></tr></tbody>`;
 
-  $("#betnote").textContent = by!=="ml"
+  const legend = by==="ml"
+    ? `<span class="legend"><span><b>Away @ Home</b> — the bold team is hosting</span>`+
+      `<span><b>Bet on</b> — the side to back, and whether it is home or away</span>`+
+      `<span><b>Model says / Market says</b> — win probability, vig removed</span>`+
+      `<span><b>Edge</b> — profit per $100 staked, on average, if the model is right</span></span>`
+    : `<span class="legend"><span><b>Away @ Home</b> — the bold team is hosting</span>`+
+      `<span><b>Model makes it / Market has it</b> — the favourite and the points it lays</span>`+
+      `<span><b>Spread pick</b> — the side, and the number you would be taking</span></span>`;
+  $("#betnote").innerHTML = legend + `<span style="display:block;margin-top:8px">` + (by!=="ml"
     ? "Break-even at −110 is 52.38%."
     : mode==="kelly"
       ? `Quarter Kelly on a ${money(bank)} bankroll, capped at 2% (${money(bank*0.02)}) per game. `+
@@ -948,7 +1060,8 @@ function drawBets(){
         ? `${money(weekly)} per week, split in Kelly proportion — the same ordering as above, `+
           `scaled to spend exactly the budget. Break-even at −110 is 52.38%.`
         : `${money(weekly)} per week, split evenly across that week's positive-EV plays. `+
-          `Simplest to execute; it ignores how big each edge is. Break-even at −110 is 52.38%.`;
+          `Simplest to execute; it ignores how big each edge is. Break-even at −110 is 52.38%.`
+    ) + `</span>`;
 }
 
 /* Sizing is a per-person setting, not a property of the data — so it survives a

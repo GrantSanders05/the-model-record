@@ -48,7 +48,10 @@ DEFAULT_CONFIG = {
     # ── spread ──
     "scale": 1.0,                  # multiplier on rating difference -> points
     "hfa": 2.4,                    # home field advantage, points
-    "neutral_hfa": 0.0,            # HFA applied at neutral sites
+    "neutral_hfa": 0.0,            # HFA applied at neutral sites. Measured: the
+                                   # designated home team wins neutral games by
+                                   # +0.92 +/- 1.38 and the market prices +0.09,
+                                   # so zero is the honest value. Leave it.
 
     # ── Elo rater ──
     "elo_k": 22.0,
@@ -428,6 +431,33 @@ class Model:
         self.totals = TotalsModel(self.cfg) if self.cfg["totals_enabled"] else None
         self._fallback = EloRater(self.cfg) if kind == "grades" else None
 
+    # ── home-field advantage ───────────────────────────────────────────────
+    #
+    # A constant, and deliberately so. Measured on 8,364 FBS-vs-FBS non-neutral
+    # games since 2014: the home team wins by 4.26 (se 0.23) and the market
+    # charges 4.49. The model shipped with 3.0, which is outside that interval --
+    # about a point light on every home game, in the same direction every time.
+    #
+    # `hfa` is not rater-independent. It absorbs whatever mean offset a rater's
+    # strength() carries, which is why one value cannot serve both: the grade
+    # model's residual bias zeroes at ~3.9 and Elo's at ~2.5. Each config carries
+    # its own, fitted to its own rater.
+    #
+    # AN ADAPTIVE VERSION WAS BUILT AND MEASURED AND IT LOST. Learning the
+    # residual from finished games (leak-free, accumulated in observe()) is
+    # obvious enough that someone will propose it again, so: over 2016-2025 it was
+    # worse than a correct constant in seven seasons of ten, and worst of all in
+    # 2020 and 2021 -- the empty-stadium regime break it exists to handle. It
+    # enters a broken regime carrying the old one's evidence and spends the season
+    # catching up. An estimator that lags a step change does not protect you from
+    # step changes. The drift is real (2.13 in 2020, 5.40 in 2024) but it is not
+    # tradeable in-season, and the market prices home field within a quarter point
+    # anyway, so the whole available win is having the constant right.
+
+    def hfa_for(self, game):
+        """The home-field term for one game, in points."""
+        return self.cfg["neutral_hfa"] if game["neutral_site"] else self.cfg["hfa"]
+
     def new_season(self, season):
         self.rater.new_season(season)
         if self._fallback:
@@ -442,8 +472,7 @@ class Model:
             s = self._fallback.strength(game)
         if s is None:
             s = 0.0
-        hfa = self.cfg["neutral_hfa"] if game["neutral_site"] else self.cfg["hfa"]
-        margin = s * self.cfg["scale"] + hfa
+        margin = s * self.cfg["scale"] + self.hfa_for(game)
         # Market anchoring happens LAST, after the model has had its say. The
         # closing line is public before kickoff, so using it is information, not
         # look-ahead.
