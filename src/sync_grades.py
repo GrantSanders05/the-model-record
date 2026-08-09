@@ -24,6 +24,7 @@ Usage:
 """
 
 import argparse
+import os
 import re
 import sys
 
@@ -49,18 +50,51 @@ def list_week_tabs(sheet_id):
     return sorted(out, key=lambda t: t[1])
 
 
+def _providers(sheet_id):
+    """
+    How to list and read tabs, for whichever access method is configured.
+
+    Two ways in: a service account (private sheet, read+write) or a link-shared
+    sheet read as CSV (no Google Cloud project, read-only). They differ only in
+    how bytes are obtained, so they are reduced to a pair of callables here and
+    everything after this point is identical -- which is the point. Two ingest
+    paths that parse rows differently would produce grades that disagree
+    depending on how they arrived.
+    """
+    if os.environ.get("GOOGLE_SERVICE_ACCOUNT") or os.environ.get(
+            "GOOGLE_APPLICATION_CREDENTIALS"):
+        import sheets
+        return ("service account",
+                lambda: list_week_tabs(sheet_id),
+                lambda title: sheets.read_range(sheet_id, "'%s'!A1:Z200" % title))
+
+    import grades_link
+    sid = grades_link.sheet_id(sheet_id)
+    return ("link-shared CSV",
+            lambda: grades_link.list_week_tabs(sid),
+            lambda title: grades_link.read_tab(sid, title))
+
+
 def sync(conn, sheet_id, sport, season, week_offset=1, dry_run=False, verbose=True):
-    import sheets
-    tabs = list_week_tabs(sheet_id)
+    how, list_tabs, read_tab = _providers(sheet_id)
+    # Printed even when quiet. Which door the grades came through decides whether
+    # writeback exists and whether the sheet is public, so it is not a detail.
+    print("  reading via %s" % how)
+
+    try:
+        tabs = list_tabs()
+    except PermissionError as e:
+        raise SystemExit(str(e))
+
     if not tabs:
         raise SystemExit(
             "No tabs matching 'Week N Data' found in that sheet.\n"
-            "Check the sheet ID, and that the service account has access to it.")
+            "Check the sheet ID, and that this method can actually see it.")
 
     total, imported_tabs = 0, 0
     for title, wk in tabs:
         eff = wk + week_offset
-        rows = sheets.read_range(sheet_id, "'%s'!A1:Z200" % title)
+        rows = read_tab(title)
         recs, teams = iw.parse_rows(rows, sport, season, eff, label=title)
         if not recs:
             if verbose:

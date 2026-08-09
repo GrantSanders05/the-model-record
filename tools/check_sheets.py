@@ -50,6 +50,48 @@ def service_account_email():
     return None
 
 
+def check_link(args):
+    """The no-Google-Cloud path: a link-shared sheet read as CSV."""
+    import grades_link
+
+    sid = grades_link.sheet_id(args.sheet)
+    if not sid:
+        print("[FAIL] no sheet. Pass --sheet <url-or-id> or set MODEL_GRADES_SHEET_ID.")
+        return 1
+    print("[ok]   sheet id: %s" % sid)
+    print("       probing for 'Week N Data' tabs…")
+
+    res = grades_link.probe(sid)
+    if not res["ok"]:
+        print("[FAIL] %s" % res["reason"])
+        return 1
+
+    print("[ok]   %d weekly tab(s): %s"
+          % (len(res["tabs"]), ", ".join(t for t, _ in res["tabs"])))
+
+    title, _ = res["tabs"][0]
+    rows = grades_link.read_tab(sid, title)
+    print("[ok]   read %d row(s) from %r" % (len(rows or []), title))
+
+    import import_workbook as iw
+    recs, teams = iw.parse_rows(rows, "cfb", args.season, 1, label=title)
+    if not recs:
+        print("[FAIL] the tab was readable but no grade columns were recognised.")
+        print("       Headers must still look like 'QB Score 15', 'RB Score 10', …")
+        return 1
+    print("[ok]   parsed %d grade rows across %d teams" % (len(recs), teams))
+
+    print("=" * 60)
+    print("Connection is good, and no Google Cloud project was needed.")
+    print("Set ONE secret and the daily job takes it from here:")
+    print("  gh secret set MODEL_GRADES_SHEET_ID    # %s" % sid)
+    print()
+    print("Note: this path is READ-ONLY, so the automation will not write")
+    print("its Model Picks / Model Accuracy tabs back into your workbook.")
+    print("The website shows both regardless.")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sheet", default=os.environ.get("MODEL_GRADES_SHEET_ID"))
@@ -69,13 +111,13 @@ def main():
         print("       pip install -r requirements.txt")
         return 1
 
-    # 2. the credential
+    # 2. the credential — or the no-credential path
     email = service_account_email()
     if not (os.environ.get("GOOGLE_SERVICE_ACCOUNT")
             or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")):
-        print("[FAIL] no credential. Set GOOGLE_SERVICE_ACCOUNT to the contents")
-        print("       of the service-account JSON key file.")
-        return 1
+        print("[--]   no service-account credential set — checking the")
+        print("       link-shared CSV path instead (no Google Cloud needed)")
+        return check_link(args)
     if not email:
         print("[FAIL] the credential is set but is not valid JSON with a client_email.")
         print("       Paste the WHOLE key file, braces included.")

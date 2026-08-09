@@ -132,6 +132,11 @@ jobs:
       - name: Run the update
         env:
           CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+          # Optional. With it, the grade sheet stays private and the automation
+          # can write its own tabs back. Without it, MODEL_GRADES_SHEET_ID alone
+          # is enough: the sync falls back to reading a link-shared sheet as CSV,
+          # which needs no Google Cloud project but is public-to-anyone-with-the-ID
+          # and read-only.
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           # Sheet the weekly film grades are READ FROM (the Power Rankings workbook).
           MODEL_GRADES_SHEET_ID: ${{ secrets.MODEL_GRADES_SHEET_ID }}
