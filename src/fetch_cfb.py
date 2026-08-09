@@ -303,11 +303,15 @@ def main():
               % (slope, r, "OK" if 0.7 < slope < 1.3 else "SUSPICIOUS - investigate"))
 
 
-if __name__ == "__main__":
-    main()
-
-
 # ── advanced efficiency (PPA) ──────────────────────────────────────────────────
+#
+# This section used to sit BELOW the `if __name__ == "__main__"` guard, which is why
+# fetch_ppa could never be called from a script run: python executes top to bottom,
+# main() ran at the guard, and these defs had not been evaluated yet. Calling it
+# raised NameError at runtime -- from inside a try/except that turned it into one
+# quiet "PPA unavailable" line per season. Module-level code after the guard runs
+# only on import, so this was invisible to every `import fetch_cfb` too.
+# Keep the guard last.
 
 def ppa_rows(raw, season):
     """
@@ -353,3 +357,7 @@ def fetch_ppa(conn, season, key, refresh=False):
                  def_pass_ppa=excluded.def_pass_ppa, def_rush_ppa=excluded.def_rush_ppa""", rows)
         conn.commit()
     return len(rows), hit
+
+
+if __name__ == "__main__":
+    main()
