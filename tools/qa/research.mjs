@@ -60,6 +60,20 @@ console.log("\n── app boots ──");
 ok("app is visible", $("#app") && !$("#app").hasAttribute("hidden"));
 ok("gate is hidden", $("#gate").hasAttribute("hidden"));
 ok("nav is visible", !$("#nav").hasAttribute("hidden"));
+
+// Asserting the ATTRIBUTE is not the same as asserting the element is gone, and the
+// difference shipped: `[hidden]{display:none}` is a user-agent rule, origin beats
+// specificity, so `#gate{display:grid}` outranked it and the passphrase box stayed
+// painted over a booted app forever. Every `hidden` assertion above passed the whole
+// time. Check what the cascade actually computes.
+const disp = s => window.getComputedStyle($(s)).display;
+ok("gate is really not displayed", disp("#gate") === "none", `computed: ${disp("#gate")}`);
+ok("app is really displayed", disp("#app") !== "none", `computed: ${disp("#app")}`);
+// jsdom resolves this collision by specificity only, so it catches `#gate` but NOT
+// `nav{display:flex}` — which real Chrome confirmed also loses. The stylesheet-level
+// guard is what covers the whole class, so assert the guard itself is present.
+ok("stylesheet forces [hidden] to outrank author display rules",
+   /\[hidden\]\s*\{\s*display\s*:\s*none\s*!important/.test(html));
 ok("meta populated", ($("#meta").textContent || "").includes("CFB"), $("#meta").textContent);
 ok("6 tabs present", $$("#nav button").length === 6, String($$("#nav button").length));
 
@@ -134,12 +148,15 @@ th.dispatchEvent(new window.Event("click", { bubbles: true }));
 ok("header click sorts", $("#ranktbl th[aria-sort]") !== null);
 
 console.log("\n── best bets ──");
-ok("bet cards render", $$("#betcards .card").length === 4);
+ok("bet cards render", $$("#betcards .card").length === 6, String($$("#betcards .card").length));
 const mlRows = rows("#bets");
 ok("moneyline table has rows", mlRows > 0, `got ${mlRows}`);
 $("#sortby").value = "spread"; fire($("#sortby"));
 const spreadAll = rows("#bets");
 ok("spread mode re-renders", spreadAll > 0, `got ${spreadAll}`);
+ok("spread mode says sizing does not apply",
+   !$("#sizenote").hasAttribute("hidden") &&
+   $("#sizenote").textContent.includes("does not apply"));
 
 // Row counts are only comparable WITHIN a mode — the two modes filter on
 // different fields (ml_ev vs spread_edge), so a cross-mode comparison proves
@@ -159,6 +176,88 @@ $("#bank").value = "5000"; fire($("#bank"));
 ok("bankroll change actually changes the stakes",
    $("#bets").textContent !== stakeBefore);
 $("#bank").value = "1000"; fire($("#bank"));
+
+console.log("\n── stake sizing ──");
+// Read the money out of the table rather than trusting a summary card — the card and
+// the column are computed from the same map, so a card alone would agree with itself.
+const STAKE_COL = 8;
+const stakeRows = () => $$("#bets tbody tr")
+  .map(tr => ({ week: tr.children[0]?.textContent.trim(),
+                stake: tr.children[STAKE_COL]?.textContent.trim() }))
+  .filter(r => r.stake && r.stake !== "—")
+  .map(r => ({ week: r.week, stake: +r.stake.replace(/[$,]/g, "") }));
+const totalStaked = () => stakeRows().reduce((s, r) => s + r.stake, 0);
+const near = (a, b, tol = 0.05) => Math.abs(a - b) < tol;
+
+$("#sizing").value = "kelly"; fire($("#sizing"), "change");
+ok("weekly box is disabled in Kelly mode", $("#weekly").disabled);
+const kellyTotal = totalStaked();
+const nPlays = stakeRows().length;
+ok("every positive-EV play is sized", nPlays > 0 && stakeRows().every(r => r.stake > 0),
+   `${nPlays} plays`);
+// The whole reason the sizing bug was invisible: a $0 stake renders as an em dash and
+// looks exactly like "this game has no moneyline". Positive EV and no stake is a
+// contradiction, so assert the two agree.
+const posEvCount = JSON.parse(bundle).bets.filter(b => (b.ml_ev || 0) > 0).length;
+ok("sized plays match the positive-EV count", nPlays === posEvCount,
+   `${nPlays} sized vs ${posEvCount} with EV > 0`);
+
+const playWeeks = new Set(stakeRows().map(r => r.week));
+ok("plays span more than one week (needed to test per-week budgeting)",
+   playWeeks.size > 1, `${playWeeks.size} week(s)`);
+
+$("#weekly").value = "200";
+$("#sizing").value = "weekly"; fire($("#sizing"), "change");
+ok("weekly box is enabled in budget mode", !$("#weekly").disabled);
+ok("budget is allocated PER WEEK, not once overall",
+   near(totalStaked(), 200 * playWeeks.size),
+   `staked ${totalStaked().toFixed(2)}, expected ${200 * playWeeks.size}`);
+
+// The summary card and the column must be the SAME number to the cent. They are
+// computed from one map, so this is really a rounding test: round on the way out and
+// seven $28.57 rows sit under a $400.00 total that does not add up.
+const stakedCard = $$("#betcards .card").find(c => c.querySelector(".k")?.textContent === "Staked");
+ok("the Staked card equals the column, to the cent",
+   stakedCard?.querySelector(".v").textContent === "$" + totalStaked().toFixed(2),
+   `card ${stakedCard?.querySelector(".v").textContent} vs column $${totalStaked().toFixed(2)}`);
+
+// Kelly-weighted and flat must differ wherever a week's edges differ. If they agree
+// everywhere the mode switch is decorative.
+const byWeek = m => { const o = {}; stakeRows().forEach(r => (o[r.week] ??= []).push(r.stake)); return o; };
+const weightedByWeek = byWeek();
+$("#sizing").value = "flat"; fire($("#sizing"), "change");
+const flatByWeek = byWeek();
+ok("flat mode still spends the same budget",
+   near(totalStaked(), 200 * playWeeks.size), `staked ${totalStaked().toFixed(2)}`);
+ok("flat mode gives every play in a week the same stake",
+   Object.values(flatByWeek).every(v => v.every(x => near(x, v[0]))));
+const differs = Object.keys(flatByWeek).some(w =>
+  weightedByWeek[w].some((x, i) => !near(x, flatByWeek[w][i])));
+ok("Kelly-weighted differs from flat where the edges differ", differs);
+
+// The over-betting multiple is the one number this UI must not soften.
+$("#sizing").value = "weekly"; fire($("#sizing"), "change");
+const multCard = $$("#betcards .card").find(c => c.querySelector(".k")?.textContent === "vs Kelly");
+ok("a vs-Kelly card is shown", !!multCard);
+const mult = parseFloat(multCard.querySelector(".v").textContent);
+ok("the multiple equals budget ÷ what Kelly wanted",
+   near(mult, (200 * playWeeks.size) / kellyTotal, 0.02),
+   `card says ${mult}, computed ${((200 * playWeeks.size) / kellyTotal).toFixed(2)}`);
+ok("over-betting raises a visible warning",
+   mult > 1.05 && !$("#sizenote").hasAttribute("hidden") &&
+   $("#sizenote").textContent.includes("Kelly advises"));
+
+// …and must go away when the budget is genuinely conservative. A warning that is
+// always on is the same as no warning.
+$("#weekly").value = String(Math.max(1, Math.floor(kellyTotal / playWeeks.size / 4)));
+fire($("#weekly"));
+ok("a conservative budget clears the warning", $("#sizenote").hasAttribute("hidden"),
+   $("#sizenote").textContent.slice(0, 60));
+
+$("#weekly").value = "200"; fire($("#weekly"));
+$("#sizing").value = "kelly"; fire($("#sizing"), "change");
+ok("returning to Kelly restores the Kelly total", near(totalStaked(), kellyTotal));
+ok("preferences are persisted", (window.localStorage.getItem("tm_bet_prefs") || "").includes("kelly"));
 
 console.log("\n── team ──");
 ok("team select populated", $$("#team option").length === 138);
@@ -244,8 +343,15 @@ console.log("\n── encrypted bundle + gate ──");
   const w2 = d2.window, q2 = s => w2.document.querySelector(s);
   await wait(300);
 
+  const disp2 = s => w2.getComputedStyle(q2(s)).display;
   ok("gate is shown for an encrypted bundle", !q2("#gate").hasAttribute("hidden"));
+  // The guard is `display:none!important`, so it is worth proving it does not hide the
+  // gate when the gate is supposed to be up. An !important rule that over-applies would
+  // lock Grant out of his own site, which is a worse failure than the one it fixed.
+  ok("the gate is genuinely visible when it is up", disp2("#gate") === "grid",
+     `computed: ${disp2("#gate")}`);
   ok("app stays hidden before unlock", q2("#app").hasAttribute("hidden"));
+  ok("app is genuinely not displayed before unlock", disp2("#app") === "none");
   ok("no plaintext grades in the DOM before unlock",
      !w2.document.body.innerHTML.includes("Ohio State"));
 
@@ -260,6 +366,11 @@ console.log("\n── encrypted bundle + gate ──");
   q2("#gate-btn").dispatchEvent(new w2.Event("click", { bubbles:true }));
   await until(() => !q2("#app").hasAttribute("hidden"));
   ok("right passphrase unlocks", !q2("#app").hasAttribute("hidden"));
+  // THE REPORTED BUG, in its own words: the passphrase worked, the app booted
+  // underneath, and the "Unlock" box never went away. `hidden` was set correctly the
+  // whole time; the cascade simply ignored it.
+  ok("the gate disappears once unlocked", disp2("#gate") === "none",
+     `computed: ${disp2("#gate")}`);
   ok("rankings render after unlock",
      q2("#ranktbl tbody") && q2("#ranktbl").querySelectorAll("tbody tr").length === 138,
      String(q2("#ranktbl")?.querySelectorAll("tbody tr").length));

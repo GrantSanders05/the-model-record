@@ -157,12 +157,22 @@ def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
                 cands.append((ev, side, p_model, p_mkt, odds))
             if cands:
                 ev, side, p_model, p_mkt, odds = max(cands)
+                # Kelly MUST be solved at the odds actually on offer. Sizing every
+                # moneyline at -110 was silently staking $0 on the biggest edges in
+                # the book: Kelly at -110 needs p_win > 52.38%, so a +205 dog the
+                # model gives 46.4% -- an EV of +41.6% per unit -- came out as "no
+                # bet", while the same 46.4% at those real odds is a 20% full-Kelly
+                # position. Six of nine positive-EV plays were zeroed this way, and
+                # they were the six with the most edge. -110 is the right default
+                # for a spread; it is never right for a price.
+                dec = payout(odds) + 1.0
                 rec.update({
                     "ml_pick": side, "ml_ev": round(100 * ev, 2),
                     "ml_fair_prob": round(100 * p_mkt, 1),
                     "model_prob": round(100 * p_model, 1),
                     "ml_odds": odds,
-                    "stake": (staking.recommended_stake(p_model, bankroll)
+                    "ml_dec_odds": round(dec, 4),
+                    "stake": (staking.recommended_stake(p_model, bankroll, dec_odds=dec)
                               if ev > 0 and not rec["no_bet"] else 0.0),
                 })
         out.append(rec)

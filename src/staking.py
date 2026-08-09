@@ -42,6 +42,12 @@ def recommended_stake(p_win, bankroll, fraction=0.25, cap=0.02, dec_odds=DEC_ODD
     -- crucially -- it stays solvent when your estimate of p_win is wrong, which
     it always is. The cap is a second belt: never risk more than `cap` of the
     bankroll on one game regardless of what the math says.
+
+    `dec_odds` DEFAULTS TO -110 AND THAT DEFAULT IS ONLY RIGHT FOR A SPREAD. Kelly
+    is a function of the price, so a moneyline must pass its own odds in; taking
+    the default there asks "how much would I bet if this paid -110", and for any
+    plus-money dog the answer is zero no matter how large the edge is. Callers
+    pricing a moneyline pass dec_odds explicitly — see best_bets.rank.
     """
     f = kelly_fraction(p_win, dec_odds) * fraction
     return round(bankroll * min(f, cap), 2)

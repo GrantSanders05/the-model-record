@@ -35,6 +35,23 @@ ok("hero stats render", $$(".hero .stat").length >= 3, String($$(".hero .stat").
 ok("every stat has a label and a value",
    $$(".hero .stat").every(s => s.querySelector(".k") && s.querySelector(".v")));
 
+// The chart tooltip ships with `hidden` set and is only meant to appear under the
+// cursor. `[hidden]{display:none}` is a user-agent rule and origin outranks
+// specificity, so a single author `display` declaration on `.tip` would leave it
+// painted on load — which is what happened on the research page via `#gate`. `.tip`
+// happens not to declare display today; the stylesheet guard is what keeps that from
+// being luck, so assert the guard rather than the accident.
+ok("stylesheet forces [hidden] to outrank author display rules",
+   /\[hidden\]\s*\{\s*display\s*:\s*none\s*!important/.test(html));
+// The tooltip only exists once there is an equity chart to hover, so an empty ledger
+// legitimately has none. Skipping silently would let this assertion quietly stop
+// running the day it matters most, so say which case ran.
+const tip = $(".tip");
+ok(tip ? "the tooltip starts hidden and stays hidden"
+       : "no chart yet, so no tooltip to hide (empty ledger)",
+   tip ? window.getComputedStyle(tip).display === "none" : $(".chart") === null,
+   tip ? `computed: ${window.getComputedStyle(tip).display}` : "a chart exists but no .tip");
+
 console.log("\n── honesty about an empty ledger ──");
 const text = window.document.body.textContent;
 const locked = $$(".hero .stat").map(s => s.querySelector(".v")?.textContent.trim());

@@ -229,6 +229,17 @@ TEMPLATE = """<!doctype html>
          --sh:0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.28); }
 }
 *{box-sizing:border-box}
+
+/* Preventive, not a fix -- nothing on this page is broken today. `[hidden]{display:none}`
+   is a USER-AGENT rule, and origin outranks specificity in the cascade, so ANY normal
+   author `display` declaration silently beats it. The only element here that carries
+   the attribute is the chart tooltip, and `.tip` happens not to set `display`, so it
+   works. That is luck, not design: the research page had the same shape and lost, where
+   `#gate{display:grid}` kept the passphrase box on screen permanently. Adding one
+   `display` declaration to `.tip` would do the same here, and it would look like a JS
+   bug rather than a CSS one. */
+[hidden]{display:none!important}
+
 html{-webkit-text-size-adjust:100%%}
 body{margin:0;background:var(--bg);color:var(--ink);
   font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased}

@@ -62,6 +62,18 @@
 }
 
 *{box-sizing:border-box}
+
+/* The `hidden` attribute hides an element through ONE rule -- `[hidden]{display:none}`
+   -- and that rule lives in the user-agent stylesheet. Cascade order puts origin
+   ABOVE specificity, so any normal author declaration of `display` beats it, even a
+   bare element selector. This is not theoretical: `#gate{display:grid}` and
+   `nav{display:flex}` below left the passphrase box and the tab bar painted on top
+   of an app that had already booted, and no amount of setting `.hidden = true` in JS
+   could take them away. Verified in Chrome -- with the attribute set, #gate computed
+   to `grid` and nav to `flex`. An author `!important` outranks both, so hiding works
+   again for every element on the page, including ones added later. */
+[hidden]{display:none!important}
+
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);
   -webkit-font-smoothing:antialiased}
@@ -130,6 +142,11 @@ select{padding-right:26px;
   background-size:5px 5px,5px 5px;background-repeat:no-repeat}
 select:focus,input:focus{outline:none;border-color:var(--brand);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 16%,transparent)}
+/* A control that has no effect in the current mode is dimmed, not removed. Hiding it
+   makes the mode switch jump and hides the relationship between bankroll and budget;
+   leaving it live invites typing into a box that changes nothing. */
+input:disabled{opacity:.4;cursor:not-allowed;background:var(--raised)}
+.field:has(input:disabled)>label{opacity:.55}
 .chipset{display:flex;gap:5px;flex-wrap:wrap}
 .chip{border:1px solid var(--line);background:var(--panel);color:var(--ink2);
   border-radius:100px;padding:5px 11px;font-size:12px;font-weight:520;cursor:pointer;
@@ -303,11 +320,20 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
         <option value="spread">Spread disagreement</option>
       </select></div>
     <div class="field"><label for="wk">Week</label><select id="wk"></select></div>
+    <div class="field"><label for="sizing">Stake sizing</label>
+      <select id="sizing">
+        <option value="kelly">Quarter Kelly on bankroll</option>
+        <option value="weekly">Weekly budget — Kelly weighted</option>
+        <option value="flat">Weekly budget — split evenly</option>
+      </select></div>
     <div class="field"><label for="bank">Bankroll</label>
       <input id="bank" type="number" min="0" step="50" value="1000"></div>
+    <div class="field"><label for="weekly">Bet per week</label>
+      <input id="weekly" type="number" min="0" step="25" value="200"></div>
   </div>
+  <div id="sizenote" class="banner" hidden></div>
   <div class="panel scroll"><table id="bets"></table></div>
-  <footer class="note">Stakes are quarter-Kelly with a 2% cap. Break-even at −110 is 52.38%.</footer>
+  <footer class="note" id="betnote"></footer>
 </section>
 
 <!-- ── TEAM ────────────────────────────────────────────────────────── -->
@@ -476,7 +502,13 @@ function boot(){
     return `<option value="${esc(g)}">${esc(b?b.away+" @ "+b.home:g)}</option>`;}).join("");
 
   initRank();
-  ["#sortby","#wk","#bank"].forEach(s=>$(s).oninput=drawBets);
+  loadBetPrefs();
+  /* Both events: `input` fires per keystroke in the number boxes, `change` is what a
+     select reliably emits everywhere. Binding one of the two leaves a control that
+     looks wired and is not. */
+  ["#sortby","#wk","#sizing","#bank","#weekly"].forEach(s=>{
+    $(s).oninput=drawBets; $(s).onchange=drawBets;
+  });
   $("#team").oninput=drawTeam; $("#game").oninput=drawMove;
   $("#wteam").oninput=()=>{EDITS={};drawWhatIf()};
   $("#reset").onclick=()=>{EDITS={};drawWhatIf()};
@@ -615,24 +647,123 @@ function drawRank(){
 }
 
 /* ── BEST BETS ───────────────────────────────────────────────────── */
+/*
+   STAKE SIZING lives entirely in the browser, and it can, because a Kelly stake is
+   linear in the bankroll. The exporter ships `stake` already solved by staking.py --
+   quarter Kelly, 2% hard cap -- against a fixed $1,000 reference, so scaling it by
+   bank/1000 reproduces the Python answer exactly at any bankroll. The two cannot
+   drift, because there is only one calculation and Python owns it.
+
+   The weekly modes answer a different question. Kelly asks "what fraction of
+   everything I have does this edge justify"; a weekly budget asks "I am putting $X
+   into play this week, divide it up". Those are not the same question and the second
+   one has no theory behind it -- so it is implemented as an ALLOCATION of a fixed pot
+   rather than as a sizing rule, and the page reports the ratio between the two.
+   Spending a budget larger than Kelly advises is over-betting, and over-betting a
+   REAL edge is the ordinary way a bankroll dies. That is the one number a staking UI
+   must not hide, so it is a card, not a footnote.
+
+   Allocation is always grouped by week, including when the week filter is "All" --
+   "per week" has to mean per week, or the number on screen is a different promise
+   from the one on the label.
+*/
+function weekOf(r){ return String(r.week); }
+
+function allocate(rows, mode, bank, weekly){
+  /* -> Map(game_id -> $ stake). Only positive-EV games with a Kelly stake are
+     playable; everything else is priced but not staked, and gets nothing.
+
+     Everything is rounded to the cent HERE rather than at render time, so the
+     summary card sums the same numbers the column shows. Rounding only on the way
+     out left a $400 budget displaying as seven $28.57 rows and a $400.00 total that
+     did not add up -- a penny, but the kind of penny that makes someone stop
+     trusting the arithmetic. You cannot stake $28.5714 anyway. */
+  const cents=v=>Math.round(v*100)/100;
+  const out=new Map();
+  const play=rows.filter(r=>r.ml_ev>0 && (r.stake||0)>0);
+  if(mode==="kelly"){
+    play.forEach(r=>out.set(r.game_id,cents((r.stake||0)*bank/1000)));
+    return out;
+  }
+  const byWeek=new Map();
+  play.forEach(r=>{ const w=weekOf(r); if(!byWeek.has(w)) byWeek.set(w,[]); byWeek.get(w).push(r); });
+  byWeek.forEach(list=>{
+    if(mode==="flat"){
+      const each=cents(weekly/list.length);
+      list.forEach(r=>out.set(r.game_id,each));
+    }else{
+      const tot=list.reduce((s,r)=>s+(r.stake||0),0);
+      /* tot>0 is guaranteed by the filter above, but dividing by a sum is exactly
+         the line that turns an empty week into NaN in every cell. */
+      list.forEach(r=>out.set(r.game_id, tot>0 ? cents(weekly*(r.stake||0)/tot) : 0));
+    }
+  });
+  return out;
+}
+
 function drawBets(){
-  const by=$("#sortby").value, wk=$("#wk").value, bank=+$("#bank").value||1000;
+  const by=$("#sortby").value, wk=$("#wk").value;
+  const mode=$("#sizing").value;
+  const bank=+$("#bank").value||0, weekly=+$("#weekly").value||0;
+
+  /* The bankroll stays live in every mode: it is what the weekly budget is measured
+     AGAINST. Only the budget box is mode-gated, and it is disabled rather than hidden
+     so the relationship between the two stays visible. */
+  $("#weekly").disabled = (mode==="kelly");
+  saveBetPrefs();
+
   let rows=D.bets.filter(b=>!wk||String(b.week)===wk);
   rows = by==="ml"
     ? rows.filter(b=>b.ml_ev!=null).sort((a,b)=>b.ml_ev-a.ml_ev)
     : rows.filter(b=>b.spread_edge!=null).sort((a,b)=>Math.abs(b.spread_edge)-Math.abs(a.spread_edge));
   const pos=rows.filter(r=>by==="ml"?r.ml_ev>0:true).length;
 
+  const stakes=allocate(rows,mode,bank,weekly);
+  const staked=[...stakes.values()].reduce((s,v)=>s+v,0);
+  const nWeeks=new Set(rows.filter(r=>stakes.has(r.game_id)).map(weekOf)).size;
+  /* What quarter Kelly would have advised on the same games at this bankroll --
+     the honest denominator for "am I over-betting". */
+  const kellyWant=rows.filter(r=>r.ml_ev>0).reduce((s,r)=>s+(r.stake||0)*bank/1000,0);
+  const mult = kellyWant>0 ? staked/kellyWant : null;
+
+  const money=v=>"$"+v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const sizeCards = by!=="ml" ? "" : `
+    <div class="card"><div class="k">Staked</div>
+      <div class="v">${stakes.size?money(staked):"—"}</div>
+      <div class="s">${stakes.size} play${stakes.size===1?"":"s"}${
+        mode!=="kelly"&&nWeeks>1?` · ${nWeeks} weeks`:""}</div></div>
+    <div class="card"><div class="k">vs Kelly</div>
+      <div class="v ${mult!=null&&mult>1.05?"neg":""}">${mult!=null?mult.toFixed(2)+"×":"—"}</div>
+      <div class="s">${mult==null?"no priced plays"
+        :mult>1.05?"over-betting the edge":mult<0.95?"under Kelly":"about right"}</div></div>`;
+
   $("#betcards").innerHTML=`
     <div class="card"><div class="k">Games</div><div class="v">${rows.length}</div></div>
     <div class="card"><div class="k">${by==="ml"?"Positive EV":"With a line"}</div>
-      <div class="v">${pos}</div></div>
+      <div class="v">${pos}</div></div>${sizeCards}
     <div class="card"><div class="k">Live record</div>
       <div class="v">${D.record.ats_pct!=null?num(D.record.ats_pct)+"%":"—"}</div>
       <div class="s">${D.record.ats_w||0}–${D.record.ats_l||0}–${D.record.ats_push||0} ATS</div></div>
     <div class="card"><div class="k">Locked</div>
       <div class="v">${D.record.n_locked??D.bets.length}</div>
       <div class="s">before kickoff</div></div>`;
+
+  const warn=$("#sizenote");
+  if(by==="ml" && mult!=null && mult>1.05){
+    warn.hidden=false;
+    warn.innerHTML=`<b>This budget is ${mult.toFixed(1)}× what Kelly advises</b>`+
+      `Quarter Kelly on a ${money(bank)} bankroll would risk ${money(kellyWant)} across these `+
+      `${stakes.size} play${stakes.size===1?"":"s"}; the weekly budget puts ${money(staked)} up. `+
+      `That is a choice, not a bug — but the whole point of fractional Kelly is that it stays `+
+      `solvent when the win probability is wrong, and it always is. Betting a multiple of it `+
+      `gives that protection back.`;
+  }else if(by!=="ml"){
+    warn.hidden=false;
+    warn.innerHTML=`<b>Sizing does not apply to spread disagreement</b>`+
+      `A stake needs a win probability, and the model does not export one against the spread — `+
+      `only against the moneyline, where the vig can be stripped out and a real EV computed. `+
+      `Rank by moneyline EV to size anything.`;
+  }else warn.hidden=true;
 
   const head = by==="ml"
     ? ["Wk","Away","Home","Pick","Odds","Model","Fair","EV %","Stake"]
@@ -643,7 +774,7 @@ function drawBets(){
       <td class="num mono">${r.ml_odds==null?"—":(r.ml_odds>0?"+":"")+r.ml_odds}</td>
       <td class="num">${num(r.model_prob)}%</td><td class="num muted">${num(r.ml_fair_prob)}%</td>
       <td class="num ${cls(r.ml_ev)}">${sgn(r.ml_ev,2)}</td>
-      <td class="num">${r.ml_ev>0?"$"+(bank/1000*(r.stake||0)).toFixed(2):"—"}</td></tr>`
+      <td class="num">${stakes.has(r.game_id)?money(stakes.get(r.game_id)):"—"}</td></tr>`
     : `<tr><td class="num">${r.week}</td><td>${esc(r.away)}</td><td class="team">${esc(r.home)}</td>
       <td class="num">${sgn(r.model_margin)}</td><td class="num muted">${sgn(r.market_margin)}</td>
       <td class="num ${cls(r.spread_edge)}">${sgn(r.spread_edge)}</td>
@@ -653,6 +784,35 @@ function drawBets(){
   $("#bets").innerHTML= rows.length
     ? `<thead><tr>${head.map((h,i)=>`<th class="${i>2?"num":""}">${h}</th>`).join("")}</tr></thead><tbody>${body}</tbody>`
     : `<tbody><tr><td><div class="empty">No games match that filter.</div></td></tr></tbody>`;
+
+  $("#betnote").textContent = by!=="ml"
+    ? "Break-even at −110 is 52.38%."
+    : mode==="kelly"
+      ? `Quarter Kelly on a ${money(bank)} bankroll, capped at 2% (${money(bank*0.02)}) per game. `+
+        `Bigger edges get more; nothing is spent to hit a target. Break-even at −110 is 52.38%.`
+      : mode==="weekly"
+        ? `${money(weekly)} per week, split in Kelly proportion — the same ordering as above, `+
+          `scaled to spend exactly the budget. Break-even at −110 is 52.38%.`
+        : `${money(weekly)} per week, split evenly across that week's positive-EV plays. `+
+          `Simplest to execute; it ignores how big each edge is. Break-even at −110 is 52.38%.`;
+}
+
+/* Sizing is a per-person setting, not a property of the data — so it survives a
+   reload. Wrapped because Safari throws on localStorage in private mode, and a
+   preference failing to save must never take the page down with it. */
+const BET_KEY="tm_bet_prefs";
+function saveBetPrefs(){
+  try{ localStorage.setItem(BET_KEY,JSON.stringify({
+    sizing:$("#sizing").value, bank:$("#bank").value, weekly:$("#weekly").value}));
+  }catch(e){}
+}
+function loadBetPrefs(){
+  try{
+    const p=JSON.parse(localStorage.getItem(BET_KEY)||"{}");
+    if(p.sizing) $("#sizing").value=p.sizing;
+    if(p.bank)   $("#bank").value=p.bank;
+    if(p.weekly) $("#weekly").value=p.weekly;
+  }catch(e){}
 }
 
 /* ── TEAM ────────────────────────────────────────────────────────── */
