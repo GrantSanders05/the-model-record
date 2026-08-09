@@ -69,7 +69,6 @@ jobs:
             data/cache
             data/model.db
             data/api_budget.json
-            output/alerts.json
           # The prefix is a version. Bumping it abandons the old cache and
           # rebuilds from scratch, which is the only way to discard a database
           # that has bad rows in an append-only table. v2 exists because a run
@@ -133,6 +132,19 @@ jobs:
           CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
         continue-on-error: true
         run: python3 src/roster_watch.py --season 2026 --min-points 0.75
+
+      # Alerts get their OWN cache entry, deliberately not folded into the data cache
+      # above. actions/cache versions an entry by its path list, so adding one file to
+      # that list invalidates every existing entry -- which is exactly what happened:
+      # the next refresh found no cache, skipped, and reported success having done
+      # nothing. A separate key keeps the two independent.
+      - name: Save roster alerts for the refresh job
+        if: ${{ env.HAS_CFBD == 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: output/alerts.json
+          key: model-alerts-v1-${{ github.run_id }}
 
       - name: Run the update
         env:

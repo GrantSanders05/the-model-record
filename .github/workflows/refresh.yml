@@ -63,20 +63,40 @@ jobs:
             data/cache
             data/model.db
             data/api_budget.json
-            output/alerts.json
           key: model-data-v3-
           restore-keys: |
             model-data-v3-
 
+      # Roster news comes from a 138-request ESPN sweep that only the full update
+      # runs. Restoring the last one keeps the alerts view populated between updates
+      # instead of flickering empty every half hour. Its own key, so it cannot
+      # invalidate the data cache above.
+      - name: Restore last roster alerts
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: output/alerts.json
+          key: model-alerts-v1-
+          restore-keys: |
+            model-alerts-v1-
+
       # With no database there is nothing to re-price, and publishing an empty site
-      # over a working one is worse than doing nothing. Stop, loudly, and let the
-      # next full update seed it.
+      # over a working one is worse than doing nothing.
       - name: Require a seeded database
         run: |
           CFB=$(python3 tools/db_count.py cfb)
           echo "cached cfb games: $CFB"
           if [ "$CFB" -lt 100 ]; then
-            echo "::warning::No cached CFB history yet — skipping the refresh."
+            # A SCHEDULED run with a cold cache is normal and should stay quiet --
+            # the next full update seeds it. A run somebody CLICKED is different:
+            # they are watching, and a green tick on a job that silently did nothing
+            # is worse than a red one. This job did exactly that once already.
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "::error::No cached CFB history — nothing was refreshed."
+              echo "::error::Run the full 'scheduled update' workflow first; it seeds the cache."
+              exit 1
+            fi
+            echo "::warning::No cached CFB history yet — skipping this refresh."
             echo "SKIP=true" >> "$GITHUB_ENV"
           fi
 
