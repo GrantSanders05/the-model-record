@@ -8,7 +8,7 @@ it and nothing can edit it after the fact — that is the whole reason it is wor
 anything.
 
 **Your record** is what you actually put money on, at the price you got, in the
-size you chose. It is on the **My bets** tab. This is the one you set up below.
+size you chose. It is on the **My bets** tab, and you keep it there.
 
 They will not match, and the gap between them is the interesting part. Believing a
 model is profitable because the four games you happened to bet came in is the
@@ -16,62 +16,62 @@ classic way to lose money with a good model.
 
 ---
 
-## Setting it up (once, about two minutes)
+## Logging a bet
 
-Add a tab named **`My Bets`** to the same Google Sheet your film grades live in.
-Put these headers in the first row — any order, capitalisation does not matter:
+Open **My bets**. The form is the first thing on the tab and there is no setup.
 
-| Date | Week | Team | Market | Side | Line | Odds | Units | Book | Notes |
-|---|---|---|---|---|---|---|---|---|---|
+1. **Week**, then **Game** — both are real dropdowns off the actual schedule.
+2. **Market** — Spread, Moneyline or Total.
+3. **Side** — the two buttons carry the number and the price on offer, so
+   picking a side fills in the line. `Georgia −7` and `Auburn +7` are one click
+   each; you never retype a number that is already on the screen.
+4. **Line, Odds, Units** — prefilled from the market. Change them to whatever
+   you actually got; that is the number that matters.
+5. **Log bet.**
 
-That is it. It is read automatically within half an hour, every bet is matched to
-its game, graded, and totalled. Nothing else to install or maintain.
+That is the whole thing. It grades itself when the score lands, and everything
+below the form — units, ROI, break-even, CLV, the bankroll curve, the splits —
+recalculates immediately.
 
-### What goes in each column
+There are **Log** buttons on every row of the **Best bets** and **Schedule**
+tabs too. They open this form already filled in from that row.
 
-| Column | Required | What it means |
-|---|---|---|
-| **Week** | yes | The week as the site shows it. Week 0 is a real week and works. |
-| **Team** | yes | The side you bet. For a total, either team in the game. |
-| **Market** | yes | `spread`, `moneyline` or `total`. `ml`, `ats` and `o/u` also work. |
-| **Side** | totals only | `over` or `under`. Ignored for anything else. |
-| **Line** | spread & totals | **The number you took, from your side.** `-7.5` if you laid 7.5, `+3` if you took 3, `52.5` for a total. |
-| **Odds** | moneyline only | American odds: `-110`, `+150`. Blank means `-110`. |
-| **Units** | yes | Your stake, in units. `1`, `0.5`, `2`. |
-| **Date** | usually no | Only needed to tell two games apart — see below. |
-| Book, Notes | no | For you. Never used in any calculation. |
+### A bet knows which game it is on
 
-**Week + Team is how a bet finds its game.** A team plays once a week, so that
-pair is enough — no game IDs, no dates to get right. Team names are matched
-loosely, so `Ole Miss`, `Mississippi` and `Ole Miss Rebels` all land on the same
-team.
+Because you pick the game from the schedule, a bet carries that game's own id.
+Nothing is matched by name or by week afterwards, so a whole category of mistake
+— two games in one week, a team spelled three ways, a bowl and a September game
+sharing a week number — simply cannot happen to a bet logged here.
 
-**Bowls are week `Bowls` on the site.** College football's data source numbers the
-postseason from 1, which makes a 27 December bowl and the opening Saturday both
-"week 1" — so bowls and playoff games get their own bucket instead.
+### Editing and deleting
 
-**The one case where you need the Date:** a playoff team plays two or three games
-inside that bucket, so `Bowls + Georgia` does not identify one game. Put the
-kickoff date in the Date column and it resolves. `12/27`, `12/27/25` and
-`2025-12-27` all work. If it is ambiguous and there is no date, the row is
-reported rather than guessed — a bet graded against the wrong game still shows a
-W or an L, and a wrong result that looks right is worse than a row you have to
-fix.
+Every bet you logged has **Edit** and **Delete** beside it. Editing loads it back
+into the form. Logging the same bet twice at the same price asks you to confirm
+first, because that is usually a double-click and occasionally real.
 
-### Example
+---
 
-| Date | Week | Team | Market | Side | Line | Odds | Units | Book |
-|---|---|---|---|---|---|---|---|---|
-| 9/5 | 1 | Clemson | spread | | +7.5 | -110 | 1 | DK |
-| 9/5 | 1 | Wisconsin | moneyline | | | +1000 | 0.5 | FD |
-| 9/6 | 1 | Texas | total | over | 51.5 | -105 | 1 | DK |
-| 9/13 | 2 | Michigan | spread | | -3 | -115 | 2 | MGM |
-| 12/27 | Bowls | Georgia | spread | | -3 | -110 | 1 | DK |
+## Where the bets are kept, and how to move them
 
-Row 1: took Clemson +7.5 for one unit. Row 2: half a unit on Wisconsin at +1000.
-Row 3: over 51.5 in the Texas game. Row 4: laid 3 with Michigan, two units.
-Row 5: a bowl — `Bowls` as the week, and the date so it knows which of Georgia's
-postseason games you mean.
+**In your browser, on the device you logged them on.** There is no account and no
+server. That is deliberate: the entire system runs on free hosting, and a free
+backend is a backend that disappears when somebody's trial ends.
+
+The cost is that a bet logged on your laptop is not on your phone. Four buttons
+handle that:
+
+| Button | What it does |
+|---|---|
+| **Export** | Writes every bet to a `.json` file. This is also your backup. |
+| **Copy** | Puts the same content on the clipboard — the easiest way to a phone. |
+| **Import** | Reads an exported file back in. |
+| **Paste in** | Takes the copied text on the other device. |
+
+Importing the same bets twice does not duplicate them — anything already in the
+book is skipped and it tells you how many.
+
+> **Do this before you clear your browsing data.** Clearing site data deletes the
+> book, the same as it would delete a password. Export takes two seconds.
 
 ---
 
@@ -82,9 +82,9 @@ units stays comparable as the bankroll grows, and cannot be flattered by bet
 sizing — betting 5 units on winners and 1 unit on losers looks great in dollars
 and tells you nothing about whether you can pick.
 
-The site shows dollars too. Set **1 unit =** on the My bets tab and every figure
-gets a dollar equivalent beside it. That setting lives in your browser only; it
-changes the display and never the record.
+The site shows dollars too. Set **1 unit =** and every figure gets a dollar
+equivalent beside it. That setting lives in your browser only; it changes the
+display and never the record.
 
 ---
 
@@ -99,8 +99,36 @@ changes the display and never the record.
   closed. This is the single most useful thing in the whole system, because it
   tells you whether you are good long before the win rate can.
 - **Splits by market and by week**, and a bankroll curve in units.
-- **Every row that could not be used, listed with the reason.** A bet log that
-  quietly drops what it cannot parse is a log that is wrong and looks complete.
+- **Every bet that could not be graded, listed with the reason.** A bet log that
+  quietly drops what it cannot use is a log that is wrong and looks complete.
+
+---
+
+## The Google Sheet tab (optional, and no longer necessary)
+
+A `My Bets` tab in the grades workbook still works, and rows already in one are
+read every half hour and merged into the same tables, marked **sheet**. Use it if
+you want to bulk-enter a backlog in a spreadsheet; otherwise ignore it. Bets
+logged on the site are faster, appear instantly, and cannot be matched to the
+wrong game.
+
+If you do use it, the columns are:
+
+| Date | Week | Team | Market | Side | Line | Odds | Units | Book | Notes |
+|---|---|---|---|---|---|---|---|---|---|
+
+**Week + Team is how a sheet row finds its game**, which is why this path needs
+rules the site does not. Team names are matched loosely, so `Ole Miss`,
+`Mississippi` and `Ole Miss Rebels` all land on the same team. **Line** is the
+number you took, from your side: `-7.5` if you laid 7.5, `+3` if you took 3.
+**Side** is only for totals. **Odds** defaults to `-110`. Bowls are week `Bowls`,
+and if a playoff team plays more than one game in that bucket you need the
+kickoff date in **Date** to say which — a row that is ambiguous is reported
+rather than guessed, because a bet graded against the wrong game still shows a W
+or an L, and a wrong result that looks right is worse than a row you have to fix.
+
+A row edited in the sheet is edited in the sheet; the site will not write back to
+it. If you log the same bet in both places, it is counted once.
 
 ---
 

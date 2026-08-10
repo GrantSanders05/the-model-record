@@ -166,7 +166,7 @@ def bowl_weeks(conn, sport, season):
         (sport, season))}
 
 
-def schedule(conn, sport, season, priced, labels, rated=()):
+def schedule(conn, sport, season, priced, labels, rated=(), keep=()):
     """
     Every game of the season, not only the ones worth betting.
 
@@ -182,17 +182,26 @@ def schedule(conn, sport, season, priced, labels, rated=()):
     not games Grant is missing; they are games he has no rating for and never will.
     Keeping them would double the bundle and bury the 888 that matter. A game with
     ONE FBS team is kept: he does have a view on those.
+
+    `keep` OVERRIDES THE FILTER, and it exists to hold an invariant the browser now
+    depends on: EVERY GAME ANY LOGGED BET REFERS TO IS IN THIS LIST. Bets are graded
+    in the browser against this schedule, so a bet on a game the filter dropped would
+    render as permanently ungraded with no explanation -- a real result silently
+    replaced by a blank. Nothing about the rating filter is a statement that a game
+    cannot be bet.
     """
     rated = set(rated)
+    keep = {str(k) for k in keep}
     out = []
     for r in conn.execute(
             """SELECT g.game_id, g.week, g.kickoff, g.home_team, g.away_team,
                       g.home_score, g.away_score, g.neutral_site,
-                      l.home_margin, l.total
+                      l.home_margin, l.total, l.home_ml, l.away_ml
                FROM games g LEFT JOIN lines l ON l.game_id=g.game_id
                WHERE g.sport=? AND g.season=? ORDER BY g.kickoff, g.game_id""",
             (sport, season)):
-        if rated and r["home_team"] not in rated and r["away_team"] not in rated:
+        if (rated and r["home_team"] not in rated and r["away_team"] not in rated
+                and str(r["game_id"]) not in keep):
             continue
         p = priced.get(r["game_id"])
         played = r["home_score"] is not None
@@ -204,6 +213,11 @@ def schedule(conn, sport, season, priced, labels, rated=()):
             "away": r["away_team"], "home": r["home_team"],
             "neutral": bool(r["neutral_site"]),
             "line": r["home_margin"], "total": r["total"],
+            # Carried so the browser's bet form can fill in the price on offer
+            # instead of asking him to retype a number that is already on screen.
+            # A default that is nearly always right is the difference between a
+            # log he keeps and a log he abandons.
+            "home_ml": r["home_ml"], "away_ml": r["away_ml"],
             "model_margin": p["model_margin"] if p else None,
             "model_total": p["model_total"] if p else None,
             "edge": p["spread_edge"] if p else None,
@@ -352,6 +366,32 @@ def load_alerts(path="output/alerts.json"):
             "watchlist": d.get("watchlist", [])[:120]}
 
 
+def build_my_bets(conn, sport, season, labels):
+    """
+    The sheet-sourced half of his bet log, or a description of why there isn't one.
+
+    Bets are typed on the website now and live in the browser; this path exists for
+    the rows already in the old `My Bets` tab. Absent tab, unreachable sheet and a
+    tab full of typos are three different states and the app says which — none of
+    them may stop the export, because the picks have nothing to do with the sheet.
+    """
+    raw = load_json("output/my_bets_raw.json")
+    if raw is None:
+        return {"state": "never fetched"}
+    if raw.get("missing"):
+        return {"state": "no tab", "fetched_utc": raw.get("fetched_utc"),
+                "tabs_seen": raw.get("tabs_seen", [])}
+    try:
+        built = bet_log.build(conn, sport, season, raw.get("rows") or [],
+                              week_labels=labels)
+        built["state"] = "ok"
+        built["fetched_utc"] = raw.get("fetched_utc")
+        return built
+    except Exception as e:                         # noqa: BLE001 - report anything
+        print("  WARNING: could not build the bet log — %s: %s" % (type(e).__name__, e))
+        return {"state": "error", "error": "%s: %s" % (type(e).__name__, e)}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sport", default="cfb")
@@ -381,7 +421,14 @@ def main():
     rated = [r["team"] for r in conn.execute(
         "SELECT DISTINCT team FROM grades WHERE sport=? AND season=?",
         (args.sport, grade_season_for_teams))]
-    slate = schedule(conn, args.sport, season, priced, labels, rated=rated)
+
+    # The bet log is built BEFORE the schedule, because the schedule has to contain
+    # every game it refers to. The browser grades bets against the exported schedule
+    # now, so a bet on a game the rating filter would have dropped has to keep its
+    # fixture or it renders as ungraded forever.
+    mybets = build_my_bets(conn, args.sport, season, labels)
+    slate = schedule(conn, args.sport, season, priced, labels, rated=rated,
+                     keep=[b["game_id"] for b in mybets.get("bets", [])])
     for b in bets:
         b["week"] = labels.get(b["game_id"], b["week"])
 
@@ -398,25 +445,6 @@ def main():
     preseason = conn.execute(
         "SELECT COUNT(*) n FROM games WHERE sport=? AND season=? AND home_score IS NOT NULL",
         (args.sport, season)).fetchone()["n"] == 0
-
-    # His bet log. Absent tab, unreachable sheet and a tab full of typos are three
-    # different states and the app says which; none of them may stop the export.
-    raw = load_json("output/my_bets_raw.json")
-    if raw is None:
-        mybets = {"state": "never fetched"}
-    elif raw.get("missing"):
-        mybets = {"state": "no tab", "fetched_utc": raw.get("fetched_utc"),
-                  "tabs_seen": raw.get("tabs_seen", [])}
-    else:
-        try:
-            built = bet_log.build(conn, args.sport, season, raw.get("rows") or [],
-                                  week_labels=labels)
-            built["state"] = "ok"
-            built["fetched_utc"] = raw.get("fetched_utc")
-            mybets = built
-        except Exception as e:                     # noqa: BLE001 - report anything
-            mybets = {"state": "error", "error": "%s: %s" % (type(e).__name__, e)}
-            print("  WARNING: could not build the bet log — %s" % mybets["error"])
 
     grade_season = latest_season_with(conn, "grades", args.sport, season) or season
     eff_found = latest_season_with(conn, "team_game_stats", args.sport, season,
@@ -453,6 +481,8 @@ def main():
         # The model's own record, cut every way that could change the answer, and
         # the bets Grant actually placed. Two different records on purpose — see
         # the header of bet_log.py for why conflating them is the classic mistake.
+        # `mybets` now carries only the rows still coming from the Google Sheet; the
+        # bets he types on the site live in his browser and never reach this file.
         "tracking": tracking.summary(conn, args.sport, season=None, week_labels=labels),
         "mybets": mybets,
         "teams": team_snapshot(conn, args.sport, grade_season),

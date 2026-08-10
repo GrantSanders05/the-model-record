@@ -54,6 +54,11 @@ const ok = (name, cond, detail = "") => {
   else { fail++; console.log(`  [FAIL] ${name}${detail ? " — " + detail : ""}`); }
 };
 const rows = sel => $$(`${sel} tbody tr`).length;
+// A table showing "nothing matches that filter" still contains one <tr>. Counting
+// rows naively turns an empty result into a count of 1, which reads as "the filter
+// kept one row" when it actually kept none — and passes.
+const listRows = sel =>
+  $$(`${sel} tbody tr`).filter(tr => !tr.querySelector(".empty")).length;
 const fire = (el, type = "input") => el.dispatchEvent(new window.Event(type, { bubbles: true }));
 
 // Resolve columns by their HEADER, never by a hard-coded index. Index-based reads
@@ -426,58 +431,316 @@ console.log("\n── results / tracking ──");
   }
 }
 
-console.log("\n── my bets ──");
+console.log("\n── my bets: the browser's grader ──");
+// Bets are entered and graded on this page now, while the legacy Google Sheet path
+// is still parsed and matched in Python. That means one book, two implementations,
+// so the SAME hand-worked table is run through both. Either side drifting shows up
+// as a red build here or in tools/test_tracking.py, rather than as two totals that
+// cannot be reconciled a season later.
+{
+  const T = JSON.parse(fs.readFileSync(path.join(ROOT, "tools/grading_cases.json"), "utf8"));
+  const gameOf = n => {
+    const g = T.games[n];
+    return { home: g.home, away: g.away, home_score: g.home_score,
+             away_score: g.away_score, line: g.line, total: g.total,
+             home_ml: g.home_ml, away_ml: g.away_ml };
+  };
+  const run = () => {
+    const wrong = [];
+    for (const c of T.cases) {
+      const g = gameOf(c.game);
+      const b = { team: c.team, market: c.market, side: c.side || null,
+                  line: c.line, odds: c.odds, units: c.units };
+      const r = window.gradeBet(b, g), clv = window.betCLV(b, g);
+      const okR = r.result === c.result;
+      const okU = c.units_won == null ? r.units_won == null
+                                      : Math.abs(r.units_won - c.units_won) < 5e-4;
+      const okC = c.clv == null ? clv == null : Math.abs(clv - c.clv) < 5e-4;
+      if (!(okR && okU && okC))
+        wrong.push(`${c.why} → ${r.result}/${r.units_won}/clv ${clv}`);
+    }
+    return wrong;
+  };
+  const wrong = run();
+  ok(`all ${T.cases.length} shared cases grade identically in the browser`,
+     wrong.length === 0, wrong[0] || "");
+
+  // The same anti-vacuity proof the Python suite ends with. A parity test that
+  // cannot fail is not a parity test, and this one is only meaningful if flipping
+  // the grader's sign turns it red.
+  const real = window.gradeBet;
+  window.gradeBet = (b, g) => {
+    const r = real(b, g);
+    return { ...r, result: { W: "L", L: "W" }[r.result] || r.result,
+             units_won: r.units_won == null ? null : -r.units_won };
+  };
+  const broke = run().length;
+  window.gradeBet = real;
+  ok("[control] a sign-flipped grader fails the table", broke > 0,
+     "a corrupted grader passed — the parity test proves nothing");
+  ok("...and the real one is restored", run().length === 0);
+}
+
+console.log("\n── my bets: agreement with Python on real bets ──");
 {
   const M = JSON.parse(bundle).mybets || {};
   $$("#nav button").find(b => b.dataset.v === "mybets")
     .dispatchEvent(new window.Event("click", { bubbles: true }));
 
-  if (M.state !== "ok") {
-    // Not set up is the default state for everyone forever. It has to teach, not
-    // just report a null.
-    ok("an unconfigured log explains how to set it up",
-       $("#mbstate .banner") !== null &&
-       $("#mbstate").textContent.includes("My Bets"));
-    ok("the instructions name the required columns",
-       ["Week", "Team", "Market", "Line", "Odds", "Units"]
-         .every(c => $("#mbstate").textContent.includes(c)));
-    ok("controls stay hidden until there is something to control",
-       $("#mbbar").hasAttribute("hidden"));
-  } else {
+  if (M.state === "ok" && (M.bets || []).length) {
+    // Python matched and graded these rows; the page re-grades them from the
+    // schedule. Same book, computed twice, over a whole season.
+    const js = window.bookTotals(window.allBets().filter(b => b.source === "sheet"), 0);
     const t = M.totals;
-    ok("summary cards render", $$("#mbcards .card").length === 6);
-    ok("units won matches the bundle",
-       $("#mbcards").textContent.includes(t.units_won.toFixed(2)), String(t.units_won));
-    ok("ROI is shown", t.roi == null || $("#mbcards").textContent.includes(t.roi.toFixed(1)));
-    // Break-even must come from HIS prices. 52.38% appearing here for a book with
-    // plus-money in it would be the textbook number leaking in.
-    ok("break-even reflects the prices taken",
-       t.break_even == null || $("#mbcards").textContent.includes(String(t.break_even)),
-       String(t.break_even));
+    const close = (a, b, tol = 0.02) =>
+      (a == null && b == null) || (a != null && b != null && Math.abs(a - b) <= tol);
+    ok("same number of bets", js.n === t.n, `${js.n} vs ${t.n}`);
+    ok("same W–L–P", js.w === t.w && js.l === t.l && js.push === t.push,
+       `${js.w}-${js.l}-${js.push} vs ${t.w}-${t.l}-${t.push}`);
+    ok("same units won", close(js.units_won, t.units_won),
+       `${js.units_won} vs ${t.units_won}`);
+    ok("same units risked", close(js.units_risked, t.units_risked),
+       `${js.units_risked} vs ${t.units_risked}`);
+    ok("same ROI", close(js.roi, t.roi, 0.05), `${js.roi} vs ${t.roi}`);
+    ok("same break-even from the prices taken", close(js.break_even, t.break_even, 0.05),
+       `${js.break_even} vs ${t.break_even}`);
+    ok("same CLV", close(js.clv_mean, t.clv_mean, 0.01),
+       `${js.clv_mean} vs ${t.clv_mean}`);
     ok("bad sheet rows are surfaced, not swallowed",
        (M.problems || []).length === 0 || $("#mbproblems .banner") !== null);
-    ok("the bankroll curve draws", $("#mbcurve").innerHTML.includes("<svg"));
-
-    const all = rows("#mblist");
-    ok("every bet is listed", all === M.bets.length, `${all} vs ${M.bets.length}`);
-    $("#mbmarket").value = "spread"; fire($("#mbmarket"), "change");
-    const sp = rows("#mblist");
-    ok("market filter narrows", sp > 0 && sp <= all, `${sp} of ${all}`);
-    ok("...to spreads only",
-       M.bets.filter(b => b.market === "spread").length === sp);
-    $("#mbmarket").value = ""; fire($("#mbmarket"), "change");
-    $("#mbresult").value = "W"; fire($("#mbresult"), "change");
-    ok("result filter narrows to wins", rows("#mblist") === t.w, `${rows("#mblist")} vs ${t.w}`);
-    $("#mbresult").value = ""; fire($("#mbresult"), "change");
-
-    // Units are the unit of account; dollars are a display multiplication only.
-    const before = $("#mbcards").textContent;
-    $("#unitsize").value = "250"; fire($("#unitsize"));
-    ok("changing the unit size changes the dollar figures",
-       $("#mbcards").textContent !== before);
-    ok("...but not the units", $("#mbcards").textContent.includes(t.units_won.toFixed(2)));
-    $("#unitsize").value = "50"; fire($("#unitsize"));
+  } else {
+    ok("an empty sheet log is a footnote, not a wall",
+       $("#mbfoot").textContent.length > 0 && $("#mbstate").textContent.length < 600);
   }
+}
+
+console.log("\n── my bets: logging one from the site ──");
+{
+  // Start from an empty book so the counts below mean what they say.
+  window.localStorage.removeItem("tm_bets_v1");
+  window.eval("BOOK={v:1,bets:[]}");
+  window.drawMyBets();
+
+  const sched = JSON.parse(bundle).schedule;
+  const G = sched.find(g => g.home_score != null && g.line != null)
+         || sched.find(g => g.line != null) || sched[0];
+  const isFinal = G.home_score != null;
+  // Whatever is already here from the sheet. Asserting "one bet" from a bundle that
+  // ships forty of them would fail for the right reason and read like a bug.
+  const base = listRows("#mblist");
+
+  // THE INVARIANT the browser's grading rests on: every bet the bundle ships has its
+  // game in the bundle. Without it a real result is silently replaced by a blank,
+  // which is the failure this whole tab is built to avoid.
+  ok("every bet in the bundle has a game to grade against",
+     window.allBets().every(b => !b.orphan),
+     String(window.allBets().filter(b => b.orphan).length) + " orphaned");
+
+  if (!base)
+    ok("an empty book teaches the form, not a spreadsheet",
+       $("#mbstate").textContent.includes("Log bet") &&
+       !$("#mbstate").textContent.includes("Google Sheet"));
+  else
+    ok("a book with bets in it drops the teaching banner",
+       $("#mbstate").textContent.trim() === "", $("#mbstate").textContent.slice(0, 60));
+  ok("the form is open, not behind a setup step",
+     !$("#mbform").hasAttribute("hidden") && $$("#fbweek option").length > 0);
+
+  $("#fbweek").value = String(G.week); fire($("#fbweek"), "change");
+  ok("choosing a week populates its games", $$("#fbgame option").length > 0);
+  $("#fbgame").value = String(G.game_id); fire($("#fbgame"), "change");
+  ok("the game selected is the one asked for", $("#fbgame").value === String(G.game_id));
+
+  const chips = $$("#fbside .chip");
+  ok("both sides offered", chips.length === 2,
+     chips.map(c => c.textContent.trim()).join(" / "));
+  ok("the chips carry the market number so it need not be retyped",
+     G.line == null || chips.some(c => c.querySelector(".n")),
+     chips.map(c => c.textContent.trim()).join(" / "));
+
+  // Back the home team. The market number for that side is the negation of the
+  // home-margin convention, and the form must fill exactly that in.
+  chips[1].dispatchEvent(new window.Event("click", { bubbles: true }));
+  if (G.line != null)
+    ok("the line is prefilled from the home side of the market",
+       Math.abs(+$("#fbline").value + G.line) < 0.051,
+       `${$("#fbline").value} vs market ${G.line}`);
+
+  $("#fbunits").value = "2"; fire($("#fbunits"));
+  $("#fbodds").value = "-105"; fire($("#fbodds"));
+  ok("the hint says what is being risked and what it returns",
+     /Risking 2u to win 1\.9\d+u/.test($("#fbhint").textContent), $("#fbhint").textContent);
+
+  $("#fbsave").dispatchEvent(new window.Event("click", { bubbles: true }));
+
+  ok("the bet is in the table", listRows("#mblist") === base + 1,
+     `${listRows("#mblist")} vs ${base + 1}`);
+  const stored = JSON.parse(window.localStorage.getItem("tm_bets_v1") || "{}").bets || [];
+  ok("...and in storage, so a reload keeps it", stored.length === 1);
+  ok("...carrying the game's own id, so it can never match the wrong fixture",
+     stored[0] && String(stored[0].game_id) === String(G.game_id));
+  ok("...at the price and size entered",
+     stored[0] && stored[0].odds === -105 && stored[0].units === 2,
+     JSON.stringify(stored[0]));
+  ok("the summary counts every bet in the book",
+     $("#mbcards").textContent.includes(String(base + 1)), String(base + 1));
+
+  // A logged bet grades itself. On a bundle whose season has not started there is
+  // nothing final to grade, and "open" is then the correct answer -- asserting a
+  // result there would be asserting a bug.
+  if (isFinal) {
+    const expect = window.gradeBet(stored[0], G);
+    const mine = $$("#mblist tbody tr").find(tr =>
+      tr.querySelector('button[data-act="edit"][data-id="' + stored[0].id + '"]'));
+    const cell = mine.children[col("#mblist", "Result")];
+    ok("a finished game grades on the spot", cell.textContent.trim() === expect.result,
+       `${cell.textContent.trim()} vs ${expect.result}`);
+    const wonCell = mine.children[col("#mblist", "Won")];
+    ok("...and the units won are the price times the stake",
+       wonCell.textContent.includes(Math.abs(expect.units_won).toFixed(2)),
+       `${wonCell.textContent} vs ${expect.units_won}`);
+  } else {
+    const mine = $$("#mblist tbody tr").find(tr =>
+      tr.querySelector('button[data-act="edit"][data-id="' + stored[0].id + '"]'));
+    const cell = mine.children[col("#mblist", "Result")];
+    ok("an unplayed game stays open rather than defaulting to a loss",
+       cell.textContent.trim() === "open", cell.textContent.trim());
+  }
+
+  // Logging the identical bet twice is usually a double click and occasionally
+  // real, so it is a confirmation rather than a refusal.
+  $("#fbsave").dispatchEvent(new window.Event("click", { bubbles: true }));
+  ok("an identical bet is questioned, not silently doubled",
+     listRows("#mblist") === base + 1);
+  ok("...and says so", $("#fbmsg").textContent.includes("already in the book"));
+  $("#fbsave").dispatchEvent(new window.Event("click", { bubbles: true }));
+  ok("...but pressing again accepts it", listRows("#mblist") === base + 2);
+
+  // Edit, then delete.
+  const id = (JSON.parse(window.localStorage.getItem("tm_bets_v1")).bets)[0].id;
+  window.editBet(id);
+  ok("editing loads the bet back into the form", $("#fbunits").value === "2");
+  $("#fbunits").value = "5"; fire($("#fbunits"));
+  $("#fbsave").dispatchEvent(new window.Event("click", { bubbles: true }));
+  const after = JSON.parse(window.localStorage.getItem("tm_bets_v1")).bets;
+  ok("an edit replaces the bet rather than adding one", after.length === 2);
+  ok("...with the new stake", after.find(b => b.id === id).units === 5);
+
+  window.deleteBet(id);
+  ok("deleting removes it from the table", listRows("#mblist") === base + 1);
+  ok("...and from storage",
+     JSON.parse(window.localStorage.getItem("tm_bets_v1")).bets.length === 1);
+}
+
+console.log("\n── my bets: export, import, and bets with no game ──");
+{
+  const text = window.exportText();
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch (e) {}
+  ok("export produces valid JSON", parsed !== null);
+  ok("...containing the bets", parsed && Array.isArray(parsed.bets) && parsed.bets.length === 1);
+
+  // Re-importing the same file must not duplicate the book. This is the whole
+  // safety of "export before you clear your browser, import afterwards".
+  const again = window.importBets(text);
+  ok("re-importing the same file adds nothing", again.added === 0 && again.skipped === 1,
+     JSON.stringify(again));
+
+  const baseAfter = listRows("#mblist");
+  const other = JSON.parse(text);
+  other.bets = [{ ...other.bets[0], id: "imported1", units: 7 }];
+  const r2 = window.importBets(JSON.stringify(other));
+  ok("a genuinely different bet imports", r2.added === 1, JSON.stringify(r2));
+  window.drawMyBets();
+  ok("...and shows up", listRows("#mblist") === baseAfter + 1);
+
+  // The clipboard route matters more than the file one on a phone, where finding a
+  // downloaded .json again in a second browser is genuinely hard.
+  $("#mbpaste").dispatchEvent(new window.Event("click", { bubbles: true }));
+  ok("Paste in offers a box to paste a bet list into", $("#mbtext") !== null);
+  const three = JSON.parse(text);
+  three.bets = [{ ...three.bets[0], id: "pasted1", units: 9 }];
+  $("#mbtext").value = JSON.stringify(three);
+  $("#mbtextgo").dispatchEvent(new window.Event("click", { bubbles: true }));
+  ok("...and pasted bets load", window.allBets().some(b => b.id === "pasted1"));
+  window.eval(`BOOK.bets=BOOK.bets.filter(b=>b.id!=="pasted1");saveBook()`);
+  window.drawMyBets();
+
+  ok("a file that is not JSON is refused with a reason",
+     (window.importBets("not json").error || "").length > 0);
+  ok("a JSON file with no bets in it is refused too",
+     (window.importBets('{"hello":1}').error || "").length > 0);
+
+  // A bet whose game is not in this season's bundle cannot be graded. It must be
+  // reported, never dropped: a log that quietly discards what it cannot use is a
+  // log that is wrong and looks complete.
+  window.importBets(JSON.stringify({ bets: [{ id: "orphan1", game_id: "no-such-game",
+    market: "spread", team: "Nowhere", line: -3, odds: -110, units: 1 }] }));
+  window.drawMyBets();
+  ok("a bet with no matching game is reported, not dropped",
+     $("#mbproblems").textContent.includes("not in the"), $("#mbproblems").textContent.slice(0, 90));
+  window.eval(`BOOK.bets=BOOK.bets.filter(b=>b.id!=="orphan1");saveBook()`);
+  window.drawMyBets();
+}
+
+console.log("\n── my bets: filters, units and the Log buttons ──");
+{
+  const t = window.bookTotals(window.allBets(), 0);
+  const all = listRows("#mblist");
+  ok("every bet is listed", all === t.n, `${all} vs ${t.n}`);
+  const filterIs = (sel, value, want, name) => {
+    $(sel).value = value; fire($(sel), "change");
+    ok(name, listRows("#mblist") === want, `${listRows("#mblist")} vs ${want}`);
+    $(sel).value = ""; fire($(sel), "change");
+  };
+  const B = () => window.allBets();
+  filterIs("#mbmarket", "spread", B().filter(b => b.market === "spread").length,
+           "the market filter narrows to spreads");
+  filterIs("#mbmarket", "moneyline", B().filter(b => b.market === "moneyline").length,
+           "...and to moneylines, of which there may be none");
+  filterIs("#mbresult", "open", B().filter(b => !b.result).length,
+           "the result filter finds unsettled bets");
+  filterIs("#mbresult", "W", B().filter(b => b.result === "W").length,
+           "...and winners");
+  ok("clearing the filters restores every row", listRows("#mblist") === all);
+
+  // Units are the unit of account; dollars are a display multiplication only. With
+  // nothing settled there are no dollars to move, so that half is asserted only when
+  // there is something to assert -- a test that passes because both sides are "$0"
+  // is not testing the multiplication.
+  const unitsText = $("#mbcards").textContent.match(/[-+]?\d+\.\d\du risked/);
+  $("#unitsize").value = "250"; fire($("#unitsize"));
+  const rich = $("#mbcards").textContent;
+  $("#unitsize").value = "10"; fire($("#unitsize"));
+  if (t.units_won) {
+    ok("changing the unit size changes the dollars", rich !== $("#mbcards").textContent);
+    ok("...but never the units",
+       !unitsText || $("#mbcards").textContent.includes(unitsText[0]));
+  } else {
+    ok("with nothing settled the dollar figure is honestly absent",
+       !$("#mbcards").textContent.includes("$"), $("#mbcards").textContent.slice(0, 120));
+  }
+  $("#unitsize").value = "50"; fire($("#unitsize"));
+
+  // The Log button on the bets board is the shortest path from "the model likes
+  // this" to "it is in my book", so it has to actually arrive filled in.
+  $$("#nav button").find(b => b.dataset.v === "bets")
+    .dispatchEvent(new window.Event("click", { bubbles: true }));
+  const logBtn = $("#bets button[data-log]");
+  ok("the bets board offers a Log button per row", logBtn !== null);
+  if (logBtn) {
+    const want = logBtn.dataset.log;
+    logBtn.dispatchEvent(new window.Event("click", { bubbles: true }));
+    ok("...which jumps to the bet form", $("#v-mybets").classList.contains("on"));
+    ok("...on the right game", $("#fbgame").value === want,
+       `${$("#fbgame").value} vs ${want}`);
+    ok("...with the side it recommended selected",
+       $("#fbside .chip[aria-pressed=\"true\"]") !== null);
+    ok("...and only one tab marked selected",
+       $$("#nav button[aria-selected=\"true\"]").length === 1);
+  }
+  const schedLog = $("#schedtbl button[data-log]");
+  ok("the schedule offers one too, for games off the board", schedLog !== null);
 }
 
 console.log("\n── grade freshness ──");

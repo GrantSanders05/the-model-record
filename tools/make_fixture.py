@@ -153,6 +153,28 @@ def main():
     bundle["mybets"] = built
     bundle["fixture"] = True
 
+    # THE INVARIANT: every game a bet refers to is in the bundle's schedule, because
+    # the browser grades bets against that schedule and nothing else. The live half
+    # of this bundle is the upcoming season and the bet log is a 2025 replay, so the
+    # 2025 fixtures those bets sit on have to be spliced in or the whole graded book
+    # renders as ungraded. Production holds the same invariant through
+    # research_export.schedule(keep=...); this is the fixture's version of it.
+    #
+    # It is also the only way the fixture gets a FINAL game into `schedule`, which is
+    # what lets the QA suite prove that logging a bet on a played game grades it on
+    # the spot. Without this the branch is never executed anywhere.
+    need = {b["game_id"] for b in built.get("bets", [])}
+    have = {str(g["game_id"]) for g in bundle["schedule"]}
+    extra = research_export.schedule(real, "cfb", SEASON, {}, labels,
+                                     rated=(), keep=need)
+    added = [g for g in extra if str(g["game_id"]) in {str(n) for n in need}
+             and str(g["game_id"]) not in have]
+    bundle["schedule"] = bundle["schedule"] + added
+    missing = need - {str(g["game_id"]) for g in bundle["schedule"]}
+    if missing:
+        raise SystemExit("fixture would ship %d bet(s) with no game to grade against"
+                         % len(missing))
+
     out = os.path.join(ROOT, "output", "research", "fixture.json")
     with open(out, "w") as fh:
         json.dump(bundle, fh, separators=(",", ":"))
@@ -183,6 +205,8 @@ def main():
     print("  bet log: %d bets, %d settled, %+.2f units, ROI %s%%"
           % (t["n"], t["settled"], t["units_won"], t["roi"]))
     print("  %d problem row(s) reported" % len(built["problems"]))
+    print("  %d game(s) spliced in so every bet has a fixture to grade against"
+          % len(added))
 
 
 if __name__ == "__main__":

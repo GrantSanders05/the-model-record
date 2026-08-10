@@ -12,10 +12,23 @@ because they got lucky on the four games they actually bet.
                 HE chose. It is his record. It will not match the model's, and the
                 gap between them is itself worth looking at.
 
-WHERE IT LIVES. A tab called "My Bets" in the same workbook the film grades are in,
-because that is a document he already has open. It is read-only from here -- the
-sheet is the source of truth, and every run re-derives from it. Deleting a row
-deletes the bet; that is correct, it is his log.
+WHERE IT LIVES -- AND THIS FILE IS NO LONGER THE MAIN ANSWER. Bets are entered on
+the research site now and stored in the browser, because "open a spreadsheet, find
+the tab, type a row, wait half an hour" is a workflow people abandon. A bet logged
+there carries the game's own id, so none of the matching below applies to it.
+
+This module handles the LEGACY path: a tab called "My Bets" in the same workbook
+the film grades are in. It stays because rows already typed there must not vanish,
+and because a spreadsheet is a reasonable way to bulk-enter a backlog. It is
+read-only from here -- the sheet is the source of truth for its own rows, and every
+run re-derives from it. Deleting a row deletes the bet; that is correct, it is his
+log. The site merges both and grades them together.
+
+PARSING AND MATCHING HAPPEN HERE; GRADING HAPPENS IN THE BROWSER. `grade_bet` and
+`closing_clv` below are still the reference implementation and are still exercised,
+but the numbers a human reads come from the JavaScript port, so that one book is
+never half computed each way. tools/grading_cases.json is the shared table both
+sides are held to, and either drifting fails a build.
 
 UNITS, NOT DOLLARS. A unit is a percentage of bankroll, so a record in units stays
 comparable as the bankroll changes and cannot be flattered by bet sizing. Dollars

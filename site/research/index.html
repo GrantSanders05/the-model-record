@@ -167,6 +167,22 @@ input:disabled{opacity:.4;cursor:not-allowed;background:var(--raised)}
 .btn:hover{border-color:var(--ink3)}
 .btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .btn:disabled{opacity:.45;cursor:default}
+.btn.tiny{padding:3px 8px;font-size:11px;font-weight:600}
+.btn.danger:hover{border-color:var(--neg);color:var(--neg)}
+
+/* The bet form. `grow` on a field lets the game picker and the side chips take the
+   room they need on a wide screen and wrap whole on a phone, rather than every
+   control shrinking together until the game name is unreadable. */
+.betform{padding:14px 14px 12px;margin:0 0 8px}
+.betform .bar{margin:0 0 10px}
+.betform .bar:last-of-type{margin-bottom:0}
+.field.grow{flex:1 1 240px;min-width:180px}
+.field.grow select,.field.grow input{width:100%}
+.formnote{color:var(--ink3);font-size:11.5px;line-height:1.5;margin-top:10px}
+.chip .n{font-variant-numeric:tabular-nums;opacity:.75;margin-left:5px;font-weight:600}
+.chip[aria-pressed="true"] .n{opacity:.9}
+.srcpill{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);
+  border:1px solid var(--line);border-radius:100px;padding:1px 6px;white-space:nowrap}
 
 /* ── tables ─────────────────────────────────────────────────────────── */
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
@@ -471,7 +487,44 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
   <h2>My bets</h2>
   <p class="sub">What actually got money on it, at the price you got, in the size you
      chose. Kept separate from the model's record on purpose: the gap between the two is
-     the part worth looking at.</p>
+     the part worth looking at. Log a bet here and it grades itself as the score comes in.</p>
+
+  <!-- The form is the point of this tab. It is first, it is always open, and it
+       never needs a spreadsheet: the game is picked from the real schedule, so a
+       bet carries the game's own id and cannot be matched to the wrong fixture. -->
+  <div class="panel betform" id="mbform">
+    <div class="bar">
+      <div class="field"><label for="fbweek">Week</label><select id="fbweek"></select></div>
+      <div class="field grow"><label for="fbgame">Game</label><select id="fbgame"></select></div>
+      <div class="field"><label>Market</label>
+        <div class="chipset" id="fbmarket">
+          <button type="button" class="chip" data-m="spread" aria-pressed="true">Spread</button>
+          <button type="button" class="chip" data-m="moneyline" aria-pressed="false">Moneyline</button>
+          <button type="button" class="chip" data-m="total" aria-pressed="false">Total</button>
+        </div></div>
+      <div class="field grow"><label id="fbsidelab">Side</label>
+        <div class="chipset" id="fbside"></div></div>
+    </div>
+    <div class="bar">
+      <div class="field"><label for="fbline">Line</label>
+        <input id="fbline" type="number" step="0.5" inputmode="decimal"></div>
+      <div class="field"><label for="fbodds">Odds</label>
+        <input id="fbodds" type="number" step="5" inputmode="numeric" value="-110"></div>
+      <div class="field"><label for="fbunits">Units</label>
+        <input id="fbunits" type="number" step="0.5" min="0" inputmode="decimal" value="1"></div>
+      <div class="field"><label for="fbbook">Book</label>
+        <input id="fbbook" type="text" placeholder="DK" style="width:96px"></div>
+      <div class="field grow"><label for="fbnotes">Note</label>
+        <input id="fbnotes" type="text" placeholder="optional"></div>
+      <div class="field"><label>&nbsp;</label>
+        <button type="button" class="btn primary" id="fbsave">Log bet</button></div>
+      <div class="field" id="fbcancelwrap" hidden><label>&nbsp;</label>
+        <button type="button" class="btn" id="fbcancel">Cancel</button></div>
+    </div>
+    <div class="formnote" id="fbhint"></div>
+  </div>
+  <div id="fbmsg"></div>
+
   <div id="mbstate"></div>
   <div class="bar" id="mbbar" hidden>
     <div class="field"><label for="unitsize">1 unit =</label>
@@ -491,6 +544,14 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
         <option value="P">Push</option>
         <option value="open">Not settled</option>
       </select></div>
+    <div class="field"><label>Move them</label>
+      <div class="chipset">
+        <button type="button" class="btn" id="mbexport">Export</button>
+        <button type="button" class="btn" id="mbcopy">Copy</button>
+        <button type="button" class="btn" id="mbimport">Import</button>
+        <button type="button" class="btn" id="mbpaste">Paste in</button>
+      </div></div>
+    <input id="mbfile" type="file" accept="application/json,.json" hidden>
   </div>
   <div class="cards" id="mbcards"></div>
   <div id="mbproblems"></div>
@@ -500,6 +561,7 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
   <div class="panel scroll" id="mbcutwrap" hidden><table id="mbcut"></table></div>
   <h2 id="mblisth" hidden>Every bet</h2>
   <div class="panel scroll" id="mblistwrap" hidden><table id="mblist"></table></div>
+  <footer class="note" id="mbfoot"></footer>
 </section>
 
 <!-- ── TEAM ────────────────────────────────────────────────────────── -->
@@ -608,6 +670,22 @@ function pickCell(pickTeam, homeMargin, home, away){
   return `<td class="pair strong" title="${esc(pickTeam)} ${n}">`+
          `<span class="t">${esc(pickTeam)}</span><span class="n">${n}</span></td>`;
 }
+/* A Log button in the row itself. The gap between seeing a number you like and
+   writing it down is where a bet log dies, so it is one click from any table on the
+   site and the form arrives filled in from that row. Everything travels as data
+   attributes on the button: the tables are rebuilt on every filter keystroke, so
+   nothing here may hold a reference to a row object. */
+function logBtn(gameId, market, side, line, odds){
+  return `<td><button type="button" class="btn tiny" data-log="${esc(gameId)}" `+
+    `data-market="${esc(market)}" data-side="${esc(side==null?"":side)}" `+
+    `data-line="${line==null?"":line}" data-odds="${odds==null?"":odds}" `+
+    `title="Log a bet on this game">Log</button></td>`;
+}
+function logCell(g, sidePick){
+  const side=sidePick||g.home;
+  const line=g.line==null?null:(side===g.home?-g.line:g.line);
+  return logBtn(g.game_id,"spread",side,line,null);
+}
 function matchupCell(away, home, neutral){
   /* "@" is load-bearing -- it is the only thing on the row that says who is at
      home, and home field is worth 4 points to this model. Neutral sites get
@@ -698,6 +776,16 @@ function showGate(blob){
 }
 load().catch(e=>{ $("#meta").textContent="could not load the research bundle"; console.error(e); });
 
+/* Tab switching is its own function because the nav is no longer the only thing
+   that switches tabs -- a Log button on the bets board jumps here with the form
+   already filled in, and duplicating the selection logic there would eventually
+   leave two tabs marked selected at once. */
+function showTab(v){
+  $$("#nav button").forEach(x=>x.setAttribute("aria-selected",String(x.dataset.v===v)));
+  $$(".view").forEach(x=>x.classList.remove("on"));
+  const view=$("#v-"+v); if(view) view.classList.add("on");
+}
+
 /* ── boot ────────────────────────────────────────────────────────── */
 function boot(){
   $("#gate").hidden=true; $("#app").hidden=false; $("#nav").hidden=false;
@@ -719,11 +807,7 @@ function boot(){
         `${live?"":' <b class="warnpill">no live tab</b>'}</span>`:"");
 
   banners();
-  $$("#nav button").forEach(b=>b.onclick=()=>{
-    $$("#nav button").forEach(x=>x.setAttribute("aria-selected",String(x===b)));
-    $$(".view").forEach(v=>v.classList.remove("on"));
-    $("#v-"+b.dataset.v).classList.add("on");
-  });
+  $$("#nav button").forEach(b=>b.onclick=()=>showTab(b.dataset.v));
 
   const teams=Object.keys(D.teams).sort();
   const weeks=[...new Set(D.bets.map(b=>b.week))].sort((a,b)=>a-b);
@@ -773,6 +857,18 @@ function boot(){
   ["#rfilter","#rweek"].forEach(s=>{ $(s).oninput=drawPickList; $(s).onchange=drawPickList; });
   ["#unitsize","#mbmarket","#mbresult"].forEach(s=>{
     $(s).oninput=drawMyBets; $(s).onchange=drawMyBets; });
+  initBetForm();
+
+  /* One handler for every Log button on the site. They are rendered inside tables
+     that are rebuilt on each draw, so binding per row would re-attach on every
+     keystroke in a filter box. */
+  document.addEventListener("click",e=>{
+    const b=e.target.closest("button[data-log]"); if(!b) return;
+    prefillBet({game_id:b.dataset.log, market:b.dataset.market||"spread",
+                side:b.dataset.side||null,
+                line:b.dataset.line===""?null:+b.dataset.line,
+                odds:b.dataset.odds===""?null:+b.dataset.odds});
+  });
 
   drawRank();drawSched();drawBets();drawResults();drawMyBets();
   drawTeam();drawMove();drawWhatIf();drawAlerts();
@@ -972,7 +1068,7 @@ function drawSched(){
       <div class="s">priced &amp; bettable</div></div>`;
 
   const head=["Kickoff","Matchup","Model makes it","Market has it","Edge",
-              "Spread pick","Total","O/U pick",""];
+              "Spread pick","Total","O/U pick","","Log"];
   let lastDay=null;
   const body=rows.map(g=>{
     const [label,klass]=SCHED_STATUS[g.status]||["",""];
@@ -999,7 +1095,8 @@ function drawSched(){
       <td class="num">${g.model_total==null?"—":num(g.model_total)}${
         g.total==null?"":`<span class="muted"> / ${num(g.total)}</span>`}</td>
       ${ouCell(g.ou_pick,g.total)}
-      <td class="${klass}" title="${esc(result)}">${g.status==="final"?esc(result):label}</td></tr>`;
+      <td class="${klass}" title="${esc(result)}">${g.status==="final"?esc(result):label}</td>
+      ${logCell(g, g.no_bet?null:g.ats_pick)}</tr>`;
   }).join("");
 
   $("#schedtbl").innerHTML= rows.length
@@ -1138,8 +1235,8 @@ function drawBets(){
   }else warn.hidden=true;
 
   const head = by==="ml"
-    ? ["Wk","Matchup","Bet on","Odds","Model says","Market says","Edge","Stake"]
-    : ["Wk","Matchup","Model makes it","Market has it","Edge","Spread pick","Total","O/U pick"];
+    ? ["Wk","Matchup","Bet on","Odds","Model says","Market says","Edge","Stake","Log"]
+    : ["Wk","Matchup","Model makes it","Market has it","Edge","Spread pick","Total","O/U pick","Log"];
   const numCols = by==="ml" ? [0,3,4,5,6,7] : [0,4,6];
   const body = rows.slice(0,150).map(r=> by==="ml" ? `<tr>
       <td class="num muted">${r.week}</td>
@@ -1149,7 +1246,8 @@ function drawBets(){
       <td class="num mono">${r.ml_odds==null?"—":(r.ml_odds>0?"+":"")+r.ml_odds}</td>
       <td class="num">${num(r.model_prob)}%</td><td class="num muted">${num(r.ml_fair_prob)}%</td>
       <td class="num ${cls(r.ml_ev)}">${sgn(r.ml_ev,2)}%</td>
-      <td class="num strong">${stakes.has(r.game_id)?money(stakes.get(r.game_id)):"—"}</td></tr>`
+      <td class="num strong">${stakes.has(r.game_id)?money(stakes.get(r.game_id)):"—"}</td>
+      ${logBtn(r.game_id,"moneyline",r.ml_pick,null,r.ml_odds)}</tr>`
     : `<tr><td class="num muted">${r.week}</td>
       ${matchupCell(r.away,r.home,false)}
       ${favCell(r.model_margin,r.home,r.away)}
@@ -1159,7 +1257,10 @@ function drawBets(){
       ${pickCell(r.ats_pick,r.market_margin,r.home,r.away)}
       <td class="num">${num(r.model_total)}${
         r.market_total==null?"":`<span class="muted"> / ${num(r.market_total)}</span>`}</td>
-      ${ouCell(r.ou_pick,r.market_total)}</tr>`).join("");
+      ${ouCell(r.ou_pick,r.market_total)}
+      ${logBtn(r.game_id,"spread",r.ats_pick||r.home,
+        r.market_margin==null?null:((r.ats_pick||r.home)===r.home?-r.market_margin:r.market_margin),
+        null)}</tr>`).join("");
   $("#bets").innerHTML= rows.length
     ? `<thead><tr>${head.map((h,i)=>`<th class="${numCols.includes(i)?"num":""}">${h}</th>`).join("")}</tr></thead><tbody>${body}</tbody>`
     : `<tbody><tr><td><div class="empty">No games match that filter.</div></td></tr></tbody>`;
@@ -1389,56 +1490,576 @@ function drawPickList(){
    His book, not the model's. Units are the unit of account throughout: a record
    in units survives the bankroll changing and cannot be flattered by bet sizing,
    which is the entire reason for betting in units in the first place. Dollars are
-   a display multiplication by one number he sets here, stored on this device.  */
+   a display multiplication by one number he sets here, stored on this device.
+
+   WHERE THE BETS LIVE. In this browser, under `tm_bets_v1`. There is no server and
+   there is not going to be one: the whole system runs on free hosting, and a free
+   backend is a backend that disappears when somebody's trial ends. The cost of that
+   choice is stated rather than hidden — a bet logged here is on this device only —
+   so Export writes a file that Import reads back, and that file is also the backup.
+
+   A BET CARRIES ITS GAME'S ID, because it was chosen from the real schedule. The
+   whole class of matching bugs the sheet path has to defend against — two games in
+   one week, a team name spelled three ways, a bowl and a September game sharing a
+   week number — cannot happen to a bet entered here. There is nothing to match.
+
+   ONE GRADER. Rows typed here and rows still coming from the Google Sheet are graded
+   by the same code on this page; Python's job for the sheet is reduced to parsing and
+   matching. Two graders would eventually disagree and a total would be half computed
+   each way. tools/qa/research.mjs runs one shared case table through both and fails
+   on any disagreement, and separately checks this page's totals against Python's over
+   a full season of real bets.                                                       */
 const UNIT_KEY="tm_unit_size";
+const BOOK_KEY="tm_bets_v1";
+let BOOK={v:1,bets:[]}, EDITING=null, STORE_OK=true, DUP=null, GIDX=null;
+
+/* Every write is wrapped: Safari in private mode throws on localStorage, and a
+   bet that failed to save must say so loudly. Silently accepting a bet and losing
+   it on reload is the one failure this whole tab cannot have. */
+function loadBook(){
+  try{
+    const raw=localStorage.getItem(BOOK_KEY);
+    const d=raw?JSON.parse(raw):null;
+    if(d&&Array.isArray(d.bets)) BOOK={v:1,bets:d.bets};
+  }catch(e){ BOOK={v:1,bets:[]}; }
+  return BOOK;
+}
+function saveBook(){
+  try{ localStorage.setItem(BOOK_KEY,JSON.stringify(BOOK)); STORE_OK=true; }
+  catch(e){ STORE_OK=false; }
+  return STORE_OK;
+}
+
+/* ── grading ──────────────────────────────────────────────────────
+   A direct port of src/bet_log.py. Kept deliberately literal, sign convention and
+   all: `line` is written from the BET's side, so −7.5 means laying 7.5 and +3 means
+   taking 3, and `g.line` is the market's number from the HOME side, positive when
+   the home team is favoured. Those two conventions are opposite on purpose and the
+   conversion happens in exactly one place in each direction.                      */
+function winUnits(odds){ const a=+odds; return a<0 ? 100/-a : a/100; }
+function rnd(x,n){ const p=Math.pow(10,n); return Math.round((x+Number.EPSILON*Math.sign(x||1))*p)/p; }
+
+function gradeBet(b,g){
+  if(!g||g.home_score==null||g.away_score==null)
+    return {result:null,units_won:null,detail:g?"not final":"no game"};
+  const margin=g.home_score-g.away_score, total=g.home_score+g.away_score;
+  const won ={result:"W",units_won:rnd(b.units*winUnits(b.odds),3),detail:""};
+  const lost={result:"L",units_won:rnd(-b.units,3),detail:""};
+
+  if(b.market==="moneyline"){
+    if(margin===0) return {result:"P",units_won:0,detail:"tie"};
+    return ((margin>0)===(b.team===g.home)) ? won : lost;
+  }
+  if(b.market==="spread"){
+    const own = b.team===g.home ? margin : -margin;   // the bet's own margin
+    const edge = own + (+b.line);
+    if(Math.abs(edge)<1e-9) return {result:"P",units_won:0,detail:"push"};
+    return edge>0 ? won : lost;
+  }
+  const diff = total - (+b.line);
+  if(Math.abs(diff)<1e-9) return {result:"P",units_won:0,detail:"push"};
+  return ((diff>0)===(b.side==="over")) ? won : lost;
+}
+
+function betCLV(b,g){
+  if(!g) return null;
+  if(b.market==="spread"){
+    if(g.line==null||b.line==null) return null;
+    /* The number the CLOSING line would have given this side, in the same sign
+       convention the bet is written in. CLV is then just how much better his
+       number was: home laid 7 and it closed −10 → −7 − (−10) = +3. */
+    const ownClose = b.team===g.home ? -g.line : g.line;
+    return rnd((+b.line)-ownClose,2);
+  }
+  if(b.market==="total"){
+    if(g.total==null||b.line==null) return null;
+    const d=g.total-(+b.line);
+    return rnd(b.side==="over"?d:-d,2);
+  }
+  return null;                                   // no closing price stored for ML
+}
+
+function wilson(w,n,z=1.96){
+  if(!n) return [0,0];
+  const p=w/n, d=1+z*z/n;
+  const centre=(p+z*z/(2*n))/d;
+  const half=z*Math.sqrt(p*(1-p)/n + z*z/(4*n*n))/d;
+  return [Math.max(0,centre-half), Math.min(1,centre+half)];
+}
+
+/* Units risked, units won, ROI and a bankroll curve. ROI is per unit RISKED, not
+   per bet: a 3-unit loss and a 0.5-unit loss are not the same event, and per-unit
+   is the only version that survives varying bet sizes. */
+function bookTotals(bets,unitSize){
+  const settled=bets.filter(b=>b.result==="W"||b.result==="L"||b.result==="P");
+  const w=settled.filter(b=>b.result==="W").length;
+  const l=settled.filter(b=>b.result==="L").length;
+  const p=settled.filter(b=>b.result==="P").length;
+  const risked=settled.filter(b=>b.result!=="P").reduce((s,b)=>s+b.units,0);
+  const won=settled.reduce((s,b)=>s+(b.units_won||0),0);
+
+  let run=0;
+  const curve=settled.map(b=>{ run+=b.units_won||0;
+    return {kickoff:b.kickoff, units:rnd(run,3)}; });
+
+  const out={
+    n:bets.length, settled:settled.length, open:bets.length-settled.length,
+    w, l, push:p,
+    units_risked:rnd(risked,2), units_won:rnd(won,2),
+    roi: risked?rnd(100*won/risked,2):null,
+    curve, unit_size:unitSize||null,
+    dollars_won: unitSize?rnd(won*unitSize,2):null,
+    dollars_risked: unitSize?rnd(risked*unitSize,2):null,
+  };
+  if(w+l){
+    const [lo,hi]=wilson(w,w+l);
+    out.pct=rnd(100*w/(w+l),2);
+    out.ci95=[rnd(100*lo,2),rnd(100*hi,2)];
+    /* Break-even comes from the prices HE took, never a textbook −110. A book full
+       of plus-money dogs needs a far lower hit rate to profit, and judging it at
+       52.38% would call a winning book a losing one. */
+    const avgWin = risked
+      ? settled.filter(b=>b.result!=="P")
+               .reduce((s,b)=>s+winUnits(b.odds)*b.units,0)/risked
+      : 100/110;
+    out.break_even=rnd(100/(1+avgWin),2);
+    out.clears = 100*lo > out.break_even;
+  }
+  const clvs=bets.map(b=>b.clv).filter(c=>c!=null);
+  if(clvs.length){
+    out.clv_mean=rnd(clvs.reduce((s,c)=>s+c,0)/clvs.length,3);
+    out.clv_beat=rnd(100*clvs.filter(c=>c>0).length/clvs.length,1);
+    out.clv_n=clvs.length;
+  }
+  const byMarket={}, byWeek={};
+  for(const b of settled){
+    for(const [bucket,key] of [[byMarket,b.market],[byWeek,b.week]]){
+      const e=bucket[key]||(bucket[key]={w:0,l:0,push:0,units:0,risked:0});
+      if(b.result==="W") e.w++; else if(b.result==="L") e.l++; else e.push++;
+      e.units+=b.units_won||0;
+      if(b.result!=="P") e.risked+=b.units;
+    }
+  }
+  const fin=d=>Object.keys(d).sort().map(k=>({key:String(k), ...d[k],
+    units:rnd(d[k].units,2), risked:rnd(d[k].risked,2),
+    roi: d[k].risked?rnd(100*d[k].units/d[k].risked,2):null}));
+  out.by_market=fin(byMarket); out.by_week=fin(byWeek);
+  return out;
+}
+
+/* ── the merged book ─────────────────────────────────────────────
+   Bets typed here plus whatever is still in the sheet, deduplicated. A row that
+   exists in both — because it was imported out of the sheet and never deleted
+   there — must be counted once, so an identical signature lets the local copy win
+   and the sheet copy drop out silently. Double-counting a bet is the one arithmetic
+   error a bet log absolutely may not make.                                       */
+function gameIndex(){
+  if(!GIDX) GIDX=new Map((D.schedule||[]).map(g=>[String(g.game_id),g]));
+  return GIDX;
+}
+function betSig(b){
+  return [b.game_id,b.market,b.side||"",b.line==null?"":(+b.line).toFixed(2),
+          +b.odds,+b.units].join("|");
+}
+function sheetBets(){
+  const M=D.mybets||{};
+  return (M.state==="ok"?(M.bets||[]):[]).map(b=>({
+    id:"sheet:"+b.row, source:"sheet", seq:b.row,
+    game_id:String(b.game_id), week:b.week, team:b.team, market:b.market,
+    side:b.side, line:b.line, odds:b.odds, units:b.units,
+    book:b.book, notes:b.notes,
+  }));
+}
+function allBets(){
+  const idx=gameIndex();
+  const local=BOOK.bets.map((b,i)=>({...b, game_id:String(b.game_id),
+                                     source:"site", seq:1e6+i}));
+  const mine=new Set(local.map(betSig));
+  const merged=[...local, ...sheetBets().filter(b=>!mine.has(betSig(b)))];
+  return merged.map(b=>{
+    const g=idx.get(String(b.game_id))||null;
+    const gr=gradeBet(b,g);
+    return {...b,
+      home:g?g.home:null, away:g?g.away:null, neutral:g?g.neutral:false,
+      home_score:g?g.home_score:null, away_score:g?g.away_score:null,
+      kickoff:g?g.kickoff:null, week:g?g.week:b.week,
+      result:gr.result, units_won:gr.units_won, detail:gr.detail,
+      clv:betCLV(b,g),
+      closing_line:!g?null:(b.market==="spread"?g.line:
+                            b.market==="total"?g.total:null),
+      orphan:!g};
+  }).sort((a,b)=>String(a.kickoff||"~").localeCompare(String(b.kickoff||"~"))
+                 || a.seq-b.seq);
+}
+
+/* ── the form ───────────────────────────────────────────────────── */
+function formGame(){ return gameIndex().get(String($("#fbgame").value))||null; }
+function formMarket(){
+  const on=$("#fbmarket").querySelector('[aria-pressed="true"]');
+  return on?on.dataset.m:"spread";
+}
+function formSide(){
+  const on=$("#fbside").querySelector('[aria-pressed="true"]');
+  return on?on.dataset.s:null;
+}
+function fillFormWeeks(){
+  const ws=schedWeeks();
+  $("#fbweek").innerHTML=ws.map(w=>`<option value="${w}">${weekName(w)}</option>`).join("");
+  $("#fbweek").value=String(defaultWeek());
+}
+function fillFormGames(keepId){
+  const wk=+$("#fbweek").value;
+  const games=(D.schedule||[]).filter(g=>+g.week===wk)
+    .sort((a,b)=>String(a.kickoff||"").localeCompare(String(b.kickoff||"")));
+  $("#fbgame").innerHTML = games.length
+    ? games.map(g=>`<option value="${esc(g.game_id)}">${esc(g.away)} ${
+        g.neutral?"vs":"@"} ${esc(g.home)}${g.home_score!=null?" · final":""}</option>`).join("")
+    : `<option value="">no games in that week</option>`;
+  if(keepId && games.some(g=>String(g.game_id)===String(keepId)))
+    $("#fbgame").value=String(keepId);
+}
+/* The chips carry the number on offer, so choosing a side and filling in the line
+   are the same action. Typing a spread you can already see is the step that makes
+   people stop keeping a bet log. */
+function fillFormSides(keep){
+  const g=formGame(), m=formMarket(), box=$("#fbside");
+  if(!g){ box.innerHTML=""; return; }
+  let opts;
+  if(m==="total"){
+    $("#fbsidelab").textContent="Over / under";
+    const n=g.total==null?"":num(g.total);
+    opts=[{v:"over",t:"Over",n},{v:"under",t:"Under",n}];
+  }else{
+    $("#fbsidelab").textContent="Side";
+    opts=[g.away,g.home].map(t=>{
+      let n="";
+      if(m==="moneyline"){
+        const ml = t===g.home ? g.home_ml : g.away_ml;
+        if(ml!=null) n=(ml>0?"+":"")+ml;
+      }else if(g.line!=null){
+        const own = t===g.home ? -g.line : g.line;
+        n = Math.abs(own)<0.05 ? "PK" : sgn(own,1);
+      }
+      return {v:t,t:(t===g.home?t:t),n};
+    });
+  }
+  box.innerHTML=opts.map(o=>`<button type="button" class="chip" data-s="${esc(o.v)}"
+    aria-pressed="false">${esc(o.t)}${o.n?`<span class="n">${esc(o.n)}</span>`:""}</button>`).join("");
+  const want = keep && opts.some(o=>o.v===keep) ? keep : opts[0].v;
+  const btn=[...box.children].find(c=>c.dataset.s===want);
+  if(btn) btn.setAttribute("aria-pressed","true");
+}
+/* Filling the line and price from the market is a DEFAULT, not a rule: he can
+   always overwrite it with what he actually got, which is the number that matters. */
+function applySideDefaults(){
+  const g=formGame(), m=formMarket(), s=formSide();
+  const line=$("#fbline"), odds=$("#fbodds");
+  line.disabled = (m==="moneyline");
+  if(!g||!s) return;
+  if(m==="moneyline"){
+    line.value="";
+    const ml = s===g.home ? g.home_ml : g.away_ml;
+    odds.value = ml==null ? "-110" : String(ml);
+  }else if(m==="total"){
+    line.value = g.total==null?"":String(g.total);
+    odds.value = odds.value||"-110";
+  }else{
+    line.value = g.line==null?"":String(rnd(s===g.home?-g.line:g.line,1));
+    odds.value = odds.value||"-110";
+  }
+  formHint();
+}
+function formHint(){
+  const g=formGame(), m=formMarket(), s=formSide();
+  const u=$("#fbunits").value||"0";
+  if(!g||!s){ $("#fbhint").textContent=""; return; }
+  const line=$("#fbline").value, odds=+$("#fbodds").value||-110;
+  const risk=`Risking ${u}u to win ${(+u*winUnits(odds)).toFixed(2)}u`;
+  const what = m==="moneyline" ? `${s} to win outright at ${odds>0?"+":""}${odds}`
+    : m==="total" ? `${s.toUpperCase()} ${line} in ${g.away} @ ${g.home}`
+    : `${s} ${(+line>0?"+":"")}${line}`;
+  $("#fbhint").textContent = `${what}. ${risk}. `+
+    (g.home_score!=null ? "This game is final — it will grade the moment you log it."
+     : "It grades itself when the score comes in.");
+}
+function formMsg(kind,html){
+  $("#fbmsg").innerHTML = html
+    ? `<div class="banner${kind==="ok"?" ok":""}"><b>${kind==="ok"?"Logged":"Not logged"}</b>${html}</div>`
+    : "";
+}
+function resetForm(){
+  EDITING=null; DUP=null;
+  $("#fbsave").textContent="Log bet";
+  $("#fbcancelwrap").hidden=true;
+  $("#fbnotes").value="";
+  /* The side survives a reset. Logging a spread and then the total on the same game
+     is the common second action, and throwing the selection back to the away team
+     every time makes the form feel like it is fighting you. */
+  fillFormSides(formSide()); applySideDefaults();
+}
+
+function saveBetFromForm(){
+  const g=formGame(), m=formMarket(), s=formSide();
+  if(!g) return formMsg("bad","Pick a game first.");
+  if(!s) return formMsg("bad","Pick a side.");
+  const units=+$("#fbunits").value;
+  if(!(units>0)) return formMsg("bad","Units has to be a positive number — that is the stake.");
+  const odds=+$("#fbodds").value;
+  if(!odds||Math.abs(odds)<100)
+    return formMsg("bad","Odds are American: −110, +150. Anything between −100 and +100 is not a price.");
+  let line=null;
+  if(m!=="moneyline"){
+    if($("#fbline").value==="") return formMsg("bad",`A ${m} bet needs the number you took.`);
+    line=+$("#fbline").value;
+    if(Number.isNaN(line)) return formMsg("bad","That line is not a number.");
+  }
+  const rec={
+    id: EDITING || ("b"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
+    added: new Date().toISOString(),
+    game_id:String(g.game_id), week:g.week,
+    team: m==="total" ? g.home : s,          // a total belongs to the game, not a side
+    market:m, side: m==="total"?s:null,
+    line, odds, units,
+    book: $("#fbbook").value.trim()||null,
+    notes: $("#fbnotes").value.trim()||null,
+  };
+  /* The same bet at the same price twice is usually a double-click, and occasionally
+     real. So it is a confirmation, not a refusal: refusing quietly loses a real bet,
+     and accepting quietly doubles a fake one. */
+  const dup=BOOK.bets.find(b=>b.id!==rec.id && betSig(b)===betSig(rec));
+  if(dup && DUP!==betSig(rec)){
+    DUP=betSig(rec);
+    $("#fbsave").textContent="Log it anyway";
+    return formMsg("bad","That exact bet is already in the book at the same price and size. "+
+                   "Press again if you really did place it twice.");
+  }
+  DUP=null;
+  if(EDITING){
+    const i=BOOK.bets.findIndex(b=>b.id===EDITING);
+    if(i>=0) BOOK.bets[i]=rec; else BOOK.bets.push(rec);
+  }else BOOK.bets.push(rec);
+
+  if(!saveBook()){
+    BOOK.bets=BOOK.bets.filter(b=>b!==rec);
+    return formMsg("bad","This browser refused to save it — private mode blocks storage. "+
+                   "The bet was NOT recorded.");
+  }
+  const wasEdit=!!EDITING;
+  resetForm();
+  drawMyBets();
+  formMsg("ok", wasEdit?"Updated.":`${esc(rec.team)} · ${units}u logged.`);
+  $("#fbunits").value=String(units);       // he usually bets the same size again
+}
+
+function editBet(id){
+  const b=BOOK.bets.find(x=>x.id===id); if(!b) return;
+  EDITING=id; DUP=null;
+  const g=gameIndex().get(String(b.game_id));
+  $("#fbweek").value=String(g?g.week:b.week);
+  fillFormGames(b.game_id);
+  [...$("#fbmarket").children].forEach(c=>
+    c.setAttribute("aria-pressed",String(c.dataset.m===b.market)));
+  fillFormSides(b.market==="total"?b.side:b.team);
+  $("#fbline").disabled=(b.market==="moneyline");
+  $("#fbline").value=b.line==null?"":String(b.line);
+  $("#fbodds").value=String(b.odds);
+  $("#fbunits").value=String(b.units);
+  $("#fbbook").value=b.book||"";
+  $("#fbnotes").value=b.notes||"";
+  $("#fbsave").textContent="Save changes";
+  $("#fbcancelwrap").hidden=false;
+  formHint(); formMsg("", "");
+  /* Guarded: not every engine implements scrollIntoView, and a convenience that
+     can throw takes the edit with it. */
+  const box=$("#mbform");
+  if(box.scrollIntoView) box.scrollIntoView({block:"nearest"});
+}
+function deleteBet(id){
+  const b=BOOK.bets.find(x=>x.id===id); if(!b) return;
+  BOOK.bets=BOOK.bets.filter(x=>x.id!==id);
+  if(!saveBook()){ BOOK.bets.push(b); return formMsg("bad","Could not save the deletion."); }
+  if(EDITING===id) resetForm();
+  drawMyBets();
+}
+
+/* Prefill from anywhere else on the site — the bets board and the schedule both
+   have a button per row. Going from "the model likes this" to "it is in my book"
+   should not involve retyping a number that is already on the screen. */
+function prefillBet(o){
+  showTab("mybets");
+  const g=gameIndex().get(String(o.game_id));
+  if(!g) return formMsg("bad","That game is not in the schedule this page was built "+
+                        "from, so it cannot be logged against a fixture.");
+  EDITING=null; $("#fbsave").textContent="Log bet"; $("#fbcancelwrap").hidden=true;
+  $("#fbweek").value=String(g.week);
+  fillFormGames(g.game_id);
+  [...$("#fbmarket").children].forEach(c=>
+    c.setAttribute("aria-pressed",String(c.dataset.m===(o.market||"spread"))));
+  fillFormSides(o.side||null);
+  applySideDefaults();
+  if(o.line!=null) $("#fbline").value=String(o.line);
+  if(o.odds!=null) $("#fbodds").value=String(o.odds);
+  formHint();
+}
+
+/* Export/import is the only cross-device story there is without a server, so it
+   has to be plain: a file of bets, readable, that goes back in unchanged. */
+function exportText(){
+  return JSON.stringify({v:1, exported:new Date().toISOString(),
+    season:D.season, unit_size:+$("#unitsize").value||null, bets:BOOK.bets}, null, 2);
+}
+function exportBets(){
+  const text=exportText();
+  const name=`my-bets-${D.season}-${new Date().toISOString().slice(0,10)}.json`;
+  try{
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([text],{type:"application/json"}));
+    a.download=name; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    formMsg("ok",`${BOOK.bets.length} bet(s) written to ${esc(name)}.`);
+  }catch(e){
+    /* Download blocked or unsupported. Showing the text is worse UX and a
+       strictly better outcome than a button that appears to do nothing. */
+    $("#fbmsg").innerHTML=`<div class="banner"><b>Copy this and keep it somewhere</b>`+
+      `Your browser would not save a file, so here is the same content.`+
+      `<textarea readonly style="width:100%;height:120px;margin-top:8px" id="mbdump"></textarea></div>`;
+    $("#mbdump").value=text;
+  }
+}
+/* One box, two jobs: showing bets to copy out when the clipboard API is unavailable,
+   and taking bets pasted in. Both are the same text in the same format, so they are
+   the same control. */
+function showPasteBox(text, readonly){
+  $("#fbmsg").innerHTML=
+    `<div class="banner${readonly?"":" ok"}"><b>${readonly
+      ? "Copy this and paste it into the same page on the other device"
+      : "Paste a bet list here"}</b>`+
+    `<textarea id="mbtext" ${readonly?"readonly":""} style="width:100%;height:120px;`+
+    `margin-top:8px;font-family:var(--mono);font-size:11.5px"></textarea>`+
+    (readonly?"":`<div style="margin-top:8px">`+
+      `<button type="button" class="btn primary" id="mbtextgo">Load these bets</button></div>`)+
+    `</div>`;
+  $("#mbtext").value=text;
+  if(readonly) return;
+  $("#mbtextgo").onclick=()=>{
+    const r=importBets($("#mbtext").value.trim());
+    if(r.error) return formMsg("bad",esc(r.error));
+    drawMyBets();
+    formMsg("ok",`${r.added} added, ${r.skipped} already here`+
+      (r.bad?`, ${r.bad} unusable`:"")+".");
+  };
+}
+
+function importBets(text){
+  let d;
+  try{ d=JSON.parse(text); }catch(e){ return {error:"That file is not JSON."}; }
+  const rows=Array.isArray(d)?d:(d&&Array.isArray(d.bets)?d.bets:null);
+  if(!rows) return {error:"No bets in that file."};
+  const have=new Set(BOOK.bets.map(betSig));
+  let added=0, skipped=0, bad=0;
+  for(const r of rows){
+    if(!r||!r.game_id||!r.market||!(+r.units>0)){ bad++; continue; }
+    const rec={id:r.id||("b"+Math.random().toString(36).slice(2,10)),
+      added:r.added||new Date().toISOString(), game_id:String(r.game_id),
+      week:r.week, team:r.team, market:r.market, side:r.side||null,
+      line:r.line==null?null:+r.line, odds:+r.odds||-110, units:+r.units,
+      book:r.book||null, notes:r.notes||null};
+    if(have.has(betSig(rec))){ skipped++; continue; }
+    have.add(betSig(rec)); BOOK.bets.push(rec); added++;
+  }
+  if(added && !saveBook()) return {error:"This browser refused to save them."};
+  return {added,skipped,bad};
+}
+
+function initBetForm(){
+  loadBook();
+  fillFormWeeks();
+  fillFormGames();
+  fillFormSides();
+  applySideDefaults();
+  $("#fbweek").onchange=()=>{ fillFormGames(); fillFormSides(); applySideDefaults(); };
+  $("#fbgame").onchange=()=>{ fillFormSides(); applySideDefaults(); };
+  $("#fbmarket").onclick=e=>{
+    const c=e.target.closest("[data-m]"); if(!c) return;
+    [...$("#fbmarket").children].forEach(x=>x.setAttribute("aria-pressed",String(x===c)));
+    fillFormSides(); applySideDefaults();
+  };
+  $("#fbside").onclick=e=>{
+    const c=e.target.closest("[data-s]"); if(!c) return;
+    [...$("#fbside").children].forEach(x=>x.setAttribute("aria-pressed",String(x===c)));
+    applySideDefaults();
+  };
+  ["#fbline","#fbodds","#fbunits"].forEach(s=>{ $(s).oninput=formHint; });
+  $("#fbsave").onclick=saveBetFromForm;
+  $("#fbcancel").onclick=()=>{ resetForm(); drawMyBets(); formMsg("",""); };
+  $("#mbexport").onclick=exportBets;
+  $("#mbimport").onclick=()=>$("#mbfile").click();
+  /* Copy and paste, not only files. Downloading a .json on a phone and then finding
+     it again in another browser is a worse experience than it sounds, and the
+     clipboard crosses devices on its own for anyone with Handoff. */
+  $("#mbcopy").onclick=async()=>{
+    const text=exportText();
+    try{
+      await navigator.clipboard.writeText(text);
+      formMsg("ok",`${BOOK.bets.length} bet(s) copied. Paste them into this page on `+
+                   `another device with <b>Paste in</b>.`);
+    }catch(e){ showPasteBox(text,true); }
+  };
+  $("#mbpaste").onclick=()=>showPasteBox("",false);
+  $("#mbfile").onchange=async e=>{
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    const r=importBets(await f.text());
+    $("#mbfile").value="";
+    if(r.error) return formMsg("bad",esc(r.error));
+    drawMyBets();
+    formMsg("ok",`${r.added} added, ${r.skipped} already here`+
+      (r.bad?`, ${r.bad} unusable`:"")+".");
+  };
+  /* One delegated handler for the whole list: rows are rewritten on every draw,
+     so per-row listeners would be re-bound constantly and leak the old ones. */
+  $("#mblist").onclick=e=>{
+    const b=e.target.closest("button[data-act]"); if(!b) return;
+    if(b.dataset.act==="edit") editBet(b.dataset.id);
+    if(b.dataset.act==="del") deleteBet(b.dataset.id);
+  };
+}
+
 function drawMyBets(){
   const M=D.mybets||{state:"never fetched"};
   const st=$("#mbstate");
-  const setup=(title,body)=>{
-    st.innerHTML=`<div class="banner"><b>${title}</b>${body}</div>`;
-    ["#mbbar","#mbcurveh","#mbcurve","#mbcuth","#mbcutwrap","#mblisth","#mblistwrap"]
-      .forEach(s=>$(s).hidden=true);
-    $("#mbcards").innerHTML=""; $("#mbproblems").innerHTML="";
-  };
-  const HOWTO=
-    `Add a tab called <b>My Bets</b> to the same Google Sheet the grades are in, with `+
-    `these columns in the first row: <b>Date, Week, Team, Market, Side, Line, Odds, `+
-    `Units, Book, Notes</b>. One row per bet. <br><br>`+
-    `<b>Week</b> and <b>Team</b> are how a bet is matched to a game — a team plays once `+
-    `a week, so that is enough. <b>Market</b> is spread, moneyline or total. <b>Line</b> `+
-    `is the number you took, written from your side (−7.5 if you laid 7.5, +3 if you `+
-    `took 3). <b>Side</b> is only for totals: over or under. <b>Odds</b> defaults to `+
-    `−110 if you leave it blank. <b>Units</b> is your stake. Everything else is grading, `+
-    `and it happens automatically within half an hour.<br><br>`+
-    `Bowls and playoff games use <b>99</b> as the week. A playoff team plays more than `+
-    `one game in that bucket, so put the kickoff date in <b>Date</b> for those — it is `+
-    `the only time the date is needed.`;
-  if(M.state==="never fetched") return setup("Bet log not set up yet", HOWTO);
-  if(M.state==="no tab")
-    return setup("No “My Bets” tab found",
-      HOWTO+`<br><br><span class="muted">Tabs seen in the workbook: `+
-      `${esc((M.tabs_seen||[]).join(", "))||"none"}</span>`);
-  if(M.state==="error")
-    return setup("The bet log could not be read", esc(M.error||""));
-
-  const bets=M.bets||[], t=M.totals||{};
-  if(!bets.length && !(M.problems||[]).length)
-    return setup("The “My Bets” tab is empty",
-      `The tab is there and readable — there are just no bets in it yet. `+HOWTO);
+  const bets=allBets(), t=bookTotals(bets,+$("#unitsize").value||0);
 
   ["#mbbar","#mbcurveh","#mbcurve","#mbcuth","#mbcutwrap","#mblisth","#mblistwrap"]
     .forEach(s=>$(s).hidden=false);
-  st.innerHTML="";
+
+  /* An empty book gets an explanation of the form directly above it, not a wall of
+     spreadsheet instructions. The sheet is now a legacy import path, so its state is
+     a footnote at the bottom rather than a banner that blocks the page. */
+  st.innerHTML = bets.length ? "" :
+    `<div class="banner ok"><b>Nothing logged yet</b>`+
+    `Pick a game above, choose a side — the chips carry the number and the price on `+
+    `offer — set your stake in units, and press <b>Log bet</b>. It grades itself when `+
+    `the score lands. Everything below fills in from there.<br><br>`+
+    `There are <b>Log</b> buttons on the Best bets and Schedule tabs too, which fill `+
+    `this form in for you.</div>`;
+  if(!STORE_OK) st.innerHTML=
+    `<div class="banner"><b>This browser will not save anything</b>Storage is blocked — `+
+    `private browsing does this. Bets will disappear when you close the tab.</div>`+st.innerHTML;
 
   const unit=+$("#unitsize").value||0;
   try{ localStorage.setItem(UNIT_KEY,String(unit)); }catch(e){}
-  const $$$=(u)=>unit?` <span class="muted">(${(u*unit).toLocaleString(undefined,
-    {style:"currency",currency:"USD",maximumFractionDigits:0})})</span>`:"";
+  const money=u=>(u*unit).toLocaleString(undefined,
+    {style:"currency",currency:"USD",maximumFractionDigits:0});
 
   $("#mbcards").innerHTML=`
     <div class="card"><div class="k">Units won</div>
       <div class="v ${cls(t.units_won)}">${t.units_won==null?"—":sgn(t.units_won,2)}</div>
-      <div class="s">${t.units_risked||0}u risked${$$$(t.units_won||0)}</div></div>
+      ${/* The dollar figure used to sit immediately after the words "u risked",
+            where it read as dollars risked while being dollars won. It now leads
+            the line and names what it is, and it is omitted entirely when nothing
+            has settled rather than printing a $0 that looks like a result. */""}
+      <div class="s">${unit&&t.settled?`${money(t.units_won||0)} won · `:""}${
+        t.units_risked||0}u risked</div></div>
     <div class="card"><div class="k">ROI</div>
       <div class="v ${cls(t.roi)}">${t.roi==null?"—":sgn(t.roi,1)+"%"}</div>
       <div class="s">per unit risked</div></div>
@@ -1455,10 +2076,15 @@ function drawMyBets(){
       <div class="s">${t.settled||0} settled</div></div>`;
 
   /* Rows that could not be graded are shown, not swallowed. A bet log that quietly
-     drops what it cannot parse is a bet log that is wrong and looks complete. */
-  const probs=M.problems||[];
+     drops what it cannot parse is a bet log that is wrong and looks complete. That
+     covers two different failures: a sheet row Python could not match to a game, and
+     a logged bet whose game is not in this season's schedule at all. */
+  const probs=(M.problems||[]).slice();
+  for(const b of bets.filter(x=>x.orphan))
+    probs.push(`${b.team||"a bet"} · ${b.market} — its game is not in the `+
+               `${D.season} schedule, so it cannot be graded`);
   $("#mbproblems").innerHTML = probs.length
-    ? `<div class="banner"><b>${probs.length} row(s) in the sheet could not be used</b>`+
+    ? `<div class="banner"><b>${probs.length} bet(s) could not be graded</b>`+
       probs.slice(0,12).map(p=>esc(p)).join("<br>")+
       (probs.length>12?`<br><span class="muted">…and ${probs.length-12} more</span>`:"")+
       `</div>` : "";
@@ -1489,10 +2115,11 @@ function drawMyBets(){
       <th class="num">Wk</th><th>Matchup</th><th>Bet</th><th class="num">Line</th>
       <th class="num">Odds</th><th class="num">Units</th><th class="num">CLV</th>
       <th class="num">Final</th><th class="num">Result</th><th class="num">Won</th>
+      <th>Where</th><th></th>
       </tr></thead><tbody>`+
     list.map(b=>`<tr>
-      <td class="num muted">${b.week}</td>
-      ${matchupCell(b.away,b.home,false)}
+      <td class="num muted">${+b.week===BOWLS?"Bowl":b.week}</td>
+      ${matchupCell(b.away||"?",b.home||"?",b.neutral)}
       <td class="pair strong"><span class="t">${esc(
         b.market==="total"?(b.side||"").toUpperCase():b.team)}</span>
         <span class="n muted">${esc(b.market==="spread"?"":b.market)}</span></td>
@@ -1502,8 +2129,41 @@ function drawMyBets(){
       <td class="num ${cls(b.clv)}">${b.clv==null?"—":sgn(b.clv,1)}</td>
       <td class="num muted">${b.home_score==null?"—":`${b.away_score}–${b.home_score}`}</td>
       <td class="num">${badge(b.result)}</td>
-      ${unitsCell(b.units_won)}</tr>`).join("")+`</tbody>`
+      ${unitsCell(b.units_won)}
+      <td><span class="srcpill" title="${b.source==="site"
+          ?"logged on this site, in this browser":"read from the Google Sheet"}">${
+          b.source==="site"?"here":"sheet"}</span></td>
+      <td class="nowrap">${b.source==="site"
+        ? `<button type="button" class="btn tiny" data-act="edit" data-id="${esc(b.id)}">Edit</button>
+           <button type="button" class="btn tiny danger" data-act="del" data-id="${esc(b.id)}">Delete</button>`
+        : `<span class="muted" style="font-size:11px">edit in the sheet</span>`}</td>
+      </tr>`).join("")+`</tbody>`
     : `<tbody><tr><td><div class="empty">No bets match that filter.</div></td></tr></tbody>`;
+
+  /* The sheet's state belongs here now, small, at the bottom. It used to be a banner
+     that took over the tab, which was right when the sheet was the only way in and
+     is wrong now that it is the legacy one. */
+  const sheetN=bets.filter(b=>b.source==="sheet").length;
+  const ago=iso=>{ if(!iso) return "";
+    const m=Math.max(0,Math.round((Date.now()-new Date(iso).getTime())/60000));
+    return m<60?`${m}m ago`:m<1440?`${Math.round(m/60)}h ago`:`${Math.round(m/1440)}d ago`; };
+  const sheetNote =
+    M.state==="ok" ? (sheetN
+      ? `${sheetN} of these came from the <b>My Bets</b> tab in the sheet, read ${
+         esc(ago(M.fetched_utc))}. Those still work; anything logged here is faster and
+         cannot be matched to the wrong game.`
+      : `The <b>My Bets</b> sheet tab is readable and empty. You do not need it — this
+         page is the log now.`)
+    : M.state==="no tab" ? `There is no <b>My Bets</b> tab in the sheet, which is fine:
+         nothing here needs one.`
+    : M.state==="error" ? `The sheet's bet tab could not be read (${esc(M.error||"")}),
+         which affects nothing logged here.`
+    : `The sheet has not been read for bets yet, which affects nothing logged here.`;
+  $("#mbfoot").innerHTML =
+    `Bets you log are stored in this browser only — there is no account and no server, `+
+    `which is what keeps the whole thing free. <b>Export</b> writes them to a file; `+
+    `<b>Import</b> reads that file back, on this device or any other. Do that before `+
+    `clearing your browsing data.<br>${sheetNote}`;
 }
 
 /* ── TEAM ────────────────────────────────────────────────────────── */

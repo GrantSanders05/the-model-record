@@ -223,6 +223,53 @@ for word in ("Bowls", "bowl", "Playoff", "postseason"):
     ok("week %r is understood as the bowls bucket" % word,
        len(b) == 1 and b[0]["week"] == 99, b and b[0].get("week"))
 
+# ── the shared case table ─────────────────────────────────────────────────────
+#
+# The cases above are written out longhand because they are the readable record of
+# what "graded correctly" means. This runs the SAME arithmetic from a JSON file
+# that the browser's grader also reads, and that is the point of the file: bets are
+# now entered on the site and graded there, so the same book is served by two
+# implementations. Two implementations of anything drift. When they do, this goes
+# red on one side and tools/qa/research.mjs goes red on the other, instead of the
+# two producing different totals that nobody can reconcile.
+print("\n── the shared case table, as Python grades it ──")
+import json as _json
+
+_CASES = _json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "grading_cases.json")))
+
+
+def _case_game(name):
+    """The table's neutral game shape, in the column names bet_log expects."""
+    g = _CASES["games"][name]
+    return {"game_id": name, "home_team": g["home"], "away_team": g["away"],
+            "home_score": g["home_score"], "away_score": g["away_score"],
+            "home_margin": g["line"], "total": g["total"],
+            "home_ml": g.get("home_ml"), "away_ml": g.get("away_ml"),
+            "kickoff": "2025-09-06T18:00", "neutral_site": 0, "week": 1}
+
+
+_bad = 0
+for c in _CASES["cases"]:
+    g = _case_game(c["game"])
+    b = {"team": c["team"], "market": c["market"], "side": c.get("side"),
+         "line": c["line"], "odds": c["odds"], "units": c["units"]}
+    r, u, _d = bet_log.grade_bet(b, g)
+    clv = bet_log.closing_clv(b, g)
+    good = (r == c["result"]
+            and (u is None if c["units_won"] is None else near(u, c["units_won"], 5e-4))
+            and (clv is None if c["clv"] is None else near(clv, c["clv"], 5e-4)))
+    if not good:
+        _bad += 1
+        print("     %s -> %s %s clv %s, expected %s %s clv %s"
+              % (c["why"], r, u, clv, c["result"], c["units_won"], c["clv"]))
+ok("all %d shared cases grade as written" % len(_CASES["cases"]), _bad == 0,
+   "%d wrong" % _bad)
+ok("the table covers every market",
+   {c["market"] for c in _CASES["cases"]} == {"spread", "moneyline", "total"})
+ok("the table covers win, loss, push and not-yet-graded",
+   {c["result"] for c in _CASES["cases"]} == {"W", "L", "P", None})
+
 print("\n" + "=" * 62)
 print("%d passed, %d failed" % (P, F))
 
