@@ -102,7 +102,12 @@ def parse_rows(rows):
     to parse is a bet missing from a record that claims to be complete.
     """
     if not rows:
-        return [], ["the tab is empty"]
+        # An empty tab is an empty log, not a fault. It used to be reported as a
+        # problem, which was reasonable when the sheet was the only way to log a
+        # bet and is wrong now that it is the optional one: the site would print
+        # "1 bet could not be graded — the tab is empty" at somebody who has a
+        # perfectly good book and simply is not using the spreadsheet.
+        return [], []
     header, body = None, []
     for i, r in enumerate(rows):
         cells = [_norm(c) for c in r]

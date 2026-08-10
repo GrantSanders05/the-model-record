@@ -511,6 +511,12 @@ console.log("\n── my bets: agreement with Python on real bets ──");
   } else {
     ok("an empty sheet log is a footnote, not a wall",
        $("#mbfoot").textContent.length > 0 && $("#mbstate").textContent.length < 600);
+    // A `My Bets` tab that exists with nothing in it is an empty log, not a fault.
+    // It was reported as a problem row, so the site told somebody with a perfectly
+    // good book that one of their bets could not be graded.
+    ok("an empty sheet tab is not reported as a broken bet",
+       !$("#mbproblems").textContent.includes("could not be graded"),
+       $("#mbproblems").textContent.slice(0, 80));
   }
 }
 
