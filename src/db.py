@@ -293,6 +293,7 @@ def _migrate(conn):
             conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, decl))
     conn.commit()
     repair_half_scored(conn)
+    repair_duplicate_lines(conn)
 
 
 def connect(path=DB_PATH):
@@ -382,7 +383,63 @@ def snapshot_lines(conn, rows, observed_at=None):
     return len(rows)
 
 
+# The order a book is trusted in. Canonical here rather than in fetch_cfb, because
+# both the writer and the duplicate repair below have to agree about which of two
+# rows for the same game is the one to keep.
+LINE_PROVIDER_PRIORITY = ["consensus", "DraftKings", "Bovada", "ESPN Bet",
+                          "Caesars Sportsbook (Colorado)",
+                          "William Hill (New Jersey)"]
+
+
+def repair_duplicate_lines(conn):
+    """
+    Collapse `lines` to ONE row per game. Returns how many were removed.
+
+    The table is keyed (game_id, provider), which quietly permits a game to hold a
+    row per book — and every join in this project is `LEFT JOIN lines ON game_id`,
+    with no provider clause anywhere. One extra row therefore duplicates that game
+    through the schedule, the bets board, the pick list and the bet matcher, and it
+    does it silently: the row simply appears twice, its edge counted twice in every
+    summary above it.
+
+    It took a season to show up because it needs the preferred book to CHANGE. Early
+    in a week only one book has posted, so `_pick_line` stores that one; when a
+    higher-priority book appears, the next fetch stores that one too and the first is
+    never removed. Two rows, two of everything downstream.
+
+    Found by a QA assertion that the Staked card equals the staked column: the card
+    sums a Map keyed by game_id and the column sums rendered rows, so a duplicate is
+    the one thing that can make two views of one number disagree. $2,761.63 against
+    $2,800.00, from two games out of nine hundred.
+    """
+    order = {p: i for i, p in enumerate(LINE_PROVIDER_PRIORITY)}
+    dupes = [r["game_id"] for r in conn.execute(
+        "SELECT game_id FROM lines GROUP BY game_id HAVING COUNT(*) > 1")]
+    removed = 0
+    for gid in dupes:
+        rows = conn.execute(
+            "SELECT provider, home_margin, total, home_ml FROM lines WHERE game_id=?",
+            (gid,)).fetchall()
+        # Priority first; then whichever row actually carries numbers, so a repair
+        # never trades a populated line for an empty one from a better-named book.
+        keep = sorted(rows, key=lambda r: (
+            order.get(r["provider"], len(order)),
+            -sum(x is not None for x in (r["home_margin"], r["total"], r["home_ml"])),
+            r["provider"] or ""))[0]["provider"]
+        removed += conn.execute(
+            "DELETE FROM lines WHERE game_id=? AND provider<>?", (gid, keep)).rowcount
+    if removed:
+        conn.commit()
+    return removed
+
+
 def upsert_lines(conn, rows):
+    # One row per game, enforced at the door. Without this the repair above would
+    # have to run after every fetch to undo what the fetch just did.
+    ids = sorted({r["game_id"] for r in rows})
+    for gid in ids:
+        keep = next(r["provider"] for r in rows if r["game_id"] == gid)
+        conn.execute("DELETE FROM lines WHERE game_id=? AND provider<>?", (gid, keep))
     conn.executemany(
         """
         INSERT INTO lines (game_id, provider, home_margin, home_margin_open,

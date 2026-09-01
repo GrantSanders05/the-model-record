@@ -37,8 +37,9 @@ ENV_FILE = "/Users/haileyclark/Downloads/S2-Media/_s2-media/config/cfbd.env"
 
 BASE = "https://api.collegefootballdata.com"
 MONTHLY_CAP = 900          # leave 100 in reserve for live in-season updates
-PROVIDER_PRIORITY = ["consensus", "DraftKings", "Bovada", "ESPN Bet",
-                     "Caesars Sportsbook (Colorado)", "William Hill (New Jersey)"]
+# One definition, shared with the duplicate repair in db.py: the writer and the
+# repair must agree about which of two rows for a game is the one to keep.
+PROVIDER_PRIORITY = db.LINE_PROVIDER_PRIORITY
 
 
 # ── credentials ────────────────────────────────────────────────────────────────

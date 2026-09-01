@@ -500,6 +500,47 @@ for _f in _os2.listdir(_t3):
     _os2.unlink(_os2.path.join(_t3, _f))
 _os2.rmdir(_t3)
 
+# ── one line row per game ─────────────────────────────────────────────────────
+print("\n── a game may hold only one line ──")
+_t4 = _tf2.mkdtemp()
+_D = db.connect(_os2.path.join(_t4, "lines.db"))
+_D.execute("INSERT INTO games (game_id, sport, season, week, season_type, kickoff,"
+           " home_team, away_team, neutral_site) VALUES"
+           " ('g','cfb',2026,3,'regular','2026-09-19T18:00','A','B',0)")
+_D.executemany(
+    "INSERT INTO lines (game_id, provider, home_margin, total, home_ml, away_ml)"
+    " VALUES (?,?,?,?,?,?)",
+    [("g", "Bovada", -3.0, 51.0, 140, -160),
+     ("g", "DraftKings", -3.5, 51.5, 145, -165)])
+_D.commit()
+
+# The join every consumer uses. Two providers, one game, two rows out.
+_n = _D.execute("SELECT COUNT(*) c FROM games g LEFT JOIN lines l"
+                " ON l.game_id=g.game_id").fetchone()["c"]
+ok("two providers duplicate the game through a join — the bug", _n == 2, _n)
+_removed = db.repair_duplicate_lines(_D)
+ok("the repair removes the surplus row", _removed == 1, _removed)
+_n2 = _D.execute("SELECT COUNT(*) c FROM games g LEFT JOIN lines l"
+                 " ON l.game_id=g.game_id").fetchone()["c"]
+ok("...leaving exactly one row per game", _n2 == 1, _n2)
+ok("...and it keeps the higher-priority book",
+   _D.execute("SELECT provider p FROM lines").fetchone()["p"] == "DraftKings")
+
+# And the writer must not be able to recreate it.
+db.upsert_lines(_D, [{"game_id": "g", "provider": "Bovada", "home_margin": -4.0,
+                      "home_margin_open": None, "total": 52.0, "total_open": None,
+                      "home_ml": 150, "away_ml": -170}])
+ok("writing a different book replaces rather than adds",
+   _D.execute("SELECT COUNT(*) c FROM lines").fetchone()["c"] == 1,
+   _D.execute("SELECT COUNT(*) c FROM lines").fetchone()["c"])
+ok("...with the book just written",
+   _D.execute("SELECT provider p FROM lines").fetchone()["p"] == "Bovada")
+
+_D.close()
+for _f in _os2.listdir(_t4):
+    _os2.unlink(_os2.path.join(_t4, _f))
+_os2.rmdir(_t4)
+
 print("=" * 62)
 print("%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)
