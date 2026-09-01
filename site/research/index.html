@@ -399,9 +399,11 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
 <!-- ── BEST BETS ───────────────────────────────────────────────────── -->
 <section class="view" id="v-bets">
   <h2>Best bets</h2>
-  <p class="sub">Moneyline value is expected value with the vig removed; spread value is
-     raw disagreement with the closing number. Everything here is a hypothesis being
-     tracked, not a bet known to be good.</p>
+  <p class="sub"><b>Edge</b> is the raw disagreement with the closing number.
+     <b>Worth</b> is what that disagreement has historically been worth — only about
+     an eighth of it shows up, so an eleven-point gap is a point and a half of real
+     edge. Read Worth. Everything here is a hypothesis being tracked, not a bet
+     known to be good.</p>
   <div class="cards" id="betcards"></div>
   <div class="bar">
     <div class="field"><label for="sortby">Rank by</label>
@@ -1259,9 +1261,10 @@ function drawBets(){
   }else if(by!=="ml"){
     warn.hidden=false;
     warn.innerHTML=`<b>Sizing does not apply to spread disagreement</b>`+
-      `A stake needs a win probability, and the model does not export one against the spread — `+
-      `only against the moneyline, where the vig can be stripped out and a real EV computed. `+
-      `Rank by moneyline EV to size anything.`;
+      `A stake needs a win probability and the model does not export one against the spread, `+
+      `so these plays are unsized. That is not a reason to go and size them on the moneyline: `+
+      `the moneyline is the one market this model has been measured in and found to have no `+
+      `edge. Flat stakes on the spread are the honest way to bet this board.`;
   }else{
     /* The moneyline has been measured and it does not work. Saying so on the view
        itself, every time, is the only version of this that survives a Saturday. */
