@@ -1,0 +1,33 @@
+{
+  "ats_pct": 55.26601520086862,
+  "calib_slope": 1.0021975998315251,
+  "ci_hi": 58.448789605843665,
+  "ci_lo": 52.03949292816,
+  "computed_utc": "2026-09-01T05:26:03.735481+00:00",
+  "config": {
+    "blend_weight": 0.5,
+    "grade_formula": "sheet",
+    "grade_scale": 2.0,
+    "hfa": 4.0,
+    "lq_fcs": -4.0,
+    "lq_ranked": 0.0,
+    "lq_unranked_fbs": -2.0,
+    "neutral_hfa": 0.0,
+    "quality_scale": 1.0,
+    "rater": "grades",
+    "scale": 1.161,
+    "sheet_coach_weight": 1.0,
+    "sheet_loss_sign": -1.0,
+    "sheet_raw_wl": 0.0,
+    "wq_other": 0.0,
+    "wq_top10": 3.0,
+    "wq_top25": 2.0,
+    "wq_top5": 4.0
+  },
+  "config_fingerprint": "f19a93c4c87e",
+  "mae": 12.901933010296391,
+  "n": 921,
+  "roi": 5.507847201658273,
+  "season": 2025,
+  "vs_baseline": -0.96
+}

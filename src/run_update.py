@@ -96,6 +96,12 @@ def validation_backtest(conn, sport, current_season, config):
         (sport, current_season)).fetchone()
     season = row and row["s"]
     if not season:
+        # Said out loud. CI restores a database holding only the CURRENT season's
+        # grades — the historical ones were imported from a workbook on Grant's
+        # machine — so this returns None there every run, and returning it quietly
+        # is how the public page lost its whole evidence section without a word.
+        print("  no completed season with grades in this database — using the "
+              "committed validation summary instead (see data/validation/).")
         return None
     try:
         _, m = season_grade(conn, sport, season, config)

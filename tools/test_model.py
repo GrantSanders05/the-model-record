@@ -116,6 +116,29 @@ else:
         F += 1
         print("  [FAIL] scale=3.0 still calibrated — the check proves nothing")
 
+print("\n── the committed validation summary matches the live config ──")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import write_validation as wv            # noqa: E402
+import glob                              # noqa: E402
+
+files = sorted(glob.glob(os.path.join(ROOT, "data", "validation", "cfb_*.json")))
+ok("a validation summary is committed", bool(files),
+   "run tools/write_validation.py --season <last complete season>")
+if files:
+    v = json.load(open(files[-1]))
+    ok("it carries the fingerprint of the config it was computed under",
+       bool(v.get("config_fingerprint")))
+    # A frozen number with no way to notice it has gone stale is worse than none.
+    # Change `scale` or the rater and this fails until it is regenerated.
+    ok("...and that fingerprint still matches config/cfb_grades.json",
+       v.get("config_fingerprint") == wv.fingerprint(CFG),
+       "committed %s vs current %s — re-run tools/write_validation.py"
+       % (v.get("config_fingerprint"), wv.fingerprint(CFG)))
+    ok("it reports an interval, not just a headline",
+       v.get("ci_lo") is not None and v.get("ci_hi") is not None)
+    ok("it leaks no grades", not any(
+        k for k in v if k in ("grades", "teams", "ratings")), sorted(v))
+
 print("=" * 62)
 print("%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)

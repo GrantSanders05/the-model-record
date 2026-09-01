@@ -206,10 +206,12 @@ def render(conn, sport="cfb", backtest_summary=None):
         ("95%% CI %.1f–%.1f%%" % (b["ci_lo"], b["ci_hi"])
          if b.get("ci_lo") is not None else "one season"),
         b["roi"], b["vs_baseline"],
-        ("The whole interval sits above break-even, which is the test that matters."
-         if b.get("ci_lo", 0) > 52.38 else
-         "The interval still includes break-even. Above it is encouraging; proven "
-         "needs more seasons, and this is one."))
+        (("The whole interval sits above break-even, which is the test that matters."
+          if b.get("ci_lo", 0) > 52.38 else
+          "The interval still includes break-even. Above it is encouraging; proven "
+          "needs more seasons, and this is one.")
+         + (" <strong>This figure was computed under an older configuration and has "
+            "not been regenerated.</strong>" if b.get("stale") else "")))
 
     # Week by week, in public. A single season-long percentage is the number that
     # is easiest to keep quiet about a bad month inside; splitting it is the
@@ -461,11 +463,30 @@ def _backtest_summary(sport="cfb"):
     import glob
     found = sorted(glob.glob(os.path.join(ROOT, "output", "%s_backtest_*.json" % sport)))
     if not found:
+        # CI restores a database with only the current season's grades, so it cannot
+        # recompute this. The committed summary in data/validation/ is six numbers —
+        # no grades, nothing that puts the moat in a public repo — and it carries a
+        # fingerprint of the config it was computed under so a stale one announces
+        # itself rather than quietly misrepresenting the current model.
+        found = sorted(glob.glob(os.path.join(ROOT, "data", "validation",
+                                              "%s_*.json" % sport)))
+    if not found:
         return None
     try:
-        return json.load(open(found[-1]))
+        b = json.load(open(found[-1]))
     except ValueError:
         return None
+    cfg_path = os.path.join(ROOT, "config", "%s_grades.json" % sport)
+    if b.get("config_fingerprint") and os.path.exists(cfg_path):
+        try:
+            import sys as _sys
+            _sys.path.insert(0, os.path.join(ROOT, "tools"))
+            import write_validation as _wv
+            b["stale"] = (_wv.fingerprint(json.load(open(cfg_path)))
+                          != b["config_fingerprint"])
+        except Exception:                          # noqa: BLE001 - never block a page
+            b["stale"] = None
+    return b
 
 
 if __name__ == "__main__":
