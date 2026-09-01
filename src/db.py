@@ -227,7 +227,61 @@ ADDED_COLUMNS = [
     ("picks_log", "ml_odds_at_pick", "INTEGER"),
     ("picks_log", "closing_ml", "INTEGER"),
     ("picks_log", "ml_result", "TEXT"),
+    # A pick is never deleted. It can be VOIDED — marked, with a reason, and left
+    # in place — which is the only honest way to withdraw something from a record
+    # that claims to be append-only. Every reader excludes voided rows; the rows
+    # themselves stay so the withdrawal is auditable and reversible.
+    ("picks_log", "voided_at", "TEXT"),
+    ("picks_log", "void_reason", "TEXT"),
 ]
+
+# Appended to any query that computes the published record.
+NOT_VOIDED = "voided_at IS NULL"
+
+
+# ── what "final" means ─────────────────────────────────────────────────────────
+#
+# A game is FINAL when BOTH scores are present, and at no other time. This looks
+# too obvious to write down, and it cost the 2026 season: fourteen places asked
+# `home_score IS NOT NULL` and then subtracted `away_score`, so one row carrying a
+# home score and a NULL away score took the whole export down with
+#
+#     TypeError: unsupported operand type(s) for -: 'int' and 'NoneType'
+#
+# CFBD hands back exactly that shape for a game that is in progress, forfeited, or
+# mid-correction. Every scheduled update from 22 Aug onward died on it, and because
+# the half-hourly refresh job never re-fetches, the site stayed green and two weeks
+# of results were silently discarded.
+#
+# So the definition lives here, once, and everything reads it from here.
+FINAL_SQL = "home_score IS NOT NULL AND away_score IS NOT NULL"
+
+
+def is_final(row):
+    """True only when a game has both scores. Accepts a Row or a dict."""
+    try:
+        return row["home_score"] is not None and row["away_score"] is not None
+    except (KeyError, IndexError):
+        return False
+
+
+def repair_half_scored(conn):
+    """
+    Blank any game carrying one score, and report how many. Returns the count.
+
+    A half-scored row is not data, it is a snapshot of a game in flight. Storing it
+    means every consumer has to defend against it forever; blanking it at the door
+    means "final" stays a property of the row rather than a thing each caller has
+    to re-derive. The next fetch rewrites it with both scores once the game ends.
+    """
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM games "
+        "WHERE (home_score IS NULL) != (away_score IS NULL)").fetchone()["c"]
+    if n:
+        conn.execute("UPDATE games SET home_score = NULL, away_score = NULL "
+                     "WHERE (home_score IS NULL) != (away_score IS NULL)")
+        conn.commit()
+    return n
 
 
 def _migrate(conn):
@@ -238,6 +292,7 @@ def _migrate(conn):
         if column not in have:
             conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, decl))
     conn.commit()
+    repair_half_scored(conn)
 
 
 def connect(path=DB_PATH):

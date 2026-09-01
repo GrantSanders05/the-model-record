@@ -125,7 +125,7 @@ def run(games, config, test_seasons=None, score_only_with_line=True):
 
         in_test = test is None or season in test
         # ---- PREDICT BEFORE OBSERVE. Do not reorder these two blocks. ----
-        if in_test and g["home_score"] is not None:
+        if in_test and g["home_score"] is not None and g["away_score"] is not None:
             p = model.predict(g)
             if not (score_only_with_line and g["market_margin"] is None):
                 rec = {

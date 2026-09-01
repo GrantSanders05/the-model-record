@@ -139,6 +139,13 @@ def games_rows(raw, season, season_type):
     rows = []
     for g in raw:
         hs, as_ = g.get("homePoints"), g.get("awayPoints")
+        # A game is final with BOTH scores or neither. CFBD reports one side alone
+        # for a game in progress or mid-correction, and a half-scored row is not a
+        # result -- it is a snapshot of something still happening. Letting it into
+        # the database made every consumer responsible for defending against it,
+        # and thirteen of the fourteen did not. See db.FINAL_SQL.
+        if hs is None or as_ is None:
+            hs = as_ = None
         rows.append({
             "game_id": "cfb-%s" % g["id"],
             "sport": "cfb",

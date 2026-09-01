@@ -68,7 +68,7 @@ def generate(conn, sport, config, week=None, season=None):
             seen_season = g["season"]
             model.new_season(seen_season)
 
-        played = g["home_score"] is not None
+        played = g["home_score"] is not None and g["away_score"] is not None
         if not played and g["season"] == current_season:
             if week is not None and g["week"] != week:
                 continue

@@ -26,6 +26,7 @@ numbers better than the closing line it is finding something. If it does not, a
 winning record is luck that will end.
 """
 
+import db
 import metrics
 
 BREAK_EVEN = metrics.BREAK_EVEN
@@ -246,7 +247,8 @@ def weekly(rows, week_labels=None):
 
 def summary(conn, sport, season=None, week_labels=None):
     """Everything, from the graded ledger only. Ungraded picks are not results."""
-    q = ("SELECT * FROM picks_log WHERE sport=? AND graded_at IS NOT NULL")
+    q = ("SELECT * FROM picks_log WHERE sport=? AND graded_at IS NOT NULL"
+         " AND " + db.NOT_VOIDED)
     args = [sport]
     if season:
         q += " AND season=?"
@@ -256,7 +258,8 @@ def summary(conn, sport, season=None, week_labels=None):
     # Locked but not yet playable, reported separately so an empty record reads as
     # "nothing has finished" rather than as "the model has no results".
     pend = conn.execute(
-        "SELECT COUNT(*) c FROM picks_log WHERE sport=? AND graded_at IS NULL",
+        "SELECT COUNT(*) c FROM picks_log WHERE sport=? AND graded_at IS NULL"
+        " AND " + db.NOT_VOIDED,
         (sport,)).fetchone()["c"]
 
     if not rows:

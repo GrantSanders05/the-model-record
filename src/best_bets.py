@@ -210,7 +210,7 @@ def main():
         "SELECT MAX(season) s FROM games WHERE sport=?", (args.sport,)).fetchone()["s"]
     preseason = conn.execute(
         "SELECT COUNT(*) n FROM games "
-        "WHERE sport=? AND season=? AND home_score IS NOT NULL",
+        "WHERE sport=? AND season=? AND " + db.FINAL_SQL,
         (args.sport, season)).fetchone()["n"] == 0
 
     if preseason:

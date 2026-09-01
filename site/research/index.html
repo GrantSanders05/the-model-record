@@ -1156,15 +1156,28 @@ function allocate(rows, mode, bank, weekly){
   }
   const byWeek=new Map();
   play.forEach(r=>{ const w=weekOf(r); if(!byWeek.has(w)) byWeek.set(w,[]); byWeek.get(w).push(r); });
+  /* Rounding each stake to the cent independently leaves the week a few cents off
+     the budget -- $799.83 against a stated $800. Both weekly modes promise to spend
+     EXACTLY the budget, so the remainder is distributed by largest fractional part
+     rather than dropped: the same rule an apportionment problem always wants, and
+     the reason the total now equals what the control says it will. */
+  const toBudget=(list, want)=>{
+    const raw=list.map(r=>Math.max(0, want(r)));
+    const floors=raw.map(v=>Math.floor(v*100));
+    let left=Math.round(weekly*100)-floors.reduce((a,b)=>a+b,0);
+    const order=raw.map((v,i)=>[v*100-floors[i], i])
+                   .sort((a,b)=>b[0]-a[0]).map(x=>x[1]);
+    for(let k=0; left>0 && k<order.length; k++, left--) floors[order[k]]++;
+    list.forEach((r,i)=>out.set(r.game_id, floors[i]/100));
+  };
   byWeek.forEach(list=>{
     if(mode==="flat"){
-      const each=cents(weekly/list.length);
-      list.forEach(r=>out.set(r.game_id,each));
+      toBudget(list, ()=>weekly/list.length);
     }else{
       const tot=list.reduce((s,r)=>s+(r.stake||0),0);
       /* tot>0 is guaranteed by the filter above, but dividing by a sum is exactly
          the line that turns an empty week into NaN in every cell. */
-      list.forEach(r=>out.set(r.game_id, tot>0 ? cents(weekly*(r.stake||0)/tot) : 0));
+      toBudget(list, r=> tot>0 ? weekly*(r.stake||0)/tot : 0);
     }
   });
   return out;

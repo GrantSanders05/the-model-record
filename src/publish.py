@@ -138,6 +138,7 @@ def render(conn, sport="cfb", backtest_summary=None):
     rec = ledger.record(conn, sport)
     pending = [dict(r) for r in conn.execute(
         "SELECT * FROM picks_log WHERE sport=? AND graded_at IS NULL "
+        "AND voided_at IS NULL "
         "ORDER BY kickoff LIMIT 60", (sport,))]
     graded = sorted(rec["rows"], key=lambda r: r["kickoff"] or "", reverse=True)[:150]
     now = dt.datetime.now(dt.timezone.utc).strftime("%d %b %Y %H:%M UTC")

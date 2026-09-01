@@ -206,10 +206,22 @@ def main():
 
     label = "%s@%s" % (os.path.basename(cfg_path).replace(".json", ""),
                        started.strftime("%Y-%m-%d"))
-    locked, already_started = ledger.lock(conn, args.sport, picks, label, now=started)
+    locked, already_started, deferred = ledger.lock(
+        conn, args.sport, picks, label, now=started)
     graded = ledger.grade(conn, args.sport, now=started)
     print("  locked %d new pick(s); skipped %d already under way; graded %d"
           % (locked, already_started, graded))
+    print("  held back %d pick(s) beyond the %d-day window — they are locked closer"
+          % (deferred, ledger.LOCK_WINDOW_DAYS))
+    print("  to kickoff, from that week's grades and a line near its close.")
+    missed, examples = ledger.missed_locks(conn, args.sport, season, now=started)
+    if missed:
+        print("  WARNING: %d priced game(s) kicked off with NO pick locked." % missed)
+        print("  A pick that was never recorded leaves the record looking better")
+        print("  than the model was. Most recent:")
+        for e in examples:
+            print("    wk %-3s %s  %s @ %s"
+                  % (e["week"], (e["kickoff"] or "")[:10], e["away_team"], e["home_team"]))
     rec = ledger.record(conn, args.sport)
     if rec.get("ats_pct") is not None:
         lo, hi = rec["ats_ci95"]

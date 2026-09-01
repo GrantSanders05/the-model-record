@@ -238,7 +238,7 @@ def grade_bet(b, g):
     Graded at the line and price in the bet, never at the closing number. That is
     the whole point of writing it down: what he got, not what was available.
     """
-    if g["home_score"] is None:
+    if g["home_score"] is None or g["away_score"] is None:
         return None, None, "not final"
     margin = g["home_score"] - g["away_score"]          # home perspective
     total = g["home_score"] + g["away_score"]

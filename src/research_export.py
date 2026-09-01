@@ -107,37 +107,59 @@ def conferences(season):
     return out
 
 
-def display_weeks(conn, sport, season, min_gap_days=3):
+def football_week_of(day):
+    """
+    The Tuesday that starts the football week containing `day`.
+
+    College football weeks run Tuesday to Monday: a Thursday opener, a Saturday
+    slate and a Monday night game all belong to the same week. Bucketing on the
+    preceding Tuesday is therefore the calendar the sport actually uses, and unlike
+    a gap it does not move when a game is added.
+    """
+    d = dt.date.fromisoformat(str(day)[:10])
+    return d - dt.timedelta(days=(d.weekday() - 1) % 7)
+
+
+def display_weeks(conn, sport, season):
     """
     {game_id: label} — the week a human would call it.
 
-    CFBD has no week 0. The late-August slate that everyone calls Week 0 is filed
-    under week 1, so the site showed one 211-game "week 1" spanning twelve days and
-    two distinct weekends. Splitting it back out is a DISPLAY concern only: games.week
-    is the walk-forward guard and the key the ledger's locked picks are stamped with,
-    so it is never rewritten. Only the label changes.
+    CFBD has no week 0. The late-August slate everyone calls Week 0 is filed under
+    week 1, so the site showed one 211-game "week 1" spanning twelve days and two
+    distinct weekends. Splitting it back out is a DISPLAY concern only: games.week is
+    the walk-forward guard and the key the ledger stamps locked picks with, so it is
+    never rewritten. Only the label changes.
 
-    The split is found in the calendar rather than hard-coded, because the date moves
-    every year: inside week 1, look for a gap of `min_gap_days` or more between
-    consecutive kickoff dates. There is exactly one in a real schedule -- the empty
-    week between the Week 0 games and Labor Day weekend -- and if there is none (a
-    season with no Week 0 at all) nothing is relabelled.
+    THIS USED TO LOOK FOR A THREE-DAY GAP and it broke the moment the season began.
+    The 2026 schedule opened 27-30 Aug, then rested until 3 Sep -- a four-day hole
+    the rule found easily in August. Once games started moving, something landed in
+    the hole, the gap fell under three days, and the split silently stopped
+    happening: week 0 went to zero games, the schedule tab showed one enormous week,
+    and the QA suite failed on an assertion about the DATA rather than the code, in
+    the workflow nobody was watching. A rule that depends on an absence is a rule
+    that any addition can break.
+
+    Bucketing by football week has no such dependency. Group week 1's games by the
+    Tuesday that starts their week; if that yields two buckets, the earlier one is
+    Week 0. The guard is that Week 0 must be the SMALLER slate -- a genuine week 0 is
+    a handful of early games ahead of a full opening weekend, and if the earlier
+    bucket is the larger one then this is an ordinary week that happens to straddle
+    a Tuesday and must be left alone.
     """
     rows = [dict(r) for r in conn.execute(
         "SELECT game_id, kickoff FROM games "
         "WHERE sport=? AND season=? AND week=1 AND kickoff IS NOT NULL "
         "ORDER BY kickoff", (sport, season))]
-    if not rows:
-        return {}
-    days = sorted({r["kickoff"][:10] for r in rows})
-    cut = None
-    for a, b in zip(days, days[1:]):
-        da, db_ = dt.date.fromisoformat(a), dt.date.fromisoformat(b)
-        if (db_ - da).days >= min_gap_days:
-            cut = b
-            break
-    labels = {} if not cut else {
-        r["game_id"]: 0 for r in rows if r["kickoff"][:10] < cut}
+    labels = {}
+    if rows:
+        buckets = {}
+        for r in rows:
+            buckets.setdefault(football_week_of(r["kickoff"]), []).append(r["game_id"])
+        ordered = sorted(buckets)
+        if len(ordered) >= 2:
+            first, rest = buckets[ordered[0]], sum(len(buckets[k]) for k in ordered[1:])
+            if len(first) < rest:
+                labels = {gid: 0 for gid in first}
     labels.update(bowl_weeks(conn, sport, season))
     return labels
 
@@ -204,7 +226,7 @@ def schedule(conn, sport, season, priced, labels, rated=(), keep=()):
                 and str(r["game_id"]) not in keep):
             continue
         p = priced.get(r["game_id"])
-        played = r["home_score"] is not None
+        played = db.is_final(r)
         rec = {
             "game_id": r["game_id"],
             "week": labels.get(r["game_id"], r["week"]),
@@ -307,7 +329,7 @@ def team_results(conn, sport, season):
         for team, opp, is_home in ((r["home_team"], r["away_team"], True),
                                    (r["away_team"], r["home_team"], False)):
             margin = None
-            if r["home_score"] is not None:
+            if db.is_final(r):
                 margin = (r["home_score"] - r["away_score"]) * (1 if is_home else -1)
             mkt = r["home_margin"]
             out.setdefault(team, []).append({
@@ -443,7 +465,7 @@ def main():
     # every rating is a preseason estimate. The site says so rather than
     # presenting week-1 numbers as if they carried the model's measured edge.
     preseason = conn.execute(
-        "SELECT COUNT(*) n FROM games WHERE sport=? AND season=? AND home_score IS NOT NULL",
+        "SELECT COUNT(*) n FROM games WHERE sport=? AND season=? AND " + db.FINAL_SQL,
         (args.sport, season)).fetchone()["n"] == 0
 
     grade_season = latest_season_with(conn, "grades", args.sport, season) or season

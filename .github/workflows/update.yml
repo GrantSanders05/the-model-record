@@ -9,7 +9,14 @@ name: The Model — scheduled update
 
 on:
   schedule:
-    - cron: "0 11 * * *"        # daily: results, fresh grades, fresh picks
+    # SUNDAY IS THE WEEK'S CLOSE. Saturday's late kickoffs are final by ~06:00 UTC,
+    # so 12:00 UTC (7am CT) grades the whole weekend, refreshes the record and
+    # republishes both pages before Grant looks at anything.
+    - cron: "0 12 * * 0"        # Sunday morning: close the week out
+    # And every other day, because locking happens on a three-day window now: a
+    # Thursday night game has to be locked on Monday or Tuesday, a Saturday game on
+    # Wednesday or Thursday. A weekly-only run would lock nothing in time.
+    - cron: "0 11 * * *"        # daily: results, fresh grades, lock what is close
     - cron: "0 15 * * 2"        # Tuesday midday: rankings land, re-grade the week
     - cron: "0 16 * * 6"        # Saturday midday: catch grade edits before kickoffs
   workflow_dispatch:            # lets Grant trigger a run by hand from the Actions tab
@@ -62,8 +69,22 @@ jobs:
       # The SQLite file and the CFBD response cache are restored between runs
       # so history never has to be re-fetched. This is what keeps the CFBD
       # spend at a handful of requests per day instead of hundreds.
+      # RESTORE AND SAVE ARE SEPARATE STEPS, DELIBERATELY.
+      #
+      # `actions/cache` saves in a post-job step that only runs when the job
+      # SUCCEEDS. That coupling cost the first two weeks of the 2026 season: a
+      # crash in the research export took the job red, the post-save never ran, and
+      # the database — holding freshly fetched results and freshly graded picks —
+      # was discarded. The next run restored the same fortnight-old snapshot, did
+      # the same work, and threw it away again. Twelve consecutive runs printed
+      # "graded 8" and persisted nothing, while the half-hourly refresh job kept
+      # republishing the stale bundle and staying green.
+      #
+      # The database is the asset; publishing is downstream of it. A publish failure
+      # must never cost a result, so the save now happens with `if: always()` the
+      # moment the update has written to disk, well before anything that renders.
       - name: Restore data cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             data/cache
@@ -206,6 +227,18 @@ jobs:
             echo "::warning::MODEL_GRADES_SHEET_ID is not set — no bet log."
           fi
 
+      # Immediately after the database is written, and before anything that can fail
+      # for a cosmetic reason. `always()` so a red run still keeps its results.
+      - name: Save the data cache (even if a later step fails)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/cache
+            data/model.db
+            data/api_budget.json
+          key: model-data-v3-${{ github.run_id }}
+
       # Push, not pull. GitHub emails issue activity for free, so a material
       # injury reaches Grant without him remembering to open the site.
       - name: Raise an issue if anything material changed
@@ -302,3 +335,41 @@ jobs:
           name: picks-${{ github.run_number }}
           path: output/
           retention-days: 30
+
+  # WHY THIS EXISTS. Every scheduled update failed from 22 August to 1 September and
+  # nobody found out, because the half-hourly refresh job kept succeeding and kept
+  # republishing a stale bundle. The site looked alive, the Actions tab was the only
+  # place the truth was written down, and nobody reads the Actions tab.
+  #
+  # GitHub emails issue activity for free, which is the same channel the roster
+  # alerts already use. One open issue, reused rather than duplicated, so a fortnight
+  # of failures is one thread and not fourteen.
+  notify:
+    needs: update
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="The scheduled update is failing"
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+                       --json number -q '.[0].number' || true)
+          BODY=$(printf '%s\n' \
+            "The nightly update failed on $(date -u +'%Y-%m-%d %H:%M') UTC." \
+            "" \
+            "**Nothing on the site is refreshing while this is red.** The half-hourly" \
+            "refresh job will keep succeeding and keep republishing the last good" \
+            "bundle, so the pages will look fine and will not be current." \
+            "" \
+            "Run: $RUN")
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi

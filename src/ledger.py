@@ -18,6 +18,7 @@ is not a prediction.
 
 import datetime as dt
 
+import db
 import metrics
 
 
@@ -43,18 +44,52 @@ def _parse_kickoff(s):
     return d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)
 
 
-def lock(conn, sport, picks, config_label, now=None):
+# How far ahead a pick may be locked.
+#
+# Three days, not a week, because information only improves as kickoff approaches:
+# the grades are fresher, the line is closer to closing (which is what makes the CLV
+# column mean anything), and injuries are known. Run daily, this locks every game
+# one to three days out — a Thursday night game on Monday or Tuesday, a Saturday
+# game on Wednesday or Thursday.
+#
+# Three rather than two so that ONE missed run cannot let a game kick off unlocked.
+# `missed_locks` below reports it if that ever happens anyway, because a pick that
+# was never recorded makes the record quietly better than the model was.
+LOCK_WINDOW_DAYS = 3
+
+
+def lock(conn, sport, picks, config_label, now=None, within_days=LOCK_WINDOW_DAYS):
     """
-    Record picks for games that haven't kicked off. Returns (locked, skipped_started).
+    Record picks for the UPCOMING slate. Returns (locked, skipped_started, deferred).
 
     `picks` are rows from predict.generate().
+
+    THE WINDOW IS THE POINT, and it was missing. This locked every game that had not
+    yet kicked off -- which on the first run of the season meant all 788 of them,
+    weeks 1 through 15, stamped 6 August. `INSERT OR IGNORE` then made those first
+    picks permanent, so:
+
+      * A week-12 pick was made from August ratings in which the quality-points half
+        of the formula is literally zero, and could never be revised.
+      * Every week of film Grant grades after August was unable to reach the record,
+        which is the entire edge this model claims to have.
+      * `market_margin_at_pick` was an August line for a game nobody had priced yet,
+        making the closing-line-value column meaningless.
+
+    Locking early does not protect a record from hindsight; it only guarantees the
+    picks are worse. What protects the record is locking BEFORE KICKOFF, which a
+    weekly window does just as absolutely.
     """
     now = now or _now()
-    rows, started = [], 0
+    horizon = now + dt.timedelta(days=within_days) if within_days else None
+    rows, started, deferred = [], 0, 0
     for p in picks:
         ko = _parse_kickoff(p.get("kickoff"))
         if ko is not None and ko <= now:
             started += 1
+            continue
+        if horizon is not None and ko is not None and ko > horizon:
+            deferred += 1                 # a later week; it gets its own lock, later
             continue
         rows.append({
             "game_id": p.get("game_id"),
@@ -94,7 +129,35 @@ def lock(conn, sport, picks, config_label, now=None):
     inserted = conn.execute(
         "SELECT COUNT(*) c FROM picks_log WHERE sport=? AND published_at=?",
         (sport, now.isoformat())).fetchone()["c"]
-    return inserted, started
+    return inserted, started, deferred
+
+
+def missed_locks(conn, sport, season=None, now=None):
+    """
+    Games that kicked off with no pick recorded. Returns (count, examples).
+
+    A pick that was never locked cannot be graded, so it silently leaves the record
+    — and it leaves it in the most flattering possible way, because the games that
+    go unlocked are the ones a broken run skipped, not a random sample. Counting
+    them is the only thing standing between "the model went 5-3" and "the model went
+    5-3 on the games the pipeline happened to be awake for".
+
+    Only games the model could actually price are counted: a fixture with no line is
+    one it declines to bet, not one it missed.
+    """
+    now = now or _now()
+    rows = conn.execute(
+        """SELECT g.game_id, g.season, g.week, g.kickoff, g.home_team, g.away_team
+             FROM games g
+             JOIN lines l ON l.game_id = g.game_id
+        LEFT JOIN picks_log p ON p.game_id = g.game_id
+            WHERE g.sport = ? AND p.game_id IS NULL
+              AND l.home_margin IS NOT NULL
+              AND g.kickoff IS NOT NULL AND g.kickoff <= ?
+              AND (? IS NULL OR g.season = ?)
+         ORDER BY g.kickoff DESC""",
+        (sport, now.isoformat(), season, season)).fetchall()
+    return len(rows), [dict(r) for r in rows[:5]]
 
 
 def grade(conn, sport, now=None):
@@ -111,7 +174,8 @@ def grade(conn, sport, now=None):
            JOIN games g ON g.game_id = p.game_id
            LEFT JOIN lines l ON l.game_id = p.game_id
            WHERE p.sport = ? AND p.graded_at IS NULL
-             AND g.home_score IS NOT NULL""", (sport,)).fetchall()
+             AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL""",
+        (sport,)).fetchall()
 
     updates = []
     for r in rows:
@@ -181,7 +245,8 @@ def grade(conn, sport, now=None):
 
 def record(conn, sport, season=None):
     """Summarize the graded ledger — the numbers the public page shows."""
-    q = "SELECT * FROM picks_log WHERE sport=? AND graded_at IS NOT NULL"
+    q = ("SELECT * FROM picks_log WHERE sport=? AND graded_at IS NOT NULL"
+         " AND " + db.NOT_VOIDED)
     args = [sport]
     if season:
         q += " AND season=?"

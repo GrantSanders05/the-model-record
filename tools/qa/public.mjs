@@ -58,7 +58,13 @@ console.log("\n── week by week ──");
       t => /Season to date/.test(t.textContent));
     ok("the weekly table has a running season column", !!tbl);
     const trs = [...(tbl?.querySelectorAll("tbody tr") || [])];
-    ok("it has one row per week", trs.length > 1, `${trs.length} rows`);
+    // ">1" could not pass in the first week of any season, and did not: one graded
+    // week is one row, correctly. The real failure it was reaching for is a table
+    // that collapsed every week into one line, which is a DUPLICATE-label problem.
+    const weeks = trs.map(tr => tr.firstElementChild.textContent.trim());
+    ok("it has a row per graded week", trs.length >= 1, `${trs.length} rows`);
+    ok("...and no week appears twice", new Set(weeks).size === weeks.length,
+       weeks.join(", "));
     // A running total that does not run is worse than no column at all.
     const cum = trs.map(tr => parseFloat(tr.lastElementChild.textContent));
     ok("the running total is populated on every row",

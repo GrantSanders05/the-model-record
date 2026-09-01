@@ -369,6 +369,137 @@ for _f in _os.listdir(_tmp):
     _os.unlink(_os.path.join(_tmp, _f))
 _os.rmdir(_tmp)
 
+
+# ── a game is final only with BOTH scores ─────────────────────────────────────
+#
+# The 2026 season opened and every scheduled update died on
+#   TypeError: unsupported operand type(s) for -: 'int' and 'NoneType'
+# because a game arrived carrying a home score and a NULL away score. Thirteen
+# call sites asked `home_score IS NOT NULL` and then subtracted `away_score`. The
+# crash is trivial; what made it expensive is that it ran in the only workflow that
+# fetches, so the half-hourly republish stayed green and two weeks of results were
+# thrown away without a single red mark anywhere a human looks.
+print("\n── a half-scored game is not a result ──")
+import datetime as dt                    # noqa: E402
+import db                                # noqa: E402
+import research_export as _re            # noqa: E402
+import tempfile as _tf2, os as _os2      # noqa: E402
+
+_t2 = _tf2.mkdtemp()
+_h = db.connect(_os2.path.join(_t2, "half.db"))
+_h.executemany(
+    "INSERT INTO games (game_id, sport, season, week, season_type, kickoff, "
+    "home_team, away_team, home_score, away_score, neutral_site) "
+    "VALUES (:id,'cfb',2026,:wk,'regular',:ko,:h,:a,:hs,:as_,0)",
+    [{"id": "done", "wk": 1, "ko": "2026-08-29T18:00", "h": "Georgia",
+      "a": "Auburn", "hs": 31, "as_": 24},
+     {"id": "half", "wk": 1, "ko": "2026-08-29T20:00", "h": "Texas",
+      "a": "Baylor", "hs": 17, "as_": None}])
+_h.commit()
+
+ok("is_final needs both scores",
+   db.is_final({"home_score": 31, "away_score": 24})
+   and not db.is_final({"home_score": 17, "away_score": None})
+   and not db.is_final({"home_score": None, "away_score": 3}))
+
+# The half row is present at this point because it was inserted directly; a real
+# fetch can no longer produce one (fetch_cfb blanks both), and connect() repairs
+# any that a previous version already stored.
+_before = _h.execute("SELECT COUNT(*) c FROM games WHERE (home_score IS NULL)"
+                     " != (away_score IS NULL)").fetchone()["c"]
+ok("a half-scored row is detected", _before == 1, _before)
+_fixed = db.repair_half_scored(_h)
+ok("...and blanked, both sides", _fixed == 1, _fixed)
+ok("...leaving the finished game alone",
+   db.is_final(_h.execute("SELECT * FROM games WHERE game_id='done'").fetchone()))
+
+# Put it back and prove the readers survive it even unrepaired, because the next
+# one of these will arrive mid-run, after connect() has already been called.
+_h.execute("UPDATE games SET home_score=17 WHERE game_id='half'")
+_h.commit()
+try:
+    _res = _re.team_results(_h, "cfb", 2026)
+    ok("team_results survives a half-scored game — this is the exact crash", True)
+    ok("...and reports no margin for it, rather than a wrong one",
+       all(g["margin"] is None for g in _res.get("Texas", [])),
+       _res.get("Texas"))
+except TypeError as e:
+    ok("team_results survives a half-scored game — this is the exact crash", False, e)
+try:
+    _sl = _re.schedule(_h, "cfb", 2026, {}, {})
+    _half = next(g for g in _sl if g["game_id"] == "half")
+    ok("the schedule survives it too", True)
+    ok("...and does not call it final", _half["status"] != "final", _half["status"])
+except TypeError as e:
+    ok("the schedule survives it too", False, e)
+
+_h.close()
+for _f in _os2.listdir(_t2):
+    _os2.unlink(_os2.path.join(_t2, _f))
+_os2.rmdir(_t2)
+
+
+# ── picks are locked close to kickoff, and voided picks leave the record ───────
+print("\n── the lock window ──")
+import ledger as _ledger                 # noqa: E402
+
+_t3 = _tf2.mkdtemp()
+_L = db.connect(_os2.path.join(_t3, "lock.db"))
+_now = dt.datetime(2026, 9, 1, 12, 0, tzinfo=dt.timezone.utc)
+_picks = [
+    {"game_id": "soon", "season": 2026, "week": 2, "home": "A", "away": "B",
+     "kickoff": "2026-09-03T23:00:00.000Z", "model_margin": 3.0,
+     "market_margin": 2.0, "ats_pick": "A"},
+    {"game_id": "later", "season": 2026, "week": 9, "home": "C", "away": "D",
+     "kickoff": "2026-10-24T23:00:00.000Z", "model_margin": 3.0,
+     "market_margin": 2.0, "ats_pick": "C"},
+    {"game_id": "gone", "season": 2026, "week": 1, "home": "E", "away": "F",
+     "kickoff": "2026-08-29T23:00:00.000Z", "model_margin": 3.0,
+     "market_margin": 2.0, "ats_pick": "E"},
+]
+_locked, _started, _deferred = _ledger.lock(_L, "cfb", _picks, "test", now=_now)
+ok("the game two days out is locked", _locked == 1, _locked)
+ok("the game already played is skipped", _started == 1, _started)
+ok("the game seven weeks out is HELD, not locked", _deferred == 1, _deferred)
+ok("...so only one row exists",
+   _L.execute("SELECT COUNT(*) c FROM picks_log").fetchone()["c"] == 1)
+ok("...and it is the near one",
+   _L.execute("SELECT game_id FROM picks_log").fetchone()["game_id"] == "soon")
+
+print("\n── voiding withdraws a pick without erasing it ──")
+import void_picks as _void               # noqa: E402
+
+_cands = _void.candidates(_L, "cfb", now=_now)
+ok("an unplayed, ungraded pick is eligible to void", len(_cands) == 1, len(_cands))
+_void.apply_void(_L, _cands, "locked without a window", now=_now)
+ok("the row is still there",
+   _L.execute("SELECT COUNT(*) c FROM picks_log").fetchone()["c"] == 1)
+ok("...marked, with the reason recorded",
+   _L.execute("SELECT void_reason r FROM picks_log").fetchone()["r"]
+   == "locked without a window")
+# `record()` only counts GRADED picks, so asserting on it while this pick is
+# ungraded compares nothing to nothing — the first version of this test did exactly
+# that and passed. Grade the voided pick and check that it STILL does not reach the
+# published record, which is the property that actually matters.
+_L.execute("UPDATE picks_log SET graded_at='2026-09-04T00:00:00', ats_result='L'")
+_L.commit()
+ok("a voided pick stays out of the record even once it is graded",
+   _ledger.record(_L, "cfb")["n"] == 0, _ledger.record(_L, "cfb")["n"])
+_void.restore(_L, "cfb", "without a window")
+ok("restoring puts it back in", _ledger.record(_L, "cfb")["n"] == 1,
+   _ledger.record(_L, "cfb")["n"])
+ok("...with the loss it actually took, not a fresh start",
+   _ledger.record(_L, "cfb")["ats_l"] == 1)
+
+# A pick that faced a real result may never be voided by this tool, whatever it did.
+ok("a graded pick is NOT eligible to void — that would be marketing, not a record",
+   len(_void.candidates(_L, "cfb", now=_now)) == 0)
+
+_L.close()
+for _f in _os2.listdir(_t3):
+    _os2.unlink(_os2.path.join(_t3, _f))
+_os2.rmdir(_t3)
+
 print("=" * 62)
 print("%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)

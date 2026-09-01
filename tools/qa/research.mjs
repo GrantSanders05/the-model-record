@@ -189,13 +189,21 @@ console.log("\n── schedule ──");
   ok("games the model will not price are present, not dropped",
      B.schedule.some(g => g.status === "blowout"));
 
-  // Week 0 is derived from a calendar gap, so assert the SHAPE rather than a date:
-  // week 0 exists, and it is a small slate ahead of a much larger week 1.
+  // Week 0 is DERIVED, and whether one exists is a fact about this season's
+  // calendar, not about this code. Asserting "a week 0 exists" made the schedule
+  // gate the deploy on the shape of a third party's data: when the 2026 opening
+  // weekend shifted and the split stopped firing, this went red and took every
+  // scheduled update with it for ten days. Assert instead that the label and the
+  // bundle agree, and that IF there is a week 0 it has the right shape.
   const w0 = B.schedule.filter(g => g.week === 0).length;
   const w1 = B.schedule.filter(g => g.week === 1).length;
-  ok("a week 0 exists", B.week0 === true && w0 > 0, `${w0} games`);
-  ok("week 0 is the small early slate, not half of week 1", w0 > 0 && w0 < w1,
-     `week 0 has ${w0}, week 1 has ${w1}`);
+  ok("the week-0 flag matches the schedule", B.week0 === (w0 > 0),
+     `flag ${B.week0}, ${w0} games labelled week 0`);
+  if (w0)
+    ok("week 0 is the small early slate, not half of week 1", w0 < w1,
+       `week 0 has ${w0}, week 1 has ${w1}`);
+  else
+    ok("a season with no week 0 still starts at week 1", w1 > 0, `${w1} games`);
   // CFBD files both under week 1; the split must be a LABEL, never a rewrite of the
   // key the ledger stamps its locked picks with.
   ok("week 0 keeps its original CFBD week for the model",
@@ -218,8 +226,11 @@ console.log("\n── schedule ──");
      `${rows("#schedtbl")} of ${B.schedule.length}`);
   ok("a single week is a strict subset", oneWeek < rows("#schedtbl"));
 
-  $("#swk").value = "0"; fire($("#swk"), "change");
-  ok("week 0 is selectable and renders", rows("#schedtbl") === w0, `${rows("#schedtbl")} rows`);
+  if (w0) {
+    $("#swk").value = "0"; fire($("#swk"), "change");
+    ok("week 0 is selectable and renders", rows("#schedtbl") === w0,
+       `${rows("#schedtbl")} rows`);
+  }
 
   $("#swk").value = ""; fire($("#swk"), "change");
   $("#sshow").value = "line"; fire($("#sshow"), "change");

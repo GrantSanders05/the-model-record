@@ -106,7 +106,7 @@ def live_week(conn, sport, season):
     stamped at the week it can legitimately predict, and never earlier.
     """
     row = conn.execute(
-        "SELECT MAX(week) w FROM games WHERE sport=? AND season=? AND home_score IS NOT NULL",
+        "SELECT MAX(week) w FROM games WHERE sport=? AND season=? AND " + db.FINAL_SQL,
         (sport, season)).fetchone()
     return (row["w"] or 0) + 1
 
