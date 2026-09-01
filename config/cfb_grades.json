@@ -1,5 +1,6 @@
 {
   "blend_weight": 0.5,
+  "edge_realised": 0.135,
   "elo_fcs_rating": 1100.0,
   "elo_hfa": 30.0,
   "elo_k": 28.0,

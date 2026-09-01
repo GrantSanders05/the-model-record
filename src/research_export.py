@@ -513,6 +513,10 @@ def main():
             "hfa": config.get("hfa", 3.0),
             "neutral_hfa": config.get("neutral_hfa", 0.0),
             "scale": config.get("scale", 1.0),
+            # The share of the model's disagreement with the market that history
+            # says actually shows up. The browser needs it to render the honest
+            # "worth" of an edge rather than the raw gap.
+            "edge_realised": config.get("edge_realised", 1.0),
             "coach_weight": config.get("sheet_coach_weight", 1.0),
             "loss_sign": config.get("sheet_loss_sign", -1.0),
             "raw_wl": config.get("sheet_raw_wl", 0.0),

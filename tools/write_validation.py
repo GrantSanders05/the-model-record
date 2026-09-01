@@ -37,7 +37,7 @@ OUT_DIR = os.path.join(ROOT, "data", "validation")
 
 # The parameters that change a prediction. A fingerprint over the whole config would
 # churn on cosmetic keys; this is the set that actually moves a number.
-FINGERPRINT_KEYS = ["rater", "scale", "hfa", "neutral_hfa", "grade_scale",
+FINGERPRINT_KEYS = ["rater", "scale", "edge_realised", "hfa", "neutral_hfa", "grade_scale",
                     "grade_formula", "quality_scale", "blend_weight",
                     "sheet_coach_weight", "sheet_loss_sign", "sheet_raw_wl",
                     "wq_top5", "wq_top10", "wq_top25", "wq_other",

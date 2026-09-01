@@ -60,6 +60,7 @@ def fit(conn, sport, season, config, split_week=8):
     # Fit at scale 1.0 so the slope IS the correction rather than a correction to
     # a correction. Whatever is in the config is deliberately ignored here.
     cfg["scale"] = 1.0
+    ship_cfg = dict(cfg)                    # kept before run() consumes the _grades keys
     preds = backtest.run(backtest.load_games(conn, sport), cfg, test_seasons=[season])
     if not preds:
         raise SystemExit("no predictions for %s %s — are the grades loaded?"
@@ -69,8 +70,30 @@ def fit(conn, sport, season, config, split_week=8):
     test = [p for p in preds if (p["week"] or 0) > split_week]
     full_slope = metrics.linreg([p["pred_margin"] for p in preds],
                                 [p["actual_margin"] for p in preds])[0]
+    # HOW MUCH OF THE DISAGREEMENT IS REAL, which is a different question from how
+    # big the numbers should be. Regress the realised edge (actual - market) on the
+    # claimed edge (model - market): the slope is the share that shows up. On 2025
+    # it is 0.135, so an eleven-point disagreement is worth about a point and a half.
+    # Win probability and EV have to be computed from the shrunk number or a
+    # 20-point underdog prices at +196% and tops the board.
+    # Measured at the scale that will SHIP, not at 1.0. The claimed edge is
+    # `scale * raw - market`, and the market term does not scale with it, so the two
+    # fits are not interchangeable: 0.096 at scale 1.0 against 0.135 at scale 1.161.
+    # Fitting the shrink against a model nobody runs would ship the wrong number.
+    scaled = dict(ship_cfg)
+    scaled["scale"] = round(full_slope, 3) if full_slope else 1.0
+    at_ship = backtest.run(backtest.load_games(conn, sport), scaled,
+                           test_seasons=[season])
+    priced = [p for p in at_ship if p["market_margin"] is not None]
+    edge_slope = None
+    if len(priced) > 100:
+        edge_slope = metrics.linreg(
+            [p["pred_margin"] - p["market_margin"] for p in priced],
+            [p["actual_margin"] - p["market_margin"] for p in priced])[0]
     out = {"n": len(preds), "season": season, "full_slope": full_slope,
-           "recommended": round(full_slope, 3) if full_slope else None}
+           "recommended": round(full_slope, 3) if full_slope else None,
+           "edge_realised": round(edge_slope, 3) if edge_slope else None,
+           "edge_n": len(priced)}
     if len(train) > 100 and len(test) > 100:
         tr = metrics.linreg([p["pred_margin"] for p in train],
                             [p["actual_margin"] for p in train])[0]
@@ -100,6 +123,13 @@ def main():
           % (r["full_slope"] or 0))
     print("  current scale in config: %.3f" % config.get("scale", 1.0))
     print("  recommended scale      : %.3f" % (r["recommended"] or 1.0))
+    if r.get("edge_realised") is not None:
+        print("\n  share of the disagreement that is realised, on %d priced games:"
+              % r["edge_n"])
+        print("    edge_realised        : %.3f   (config has %.3f)"
+              % (r["edge_realised"], config.get("edge_realised", 1.0)))
+        print("    -> a 10-point disagreement is worth %.1f points."
+              % (10 * r["edge_realised"]))
     if "test_n" in r:
         print("\n  held out, to keep this honest — fit on weeks 1-%d, scored on the rest:"
               % args.split_week)
@@ -115,6 +145,8 @@ def main():
         print("\nDRY RUN. Re-run with --apply to write it to %s." % args.config)
         return
     config["scale"] = r["recommended"]
+    if r.get("edge_realised") is not None:
+        config["edge_realised"] = r["edge_realised"]
     with open(path, "w") as fh:
         json.dump(config, fh, indent=2, sort_keys=True)
         fh.write("\n")

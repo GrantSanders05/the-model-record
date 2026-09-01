@@ -3,9 +3,10 @@
   "calib_slope": 1.0021975998315251,
   "ci_hi": 58.448789605843665,
   "ci_lo": 52.03949292816,
-  "computed_utc": "2026-09-01T05:26:03.735481+00:00",
+  "computed_utc": "2026-09-01T05:50:01.877574+00:00",
   "config": {
     "blend_weight": 0.5,
+    "edge_realised": 0.135,
     "grade_formula": "sheet",
     "grade_scale": 2.0,
     "hfa": 4.0,
@@ -24,7 +25,7 @@
     "wq_top25": 2.0,
     "wq_top5": 4.0
   },
-  "config_fingerprint": "f19a93c4c87e",
+  "config_fingerprint": "04ef872f99b1",
   "mae": 12.901933010296391,
   "n": 921,
   "roi": 5.507847201658273,

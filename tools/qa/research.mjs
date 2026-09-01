@@ -832,6 +832,39 @@ ok("bankroll change actually changes the stakes",
    $("#bets").textContent !== stakeBefore);
 $("#bank").value = "1000"; fire($("#bank"));
 
+console.log("\n── the board leads with the market it has an edge in ──");
+{
+  // The moneyline board was measured at -2.5% ROI over 720 bets in 2025, and worse
+  // the bigger the claimed edge. It topped the board with a +196% play on a
+  // 20-point underdog because win probability came from the RAW model margin. The
+  // spread board is where the measured edge is, so that is what opens.
+  // Assert the MARKUP's default, not the live value — earlier sections in this file
+  // drive the control, so reading it here would test the test.
+  ok("the board opens on spread disagreement, not moneyline EV",
+     $$("#sortby option")[0].value === "spread",
+     $$("#sortby option").map(o => o.value).join(", "));
+  $("#sortby").value = "ml"; fire($("#sortby"), "change");
+  const w = $("#sizenote");
+  ok("the moneyline view states its measured record", !w.hasAttribute("hidden") &&
+     /no measured edge/i.test(w.textContent), w.textContent.slice(0, 70));
+  ok("...with the number, not just a caution", /720 bets/.test(w.textContent));
+  $("#sortby").value = "spread"; fire($("#sortby"), "change");
+
+  // Probability and EV must come from the SHRUNK margin. Left raw, a game the model
+  // makes a 9-point dog and the market makes a 20-point dog priced at +196% EV.
+  const B2 = JSON.parse(bundle);
+  ok("the bundle carries the realised-edge share",
+     typeof B2.config.edge_realised === "number" && B2.config.edge_realised <= 1,
+     String(B2.config.edge_realised));
+  const evs = B2.bets.map(b => b.ml_ev).filter(v => v != null);
+  ok("no moneyline play claims a three-figure edge",
+     evs.every(v => v < 100), `max ${Math.max(...evs).toFixed(1)}%`);
+  const withEdge = B2.bets.filter(b => b.spread_edge != null && b.realised_edge != null);
+  ok("every priced game reports what its edge is worth", withEdge.length > 0);
+  ok("...and worth is a fraction of the raw gap",
+     withEdge.every(b => Math.abs(b.realised_edge) <= Math.abs(b.spread_edge) + 1e-9));
+}
+
 console.log("\n── stake sizing ──");
 // Read the money out of the table rather than trusting a summary card — the card and
 // the column are computed from the same map, so a card alone would agree with itself.
@@ -845,6 +878,10 @@ const stakeRows = () => {
 const totalStaked = () => stakeRows().reduce((s, r) => s + r.stake, 0);
 const near = (a, b, tol = 0.05) => Math.abs(a - b) < tol;
 
+// Staking lives on the moneyline view, so select it explicitly rather than relying
+// on whatever the previous section left behind — the default moved and this section
+// blew up on a missing Stake column.
+$("#sortby").value = "ml"; fire($("#sortby"), "change");
 $("#sizing").value = "kelly"; fire($("#sizing"), "change");
 ok("weekly box is disabled in Kelly mode", $("#weekly").disabled);
 const kellyTotal = totalStaked();
@@ -920,11 +957,16 @@ ok("over-betting raises a visible warning",
    $("#sizenote").textContent.includes("Kelly advises"));
 
 // …and must go away when the budget is genuinely conservative. A warning that is
-// always on is the same as no warning.
+// always on is the same as no warning. The moneyline view now always carries its
+// measured record, so what has to disappear is the OVER-BETTING warning, not the
+// panel — the two say different things and only one is conditional.
 $("#weekly").value = String(Math.max(1, Math.floor(kellyTotal / playWeeks.size / 4)));
 fire($("#weekly"));
-ok("a conservative budget clears the warning", $("#sizenote").hasAttribute("hidden"),
+ok("a conservative budget clears the over-betting warning",
+   !$("#sizenote").textContent.includes("Kelly advises"),
    $("#sizenote").textContent.slice(0, 60));
+ok("...while the measured moneyline record stays put",
+   $("#sizenote").textContent.includes("no measured edge"));
 
 $("#weekly").value = "200"; fire($("#weekly"));
 $("#sizing").value = "kelly"; fire($("#sizing"), "change");

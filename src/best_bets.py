@@ -119,10 +119,29 @@ def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
     games = {g["game_id"]: g for g in backtest.load_games(conn, sport)}
     out = []
 
+    # HOW MUCH OF THE MODEL'S DISAGREEMENT IS REAL. Measured on 2025: regress the
+    # realised edge (actual - market) on the claimed edge (model - market) and the
+    # slope is 0.135. An eleven-point disagreement is worth about a point and a half.
+    #
+    # This is not a detail, it is the difference between a board that makes sense and
+    # one that does not. Win probability came from the RAW model margin, so a game
+    # the model made a 9-point dog and the market made a 20-point dog was priced at
+    # 27% to win outright against the market's 9% — and at +1000 that prints as
+    # +196% expected value and tops the board. Every such play is the model failing
+    # to express a mismatch, not finding one.
+    #
+    # Shrinking never changes which SIDE of the spread the model is on, so the ATS
+    # record is bit-identical: 55.27% on 2025 either way. It only fixes magnitudes,
+    # which is exactly what probability, EV and stake are made of.
+    realised = float(config.get("edge_realised", 1.0)) if isinstance(config, dict) else 1.0
+
     for p in picks:
         g = games.get(p["game_id"], {})
         home_ml, away_ml = g.get("home_ml"), g.get("away_ml")
-        wp_home = predict.margin_to_win_prob(p["model_margin"], sport)
+        mkt = p.get("market_margin")
+        priced_margin = (p["model_margin"] if mkt is None
+                         else mkt + realised * (p["model_margin"] - mkt))
+        wp_home = predict.margin_to_win_prob(priced_margin, sport)
 
         rec = {
             "game_id": p["game_id"], "week": p["week"], "kickoff": p["kickoff"],
@@ -132,6 +151,11 @@ def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
             "model_total": p["model_total"], "market_total": p["market_total"],
             "ou_pick": p["ou_pick"],
             "model_win_prob_home": round(100 * wp_home, 1),
+            # What the disagreement is worth once discounted to the share of it that
+            # history says shows up. This is the number to read, not the raw gap.
+            "realised_edge": (None if mkt is None or p["edge"] is None
+                              else round(realised * p["edge"], 2)),
+            "priced_margin": round(priced_margin, 2),
             "ml_pick": None, "ml_ev": None, "ml_fair_prob": None,
             "ml_odds": None, "stake": None,
             # Priced, but not offered. A game the ratings cannot reach is shown

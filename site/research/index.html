@@ -406,8 +406,8 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
   <div class="bar">
     <div class="field"><label for="sortby">Rank by</label>
       <select id="sortby">
-        <option value="ml">Moneyline EV (vig removed)</option>
         <option value="spread">Spread disagreement</option>
+        <option value="ml">Moneyline EV — no measured edge</option>
       </select></div>
     <div class="field"><label for="wk">Week</label><select id="wk"></select></div>
     <div class="field"><label for="sizing">Stake sizing</label>
@@ -1262,12 +1262,27 @@ function drawBets(){
       `A stake needs a win probability, and the model does not export one against the spread — `+
       `only against the moneyline, where the vig can be stripped out and a real EV computed. `+
       `Rank by moneyline EV to size anything.`;
-  }else warn.hidden=true;
+  }else{
+    /* The moneyline has been measured and it does not work. Saying so on the view
+       itself, every time, is the only version of this that survives a Saturday. */
+    warn.hidden=false;
+    warn.innerHTML=`<b>The moneyline has no measured edge — read this before staking</b>`+
+      `Betting every positive-EV moneyline on this board across the 2025 season went `+
+      `<b style="display:inline">−2.5% ROI over 720 bets</b>, and it got worse the bigger `+
+      `the claimed edge: +0.4% under 25% EV, −10.8% from 50–100%, <b style="display:inline">`+
+      `−22.6% above 100%</b>. Shrinking the model's probability toward the market's does not `+
+      `rescue it at any weight tested.<br><br>`+
+      `The reason is arithmetic. A big claimed edge requires a big disagreement, a big `+
+      `disagreement is the rating failing to express a mismatch rather than finding one, and `+
+      `at long odds a small probability error becomes an enormous EV. The spread board is `+
+      `where this model's measured edge is: <b style="display:inline">55.27% ATS over 921 `+
+      `games</b>, and it is the same rating either way.`;
+  }
 
   const head = by==="ml"
     ? ["Wk","Matchup","Bet on","Odds","Model says","Market says","Edge","Stake","Log"]
-    : ["Wk","Matchup","Model makes it","Market has it","Edge","Spread pick","Total","O/U pick","Log"];
-  const numCols = by==="ml" ? [0,3,4,5,6,7] : [0,4,6];
+    : ["Wk","Matchup","Model makes it","Market has it","Edge","Worth","Spread pick","Total","O/U pick","Log"];
+  const numCols = by==="ml" ? [0,3,4,5,6,7] : [0,4,5,7];
   const body = rows.slice(0,150).map(r=> by==="ml" ? `<tr>
       <td class="num muted">${r.week}</td>
       ${matchupCell(r.away,r.home,false)}
@@ -1284,6 +1299,14 @@ function drawBets(){
       ${favCell(r.market_margin,r.home,r.away,"muted")}
       <td class="num ${r.spread_edge==null?"muted":Math.abs(r.spread_edge)>=3?"pos":""}">${
         r.spread_edge==null?"—":Math.abs(r.spread_edge).toFixed(1)}</td>
+      ${/* The raw gap next to what it is worth. Measured on 2025, only 13.5% of the
+            model's disagreement with the market is realised — an 11-point gap is
+            worth about a point and a half — and reading the raw number as the edge
+            is what put a +196% moneyline on a 20-point underdog at the top of this
+            board. */""}
+      <td class="num ${r.realised_edge==null?"muted":Math.abs(r.realised_edge)>=1?"pos":"muted"}"
+          title="${r.spread_edge==null?"":Math.abs(r.spread_edge).toFixed(1)+" pts of disagreement, discounted to the share history says shows up"}">${
+        r.realised_edge==null?"—":Math.abs(r.realised_edge).toFixed(1)}</td>
       ${pickCell(r.ats_pick,r.market_margin,r.home,r.away)}
       <td class="num">${num(r.model_total)}${
         r.market_total==null?"":`<span class="muted"> / ${num(r.market_total)}</span>`}</td>
