@@ -890,6 +890,23 @@ function banners(){
     `${num(D.dispersion.sd_model)} pts against the market's ${num(D.dispersion.sd_market)} `+
     `(ratio ${num(D.dispersion.ratio,2)}). Every underdog looks like value — that is the `+
     `flaw showing in the EV column, not an edge.`);
+  /* The pipeline can be broken while every number on this page is internally
+     consistent — that is exactly what ten days of failed updates looked like, with
+     a stale bundle republished over the top every half hour. These two counts are
+     the ones that cannot look healthy while it is behind. */
+  const H=D.health||{};
+  if(H.ungraded_finals) add(
+    `${H.ungraded_finals} finished game${H.ungraded_finals===1?"":"s"} not graded yet`,
+    `Those games are over and the record has not caught up, which means the update `+
+    `job has not completed since they ended. The numbers below are real but behind. `+
+    `Check the Actions tab, or wait for the next run.`);
+  if(H.missed_locks) add(
+    `${H.missed_locks} game${H.missed_locks===1?"":"s"} kicked off with no pick`,
+    `A pick that was never locked cannot be graded, so it leaves the record — and it `+
+    `leaves it flatteringly, because the games that go missing are the ones a broken `+
+    `run skipped, not a random sample. They are gone for good: locking one now would `+
+    `be picking a game after it was played. The count stays here so the record is `+
+    `read next to it.`);
   if(D.excluded_blowouts) add(
     `${D.excluded_blowouts} game${D.excluded_blowouts===1?"":"s"} left off the board`,
     `The line is wider than ${D.blowout_line} points. A grade sheet spans about 30 rating `+

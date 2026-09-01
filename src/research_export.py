@@ -388,6 +388,34 @@ def load_alerts(path="output/alerts.json"):
             "watchlist": d.get("watchlist", [])[:120]}
 
 
+def health(conn, sport, season):
+    """
+    Whether the pipeline is actually keeping up. Absence of news is not good news.
+
+    The 2026 season opened with every scheduled update failing and the half-hourly
+    refresh republishing the same fortnight-old bundle over the top. The site looked
+    completely normal for ten days. Nothing on the page could have told anyone
+    otherwise, because everything it showed was internally consistent — just old.
+
+    So the page now carries the two numbers that cannot look healthy while the
+    pipeline is broken: games that finished and have not been graded, and games that
+    kicked off with no pick at all. Both are zero when things are working.
+    """
+    import ledger
+    ungraded = conn.execute(
+        "SELECT COUNT(*) c FROM picks_log p JOIN games g USING(game_id) "
+        "WHERE p.sport=? AND p.graded_at IS NULL AND p.voided_at IS NULL AND "
+        + db.FINAL_SQL.replace("home_score", "g.home_score")
+                      .replace("away_score", "g.away_score"),
+        (sport,)).fetchone()["c"]
+    missed, _ = ledger.missed_locks(conn, sport, season)
+    last = conn.execute(
+        "SELECT MAX(kickoff) k FROM games WHERE sport=? AND season=? AND " + db.FINAL_SQL,
+        (sport, season)).fetchone()["k"]
+    return {"ungraded_finals": ungraded, "missed_locks": missed,
+            "last_final_kickoff": last}
+
+
 def build_my_bets(conn, sport, season, labels):
     """
     The sheet-sourced half of his bet log, or a description of why there isn't one.
@@ -500,6 +528,7 @@ def main():
         "schedule": slate,
         "week0": bool(labels),
         "grades_sync": load_json("output/grades_sync.json"),
+        "health": health(conn, args.sport, season),
         # The model's own record, cut every way that could change the answer, and
         # the bets Grant actually placed. Two different records on purpose — see
         # the header of bet_log.py for why conflating them is the classic mistake.

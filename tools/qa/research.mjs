@@ -978,6 +978,24 @@ for (const b of $$("#nav button")) {
      v.classList.contains("on") && $$(".view.on").length === 1);
 }
 
+console.log("\n── pipeline health ──");
+{
+  // Absence of news is not good news: a stale bundle looks completely normal, and
+  // did for ten days. These two counts are the ones that cannot look healthy while
+  // the pipeline is behind, so assert the page reacts to them rather than only
+  // carrying them.
+  const H = JSON.parse(bundle).health;
+  ok("the bundle reports pipeline health", H && typeof H.ungraded_finals === "number",
+     JSON.stringify(H));
+  const txt = $("#banner").textContent;
+  ok("a backlog of ungraded finals is announced",
+     !H.ungraded_finals || txt.includes("not graded yet"), `${H.ungraded_finals} ungraded`);
+  ok("games that kicked off unlocked are announced",
+     !H.missed_locks || txt.includes("no pick"), `${H.missed_locks} missed`);
+  ok("a healthy pipeline says nothing about it",
+     (H.ungraded_finals || H.missed_locks) || !txt.includes("not graded yet"));
+}
+
 console.log("\n── banners ──");
 ok("at least one banner shown", $$("#banner .banner").length > 0,
    String($$("#banner .banner").length));
