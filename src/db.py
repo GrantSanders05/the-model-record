@@ -159,6 +159,18 @@ CREATE INDEX IF NOT EXISTS idx_linehist ON line_history(game_id, observed_at);
 -- market_margin_at_pick is stored separately from closing_margin on purpose:
 -- keeping both is what makes closing-line value measurable, and it stops a
 -- pick from being quietly re-graded against a friendlier number.
+-- Withdrawn picks. A voided pick must LEAVE picks_log, not merely be flagged in it:
+-- game_id is the primary key, so a flagged row still occupies the slot and the next
+-- legitimate lock for that game is silently ignored. Marking alone made the record
+-- honest and the re-lock impossible, which is the worst of both. Nothing is lost —
+-- the row moves here with its reason, and --restore moves it back.
+CREATE TABLE IF NOT EXISTS picks_voided (
+    game_id       TEXT PRIMARY KEY NOT NULL,
+    payload       TEXT NOT NULL,        -- the whole original row, as JSON
+    voided_at     TEXT NOT NULL,
+    void_reason   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS picks_log (
     -- NOT NULL matters: SQLite allows multiple NULLs in a PRIMARY KEY column,
     -- so a missing game_id would silently defeat the one-pick-per-game rule.
@@ -294,6 +306,35 @@ def _migrate(conn):
     conn.commit()
     repair_half_scored(conn)
     repair_duplicate_lines(conn)
+    _archive_flagged_picks(conn)
+
+
+def _archive_flagged_picks(conn):
+    """
+    Move any picks flagged voided IN PLACE into picks_voided. Returns the count.
+
+    The first version of voiding set a flag and left the row where it was. Every
+    reader excluded it correctly, so the record was right — and `lock` is
+    `INSERT OR IGNORE` on game_id, so the slot stayed occupied and the replacement
+    pick was silently dropped. 880 picks were withdrawn and 0 re-locked, which is
+    the one outcome worse than either doing nothing or doing it properly.
+    """
+    import json as _json
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(picks_log)")}
+    if "voided_at" not in have:
+        return 0
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM picks_log WHERE voided_at IS NOT NULL")]
+    for r in rows:
+        conn.execute(
+            "INSERT OR REPLACE INTO picks_voided (game_id, payload, voided_at, void_reason)"
+            " VALUES (?,?,?,?)",
+            (r["game_id"], _json.dumps(r), r["voided_at"],
+             r.get("void_reason") or "no reason recorded"))
+        conn.execute("DELETE FROM picks_log WHERE game_id=?", (r["game_id"],))
+    if rows:
+        conn.commit()
+    return len(rows)
 
 
 def connect(path=DB_PATH):

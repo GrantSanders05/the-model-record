@@ -472,24 +472,29 @@ import void_picks as _void               # noqa: E402
 _cands = _void.candidates(_L, "cfb", now=_now)
 ok("an unplayed, ungraded pick is eligible to void", len(_cands) == 1, len(_cands))
 _void.apply_void(_L, _cands, "locked without a window", now=_now)
-ok("the row is still there",
-   _L.execute("SELECT COUNT(*) c FROM picks_log").fetchone()["c"] == 1)
-ok("...marked, with the reason recorded",
-   _L.execute("SELECT void_reason r FROM picks_log").fetchone()["r"]
+# The row MOVES. Flagging it in place left game_id — the primary key — occupied, so
+# `lock` (INSERT OR IGNORE) silently dropped the replacement: 880 picks withdrawn
+# and 0 re-locked. Withdrawing a pick has to free the game to be picked again.
+ok("the pick leaves the ledger",
+   _L.execute("SELECT COUNT(*) c FROM picks_log").fetchone()["c"] == 0)
+ok("...and is preserved whole, with its reason",
+   _L.execute("SELECT void_reason r FROM picks_voided").fetchone()["r"]
    == "locked without a window")
-# `record()` only counts GRADED picks, so asserting on it while this pick is
-# ungraded compares nothing to nothing — the first version of this test did exactly
-# that and passed. Grade the voided pick and check that it STILL does not reach the
-# published record, which is the property that actually matters.
+ok("...so the same game can be locked again",
+   _ledger.lock(_L, "cfb", [_picks[0]], "relock", now=_now)[0] == 1,
+   _L.execute("SELECT COUNT(*) c FROM picks_log").fetchone()["c"])
+# Back to one live pick, then grade it: a pick that has faced a result belongs in
+# the record and may not be withdrawn.
+_L.execute("DELETE FROM picks_log")
+_L.commit()
+_void.restore(_L, "cfb", "without a window")
+ok("restoring returns it to the ledger",
+   len(_void.candidates(_L, "cfb", now=_now)) == 1)
 _L.execute("UPDATE picks_log SET graded_at='2026-09-04T00:00:00', ats_result='L'")
 _L.commit()
-ok("a voided pick stays out of the record even once it is graded",
-   _ledger.record(_L, "cfb")["n"] == 0, _ledger.record(_L, "cfb")["n"])
-_void.restore(_L, "cfb", "without a window")
-ok("restoring puts it back in", _ledger.record(_L, "cfb")["n"] == 1,
-   _ledger.record(_L, "cfb")["n"])
-ok("...with the loss it actually took, not a fresh start",
-   _ledger.record(_L, "cfb")["ats_l"] == 1)
+ok("a graded pick counts in the record",
+   _ledger.record(_L, "cfb")["n"] == 1, _ledger.record(_L, "cfb")["n"])
+ok("...with the loss it actually took", _ledger.record(_L, "cfb")["ats_l"] == 1)
 
 # A pick that faced a real result may never be voided by this tool, whatever it did.
 ok("a graded pick is NOT eligible to void — that would be marketing, not a record",

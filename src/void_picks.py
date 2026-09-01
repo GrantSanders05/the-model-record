@@ -49,22 +49,51 @@ def candidates(conn, sport, published_before=None, now=None):
 
 
 def apply_void(conn, rows, reason, now=None):
+    """
+    Move picks out of the ledger and into picks_voided, whole.
+
+    They are MOVED, not flagged. game_id is picks_log's primary key and `lock` is
+    `INSERT OR IGNORE`, so a flagged row still holds the slot and the replacement
+    pick is dropped without a word — 880 withdrawn and 0 re-locked, the first time
+    this ran. Withdrawing a pick has to free the game to be picked again.
+    """
+    import json
     stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat()
-    conn.executemany(
-        "UPDATE picks_log SET voided_at=?, void_reason=? WHERE game_id=?",
-        [(stamp, reason, r["game_id"]) for r in rows])
+    n = 0
+    for r in rows:
+        full = conn.execute("SELECT * FROM picks_log WHERE game_id=?",
+                            (r["game_id"],)).fetchone()
+        if not full:
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO picks_voided (game_id, payload, voided_at,"
+            " void_reason) VALUES (?,?,?,?)",
+            (r["game_id"], json.dumps(dict(full)), stamp, reason))
+        conn.execute("DELETE FROM picks_log WHERE game_id=?", (r["game_id"],))
+        n += 1
     conn.commit()
-    return len(rows)
+    return n
 
 
 def restore(conn, sport, reason_like):
-    n = conn.execute(
-        "SELECT COUNT(*) c FROM picks_log WHERE sport=? AND voided_at IS NOT NULL"
-        " AND void_reason LIKE ?", (sport, "%" + reason_like + "%")).fetchone()["c"]
-    conn.execute(
-        "UPDATE picks_log SET voided_at=NULL, void_reason=NULL"
-        " WHERE sport=? AND voided_at IS NOT NULL AND void_reason LIKE ?",
-        (sport, "%" + reason_like + "%"))
+    """Put voided picks back in the ledger, exactly as they were."""
+    import json
+    rows = conn.execute(
+        "SELECT game_id, payload FROM picks_voided WHERE void_reason LIKE ?",
+        ("%" + reason_like + "%",)).fetchall()
+    n = 0
+    for r in rows:
+        d = json.loads(r["payload"])
+        if d.get("sport") != sport:
+            continue
+        d.pop("voided_at", None)
+        d.pop("void_reason", None)
+        cols = [k for k in d if k is not None]
+        conn.execute(
+            "INSERT OR REPLACE INTO picks_log (%s) VALUES (%s)"
+            % (",".join(cols), ",".join(":" + c for c in cols)), d)
+        conn.execute("DELETE FROM picks_voided WHERE game_id=?", (r["game_id"],))
+        n += 1
     conn.commit()
     return n
 
