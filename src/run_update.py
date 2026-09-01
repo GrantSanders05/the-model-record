@@ -82,6 +82,35 @@ def season_grade(conn, sport, season, config):
     return preds, metrics.evaluate(preds)
 
 
+def validation_backtest(conn, sport, current_season, config):
+    """
+    Walk-forward replay of the most recent COMPLETE season that has film grades.
+
+    This is the number the public page leads its evidence with, so it is derived
+    here every run rather than read from a file somebody once made — and it carries
+    its confidence interval, because a percentage without one invites exactly the
+    reading the page spends a paragraph warning against.
+    """
+    row = conn.execute(
+        "SELECT MAX(season) s FROM grades WHERE sport=? AND season < ?",
+        (sport, current_season)).fetchone()
+    season = row and row["s"]
+    if not season:
+        return None
+    try:
+        _, m = season_grade(conn, sport, season, config)
+    except Exception as e:                         # noqa: BLE001 - never block a run
+        print("  WARNING: validation backtest failed — %s" % e)
+        return None
+    if not m.get("ats_pct"):
+        return None
+    lo, hi = m["ats_ci95"]
+    return {"season": season, "n": m["ats_n"], "ats_pct": m["ats_pct"],
+            "roi": m["roi"], "ci_lo": lo, "ci_hi": hi,
+            "vs_baseline": round(m.get("su_edge_vs_baseline") or 0.0, 2),
+            "calib_slope": m.get("calib_slope"), "mae": m.get("mae")}
+
+
 def resolve_config(explicit, sport):
     """
     Which config this run uses, in one place.
@@ -184,6 +213,20 @@ def main():
         print(metrics.format_report(m_season, "%s %d season to date" % (args.sport, season)))
     else:
         print("  no completed games with lines yet this season.")
+
+    # The validation backtest, regenerated every run. It used to be a file somebody
+    # produced by hand once: `publish` read output/cfb_backtest_2025.json, nothing in
+    # CI ever wrote it, and so the public page silently omitted the model's ONLY
+    # piece of validation evidence. A renderer with no producer, which is the same
+    # failure as a reader with no writer and just as quiet.
+    val = validation_backtest(conn, args.sport, season, config)
+    if val:
+        vp = os.path.join(OUT, "%s_backtest_%d.json" % (args.sport, val["season"]))
+        os.makedirs(OUT, exist_ok=True)
+        with open(vp, "w") as fh:
+            json.dump(val, fh, indent=2)
+        print("  validation season %d: %.2f%% ATS on %d games (95%% CI %.1f-%.1f)"
+              % (val["season"], val["ats_pct"], val["n"], val["ci_lo"], val["ci_hi"]))
 
     print("\n[4/9] generate picks")
     picks = predict.generate(conn, args.sport, config, season=season)

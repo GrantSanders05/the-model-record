@@ -186,7 +186,10 @@ def main():
     page = os.path.join(ROOT, "output", "site", "fixture.html")
     os.makedirs(os.path.dirname(page), exist_ok=True)
     with open(page, "w") as fh:
-        fh.write(publish.render(fake, "cfb"))
+        # Pass the validation summary too. The public page has a whole section that
+        # only renders when one exists, and a fixture that omits it leaves that
+        # section untested on the branch that matters.
+        fh.write(publish.render(fake, "cfb", publish._backtest_summary()))
     print("public fixture -> %s" % page)
 
     fake.close()

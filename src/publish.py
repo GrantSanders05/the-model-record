@@ -136,10 +136,17 @@ def picks_table(rows, graded):
 
 def render(conn, sport="cfb", backtest_summary=None):
     rec = ledger.record(conn, sport)
-    pending = [dict(r) for r in conn.execute(
+    # A locked row with no side is not a pick. The model records its margin for
+    # every game it can rate, but until a book posts a number there is nothing to
+    # disagree with — and those rows filled most of this table with em dashes,
+    # burying the games the model actually has an opinion on. They are counted
+    # rather than dropped silently, because "40 picks" and "40 picks, 26 of which
+    # are blank" are different claims.
+    pending_all = [dict(r) for r in conn.execute(
         "SELECT * FROM picks_log WHERE sport=? AND graded_at IS NULL "
-        "AND voided_at IS NULL "
-        "ORDER BY kickoff LIMIT 60", (sport,))]
+        "AND voided_at IS NULL ORDER BY kickoff", (sport,))]
+    pending = [r for r in pending_all if r.get("ats_pick")][:40]
+    awaiting_line = len(pending_all) - len([r for r in pending_all if r.get("ats_pick")])
     graded = sorted(rec["rows"], key=lambda r: r["kickoff"] or "", reverse=True)[:150]
     now = dt.datetime.now(dt.timezone.utc).strftime("%d %b %Y %H:%M UTC")
 
@@ -178,17 +185,31 @@ def render(conn, sport="cfb", backtest_summary=None):
         bt = """
   <section>
     <h2>Backtest <span class="tag">simulation, not a live record</span></h2>
-    <p class="note">A replay of the %s season using only information available before
-      each game. It is shown separately from the live ledger above because a
-      simulated result and a real one are not the same claim.</p>
+    <p class="note">A walk-forward replay of the %s season on Grant's film grades,
+      using only information available before each game — a grade published in week
+      seven can never price a week five game. It is shown separately from the live
+      ledger above because a simulated result and a real one are not the same claim,
+      and one season is not enough to settle anything: read the interval, not the
+      headline.</p>
     <div class="hero small">
       <div class="stat"><span class="k">Games</span><span class="v">%d</span></div>
-      <div class="stat"><span class="k">ATS %%</span><span class="v">%.2f%%</span></div>
-      <div class="stat"><span class="k">ROI</span><span class="v">%+.2f%%</span></div>
+      <div class="stat"><span class="k">ATS %%</span><span class="v">%.2f%%</span>
+        <span class="sub">%s</span></div>
+      <div class="stat"><span class="k">ROI</span><span class="v">%+.2f%%</span>
+        <span class="sub">break-even 52.38%%</span></div>
       <div class="stat"><span class="k">vs results-only baseline</span>
         <span class="v">%+.2f</span><span class="sub">points of ATS</span></div>
     </div>
-  </section>""" % (b["season"], b["n"], b["ats_pct"], b["roi"], b["vs_baseline"])
+    <p class="verdict">%s</p>
+  </section>""" % (
+        b["season"], b["n"], b["ats_pct"],
+        ("95%% CI %.1f–%.1f%%" % (b["ci_lo"], b["ci_hi"])
+         if b.get("ci_lo") is not None else "one season"),
+        b["roi"], b["vs_baseline"],
+        ("The whole interval sits above break-even, which is the test that matters."
+         if b.get("ci_lo", 0) > 52.38 else
+         "The interval still includes break-even. Above it is encouraging; proven "
+         "needs more seasons, and this is one."))
 
     # Week by week, in public. A single season-long percentage is the number that
     # is easiest to keep quiet about a bad month inside; splitting it is the
@@ -226,6 +247,11 @@ def render(conn, sport="cfb", backtest_summary=None):
         "weekly": weekly,
         "backtest": bt,
         "pending_n": len(pending),
+        "awaiting": ("" if not awaiting_line else
+                     "A further %d rated game%s no posted line yet, so the model "
+                     "has nothing to disagree with and no side to take." % (
+                         awaiting_line,
+                         " has" if awaiting_line == 1 else "s have")),
         "pending": picks_table(pending, graded=False),
         "graded": picks_table(graded, graded=True),
         "curve_json": json.dumps([
@@ -293,6 +319,10 @@ h2{font-size:16px;margin:38px 0 4px;font-weight:640;letter-spacing:-.015em;
 .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
   box-shadow:var(--sh);padding:15px 16px;transition:border-color .15s}
 .stat:hover{border-color:var(--ink3)}
+/* These are <span>s, and margin-bottom does nothing to an inline box — so the
+   label and the number sat on one line reading "LOCKED PICKS40" and "ROI+4.58%%"
+   across the most prominent element on the page. They have to be blocks. */
+.stat .k,.stat .v,.stat .sub{display:block}
 .stat .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink3);
   font-weight:600;margin-bottom:6px}
 .stat .v{font-size:27px;font-weight:660;letter-spacing:-.03em;line-height:1.05;
@@ -362,7 +392,8 @@ footer strong{color:var(--ink2)}
 <section>
   <h2>Pending picks <span class="tag">%(pending_n)d locked</span></h2>
   <p class="note">Recorded before kickoff. Once locked, a pick is never revised —
-    the ledger is append-only and grading only fills in the result.</p>
+    the ledger is append-only and grading only fills in the result.
+    %(awaiting)s</p>
   %(pending)s
 </section>
 
@@ -418,12 +449,23 @@ def main():
     print("track record page -> %s" % path)
 
 
-def _backtest_summary():
-    """Read the 2025 grade-model replay if it has been recorded."""
-    p = os.path.join(ROOT, "output", "cfb_backtest_2025.json")
-    if os.path.exists(p):
-        return json.load(open(p))
-    return None
+def _backtest_summary(sport="cfb"):
+    """
+    The most recent validation replay run_update wrote, if there is one.
+
+    Globbed rather than hard-coded to a season: the old version named
+    cfb_backtest_2025.json, nothing in CI wrote it, and the public page therefore
+    dropped the whole backtest section without a word for anyone who was not
+    looking at a laptop that happened to have the file.
+    """
+    import glob
+    found = sorted(glob.glob(os.path.join(ROOT, "output", "%s_backtest_*.json" % sport)))
+    if not found:
+        return None
+    try:
+        return json.load(open(found[-1]))
+    except ValueError:
+        return None
 
 
 if __name__ == "__main__":

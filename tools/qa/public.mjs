@@ -34,6 +34,12 @@ ok("updated timestamp present", /\d{2} \w{3} \d{4}/.test($(".upd")?.textContent 
 ok("hero stats render", $$(".hero .stat").length >= 3, String($$(".hero .stat").length));
 ok("every stat has a label and a value",
    $$(".hero .stat").every(s => s.querySelector(".k") && s.querySelector(".v")));
+// They are <span>s. Without display:block the label and the number share a line and
+// the hero reads "LOCKED PICKS40" / "ROI+4.58%" — on the most prominent element on
+// the page. margin-bottom on an inline box does nothing, so assert the computed value.
+ok("the stat label sits above its number, not beside it",
+   $$(".hero .stat .k").every(k => window.getComputedStyle(k).display === "block"),
+   window.getComputedStyle($(".hero .stat .k")).display);
 
 // The chart tooltip ships with `hidden` set and is only meant to appear under the
 // cursor. `[hidden]{display:none}` is a user-agent rule and origin outranks
@@ -93,6 +99,48 @@ ok("does not claim a win rate it has not earned",
    locked.join(" / "));
 ok("empty states are explicit when there is nothing to show",
    $$(".empty").length === 0 || $$(".empty").every(e => e.textContent.trim().length > 12));
+
+console.log("\n── the backtest states its own uncertainty ──");
+{
+  // The prose tells the reader to read the interval, so the interval has to be
+  // there. It also has to be PRODUCED: the summary was read from a file nothing in
+  // CI ever wrote, so this whole section silently vanished in production.
+  const hasBacktest = [...window.document.querySelectorAll("h2")]
+    .some(h => h.textContent.includes("Backtest"));
+  ok("a validation backtest is published", hasBacktest,
+     "no backtest section — is run_update writing output/*_backtest_*.json?");
+  if (hasBacktest) {
+    const t = window.document.body.textContent;
+    ok("...with a confidence interval beside the headline", /95% CI [\d.]+–[\d.]+%/.test(t),
+       t.slice(t.indexOf("ATS %"), t.indexOf("ATS %") + 90));
+    ok("...and a verdict that does not overclaim",
+       /interval still includes break-even|whole interval sits above/.test(t));
+  }
+}
+
+console.log("\n── pending picks are picks ──");
+{
+  // A locked row with no side is not a pick. They used to fill this table with em
+  // dashes and bury the games the model actually has an opinion on.
+  const tbl = [...window.document.querySelectorAll("table")].find(
+    t => /Kickoff/.test(t.textContent) && /Pick/.test(t.textContent));
+  if (tbl) {
+    const heads = [...tbl.querySelectorAll("thead th")].map(t => t.textContent.trim());
+    const pi = heads.indexOf("Pick");
+    const trs = [...tbl.querySelectorAll("tbody tr")];
+    const blank = trs.filter(tr =>
+      ["—", "-", ""].includes((tr.children[pi]?.textContent || "").trim()));
+    ok("every pending row carries an actual side", blank.length === 0,
+       `${blank.length} of ${trs.length} rows show no pick`);
+  } else {
+    ok("no pending table is fine when nothing is locked",
+       /No locked picks pending/.test(text));
+  }
+  // Anything excluded has to be counted, not silently dropped.
+  const note = window.document.body.textContent;
+  ok("games still waiting on a line are counted, not hidden",
+     !/has no posted line yet/.test(note) || /A further \d+ rated game/.test(note));
+}
 
 console.log("\n── tables ──");
 const tables = $$("table");
