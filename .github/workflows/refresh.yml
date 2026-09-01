@@ -161,6 +161,7 @@ jobs:
           cd tools/qa && npm install --no-fund --no-audit --silent
           cd "$GITHUB_WORKSPACE"
           python3 tools/test_tracking.py
+          python3 tools/test_model.py
           node tools/qa/public.mjs
           if [ -f output/research/data.json ]; then node tools/qa/research.mjs; fi
           python3 tools/make_fixture.py

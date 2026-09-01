@@ -145,6 +145,13 @@ def run(games, config, test_seasons=None, score_only_with_line=True):
                 preds.append(rec)
         model.observe(g)
         # ------------------------------------------------------------------
+    # A partial fallback is invisible in the numbers and changes what they mean, so
+    # it is reported rather than left for someone to discover in a bakeoff.
+    share = model.fallback_share()
+    if share > 0.02:
+        print("  NOTE: %.0f%% of predictions fell back to Elo (a team with no grade)."
+              % (100 * share))
+
     return preds
 
 

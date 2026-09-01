@@ -430,6 +430,22 @@ class Model:
             raise ValueError("unknown rater %r" % kind)
         self.totals = TotalsModel(self.cfg) if self.cfg["totals_enabled"] else None
         self._fallback = EloRater(self.cfg) if kind == "grades" else None
+        self.predictions = 0
+        self.fallbacks = 0
+        # A grade rater with NO grades is not a grade rater. Every prediction would
+        # fall through to Elo and the run would report itself as the grade model —
+        # which is how a bakeoff came back showing "grades", "elo" and three blend
+        # weights producing byte-identical results, and how any conclusion drawn
+        # from it would have been about Elo.
+        if kind in ("grades", "blend") and not g:
+            raise ValueError(
+                "rater %r needs film grades and none were supplied. Pass them as "
+                "config['_grades'] (backtest.load_grades) — without them every "
+                "prediction silently becomes an Elo prediction." % kind)
+
+    def fallback_share(self):
+        """What fraction of predictions the fallback rater answered, not this one."""
+        return self.fallbacks / self.predictions if self.predictions else 0.0
 
     # ── home-field advantage ───────────────────────────────────────────────
     #
@@ -468,7 +484,13 @@ class Model:
     def predict(self, game):
         """Predicted HOME margin (+ = home favored) and, optionally, total."""
         s = self.rater.strength(game)
+        self.predictions += 1
         if s is None and self._fallback:
+            # Counted, because a fallback is a DIFFERENT MODEL answering. One team
+            # missing a grade is a fine reason to borrow Elo for that game; every
+            # team missing one means the run is Elo wearing the grade model's name,
+            # and it reports itself as the grade model all the way to the website.
+            self.fallbacks += 1
             s = self._fallback.strength(game)
         if s is None:
             s = 0.0

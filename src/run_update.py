@@ -64,9 +64,20 @@ def refresh(sport, season):
 
 
 def season_grade(conn, sport, season, config):
-    """Score every completed game this season, walk-forward."""
+    """
+    Score every completed game this season, walk-forward.
+
+    THE GRADES HAVE TO BE PASSED IN. Without them a `rater: grades` config produced
+    an Elo prediction for every game and reported it as the model's own season
+    grade — the number printed at step [3/9] and used to judge whether the film is
+    working. engine.Model now refuses outright rather than substituting quietly.
+    """
     games = backtest.load_games(conn, sport)
     cfg = dict(config)
+    if cfg.get("rater") in ("grades", "blend"):
+        cfg["_grades"] = backtest.load_grades(conn, sport)
+        import pro_models
+        cfg["_stats"] = pro_models.load_stats(conn, sport)
     preds = backtest.run(games, cfg, [season])
     return preds, metrics.evaluate(preds)
 
