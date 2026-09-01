@@ -197,8 +197,9 @@ def render(conn, sport="cfb", backtest_summary=None):
         <span class="sub">%s</span></div>
       <div class="stat"><span class="k">ROI</span><span class="v">%+.2f%%</span>
         <span class="sub">break-even 52.38%%</span></div>
-      <div class="stat"><span class="k">vs results-only baseline</span>
-        <span class="v">%+.2f</span><span class="sub">points of ATS</span></div>
+      <div class="stat"><span class="k">Picking winners</span>
+        <span class="v">%+.2f</span>
+        <span class="sub">points vs backing the favourite</span></div>
     </div>
     <p class="verdict">%s</p>
   </section>""" % (
@@ -210,6 +211,10 @@ def render(conn, sport="cfb", backtest_summary=None):
           if b.get("ci_lo", 0) > 52.38 else
           "The interval still includes break-even. Above it is encouraging; proven "
           "needs more seasons, and this is one.")
+         + " The model does not pick straight-up winners better than simply backing "
+           "the favourite, and is not trying to — a favourite wins most of the time "
+           "at a price that says so. The only question that pays is which side of "
+           "the number the game lands on."
          + (" <strong>This figure was computed under an older configuration and has "
             "not been regenerated.</strong>" if b.get("stale") else "")))
 
