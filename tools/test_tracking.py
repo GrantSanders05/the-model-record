@@ -546,6 +546,115 @@ for _f in _os2.listdir(_t4):
     _os2.unlink(_os2.path.join(_t4, _f))
 _os2.rmdir(_t4)
 
+
+# ---------------------------------------------------------------------------
+# The sheet download retries transient failures and ONLY transient failures.
+#
+# On 2026-09-01 a read timeout on Google's export endpoint escaped as a raw
+# TimeoutError -- which is not a URLError, so the "could not reach Google"
+# handler never saw it -- failed the refresh job, and skipped a publish cycle.
+# The sheet edit made that morning was invisible on the site for five hours.
+# These assertions are what stop that recurring.
+# ---------------------------------------------------------------------------
+print("\n── the grade-sheet fetch survives a blip but not a locked door ──")
+
+import urllib.error as _ue                                    # noqa: E402
+import grades_link as _gl                                     # noqa: E402
+
+_gl.RETRY_WAITS = (0, 0, 0)          # same number of attempts, no sleeping
+
+
+class _Resp:
+    def __init__(self, body, ctype):
+        self._b, self.headers = body, {"Content-Type": ctype}
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _urlopen_seq(*outcomes):
+    """Each call pops one outcome: an exception to raise, or bytes to return."""
+    calls = {"n": 0}
+
+    def fake(url, timeout=None):
+        i = calls["n"]
+        calls["n"] += 1
+        out = outcomes[min(i, len(outcomes) - 1)]
+        if isinstance(out, Exception):
+            raise out
+        return _Resp(out, "text/csv")
+    return fake, calls
+
+
+_real_urlopen = _gl.urllib.request.urlopen
+try:
+    # 1. A read timeout on the first attempt is retried, and the second wins.
+    #    THIS IS THE EXACT FAILURE FROM 2026-09-01.
+    _f, _c = _urlopen_seq(TimeoutError("The read operation timed out"), b"a,b\n1,2\n")
+    _gl.urllib.request.urlopen = _f
+    _rows = _gl.read_tab("sid", "Team Data")
+    ok("a read timeout is retried, not fatal", _rows == [["a", "b"], ["1", "2"]], _rows)
+    ok("...and it took a second attempt to get there", _c["n"] == 2, _c["n"])
+
+    # 2. A 503 is transient too.
+    _f, _c = _urlopen_seq(_ue.HTTPError("u", 503, "busy", {}, None), b"a\n1\n")
+    _gl.urllib.request.urlopen = _f
+    ok("a 503 is retried", _gl.read_tab("sid", "Team Data") == [["a"], ["1"]])
+
+    # 3. A 403 means the sheet went private. Retrying wastes 23 seconds and
+    #    buries the one message that tells Grant what to actually go fix.
+    _f, _c = _urlopen_seq(_ue.HTTPError("u", 403, "no", {}, None))
+    _gl.urllib.request.urlopen = _f
+    try:
+        _gl.read_tab("sid", "Team Data")
+        ok("a private sheet raises PermissionError", False, "no raise")
+    except PermissionError as e:
+        ok("a private sheet raises PermissionError", True)
+        ok("...naming the Share setting to change", "Anyone with the link" in str(e))
+    ok("...on the FIRST attempt, with no retry", _c["n"] == 1, _c["n"])
+
+    # 4. A missing tab is an answer, not a failure.
+    _f, _c = _urlopen_seq(_ue.HTTPError("u", 404, "gone", {}, None))
+    _gl.urllib.request.urlopen = _f
+    ok("a missing tab returns None without retrying",
+       _gl.read_tab("sid", "Nope") is None and _c["n"] == 1, _c["n"])
+
+    # 5. Google down for the whole window fails with a readable message rather
+    #    than a traceback, so the Actions log says what happened.
+    _f, _c = _urlopen_seq(TimeoutError("timed out"))
+    _gl.urllib.request.urlopen = _f
+    try:
+        _gl.read_tab("sid", "Team Data")
+        ok("a total outage raises RuntimeError", False, "no raise")
+    except RuntimeError as e:
+        ok("a total outage raises RuntimeError", True)
+        ok("...mentioning Google and the attempt count",
+           "Google" in str(e) and "4 attempts" in str(e), str(e))
+    ok("...after exactly 4 attempts", _c["n"] == 4, _c["n"])
+
+    # CONTROL: if _fetch stopped retrying, assertion 1 above would go red. Prove
+    # the test can fail rather than trusting that it passed.
+    _saved = _gl.RETRY_WAITS
+    _gl.RETRY_WAITS = ()
+    _f, _c = _urlopen_seq(TimeoutError("x"), b"a\n1\n")
+    _gl.urllib.request.urlopen = _f
+    _caught = False
+    try:
+        _gl.read_tab("sid", "Team Data")
+    except RuntimeError:
+        _caught = True
+    ok("CONTROL: with retries removed the same blip is fatal", _caught)
+    _gl.RETRY_WAITS = _saved
+finally:
+    _gl.urllib.request.urlopen = _real_urlopen
+
+
 print("=" * 62)
 print("%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)

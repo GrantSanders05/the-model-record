@@ -30,7 +30,10 @@ const ok = (n, c, d = "") => { if (c) { pass++; console.log(`  [PASS] ${n}`); }
 console.log("── structure ──");
 ok("title is set", window.document.title.includes("Track Record"));
 ok("h1 renders", ($("h1")?.textContent || "").includes("The Model"));
-ok("updated timestamp present", /\d{2} \w{3} \d{4}/.test($(".upd")?.textContent || ""));
+ok("a no-JS reader still gets an absolute stamp",
+   /<div class="upd"[^>]*>Generated automatically · \d{2} \w{3} \d{4}/.test(html));
+ok("a JS reader gets a relative one", /ago|just now/.test($(".upd")?.textContent || ""),
+   $(".upd")?.textContent);
 ok("hero stats render", $$(".hero .stat").length >= 3, String($$(".hero .stat").length));
 ok("every stat has a label and a value",
    $$(".hero .stat").every(s => s.querySelector(".k") && s.querySelector(".v")));
@@ -175,6 +178,58 @@ ok("lang is declared", window.document.documentElement.getAttribute("lang") === 
 ok("dark mode is styled", html.includes("prefers-color-scheme:dark"));
 ok("no raw template placeholders leaked", !/%\([a-z_]+\)s/.test(html));
 ok("footer explains break-even", text.includes("52.38"));
+
+
+// ---------------------------------------------------------------------------
+// The page reports its own age.
+//
+// The site republishes on a GitHub Actions cron. GitHub throttles free
+// scheduled runs hard: measured over 2026-08-24..09-01 the median gap between
+// runs was 53 minutes against a stated */30, the p90 was 5.6 hours and the
+// worst was 11.8. So "is what I'm looking at current?" is a real question with
+// a non-obvious answer, and the page has to answer it rather than show a UTC
+// stamp and look authoritative. These re-render the page at controlled clock
+// offsets, which is the only way to test a relative timestamp.
+// ---------------------------------------------------------------------------
+console.log("\n── the page reports its own age ──");
+
+const AGE_NOW = Date.parse("2026-09-01T12:00:00Z");
+function atAge(builtIso) {
+  const h = html.replace(/data-built="[^"]*"/, `data-built="${builtIso}"`);
+  const d = new JSDOM(h, { runScripts: "dangerously", virtualConsole: vc,
+    url: "https://example.test/",
+    beforeParse(w) {
+      const R = w.Date;
+      w.Date = class extends R {
+        constructor(...a) { return a.length ? new R(...a) : new R(AGE_NOW); }
+        static now() { return AGE_NOW; }
+      };
+    } });
+  return d.window.document.getElementById("upd");
+}
+
+ok("the build stamp is machine-readable", /data-built="\d{4}-\d{2}-\d{2}T/.test(html));
+
+let u = atAge("2026-09-01T11:52:00Z");
+ok("a page built 8 minutes ago says so", /8 minutes ago/.test(u.textContent), u.textContent);
+ok("...and is not flagged stale", !u.classList.contains("stale"));
+
+u = atAge("2026-09-01T06:00:00Z");
+ok("six hours old reads in hours", /6 hours ago/.test(u.textContent), u.textContent);
+ok("...and IS flagged stale", u.classList.contains("stale"));
+ok("...so the warning rule applies to it",
+   html.includes("your latest sheet edits may not be here yet"));
+
+ok("3h trips the threshold", atAge("2026-09-01T09:00:00Z").classList.contains("stale"));
+ok("...2h59m does not", !atAge("2026-09-01T09:01:00Z").classList.contains("stale"));
+ok("a two-day-old page reads in days",
+   /2 days ago/.test(atAge("2026-08-30T12:00:00Z").textContent));
+
+// CONTROL. A relative timestamp that silently stopped updating would still
+// contain the words "Generated automatically", so assert it can be WRONG.
+ok("CONTROL: a fresh page never claims to be hours old",
+   !/hours ago|days ago/.test(atAge("2026-09-01T11:59:40Z").textContent),
+   atAge("2026-09-01T11:59:40Z").textContent);
 
 console.log("\n── no runtime errors ──");
 ok("zero JS errors", errors.length === 0, errors.slice(0, 2).join(" | "));

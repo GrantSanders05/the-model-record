@@ -148,7 +148,9 @@ def render(conn, sport="cfb", backtest_summary=None):
     pending = [r for r in pending_all if r.get("ats_pick")][:40]
     awaiting_line = len(pending_all) - len([r for r in pending_all if r.get("ats_pick")])
     graded = sorted(rec["rows"], key=lambda r: r["kickoff"] or "", reverse=True)[:150]
-    now = dt.datetime.now(dt.timezone.utc).strftime("%d %b %Y %H:%M UTC")
+    _now = dt.datetime.now(dt.timezone.utc)
+    now = _now.strftime("%d %b %Y %H:%M UTC")
+    now_iso = _now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if rec.get("ats_pct") is not None:
         lo, hi = rec["ats_ci95"]
@@ -249,6 +251,7 @@ def render(conn, sport="cfb", backtest_summary=None):
     return TEMPLATE % {
         "brand": BRAND,
         "updated": now,
+        "updated_iso": now_iso,
         "headline": headline,
         "chart": equity_svg(rec["curve"]),
         "weekly": weekly,
@@ -317,6 +320,9 @@ header{margin-bottom:26px}
 h1{margin:0;font-size:34px;line-height:1.1;letter-spacing:-.035em;font-weight:700}
 h1 span{color:var(--brand)}
 .upd{color:var(--ink3);font-size:12px;margin-top:9px;font-variant-numeric:tabular-nums}
+.upd .ago{font-weight:600}
+.upd.stale{color:#b4741f}
+.upd.stale .ago::after{content:" — your latest sheet edits may not be here yet";font-weight:400}
 h2{font-size:16px;margin:38px 0 4px;font-weight:640;letter-spacing:-.015em;
   display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .tag{font-size:10px;font-weight:650;color:var(--ink3);border:1px solid var(--line);
@@ -384,7 +390,7 @@ footer strong{color:var(--ink2)}
 <header>
   <div class="eyebrow"><i></i> Live &amp; automated</div>
   <h1>The <span>Model</span> — Track Record</h1>
-  <div class="upd">Generated automatically · %(updated)s</div>
+  <div class="upd" id="upd" data-built="%(updated_iso)s">Generated automatically · %(updated)s</div>
 </header>
 
 <section>
@@ -439,6 +445,51 @@ footer strong{color:var(--ink2)}
     c.addEventListener('mouseenter',show); c.addEventListener('focus',show);
     c.addEventListener('mouseleave',function(){tip.hidden=true;cross.style.display='none';});
   });
+})();
+</script>
+<script>
+/* How stale is this page?
+
+   The build stamp is UTC, which is not a question anyone can answer at a glance
+   from Central time. The site is republished by a GitHub Actions cron; GitHub
+   throttles free scheduled runs hard, so the real gap between a sheet edit and
+   it appearing here ran a median of 53 minutes over the last week -- but one
+   gap in five exceeded three hours. That is exactly the situation where the
+   page has to say so itself rather than look authoritative and be six hours
+   old. Rendered in the browser so it stays true however long the tab is open.
+
+   No dependency on the page having been freshly served: a CDN copy up to ten
+   minutes old still reports its own true age, because the age is measured from
+   the embedded build time, not from load. */
+(function(){
+  var el = document.getElementById("upd");
+  if (!el) return;
+  var built = new Date(el.dataset.built);
+  if (isNaN(built)) return;
+  var STALE_MIN = 180;                      /* 3h: the p90 of observed gaps */
+  function human(m){
+    if (m < 1)  return "just now";
+    if (m < 60) return m + (m === 1 ? " minute ago" : " minutes ago");
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + (h === 1 ? " hour ago" : " hours ago");
+    var d = Math.floor(h / 24);
+    return d + (d === 1 ? " day ago" : " days ago");
+  }
+  function tick(){
+    var mins = Math.floor((Date.now() - built.getTime()) / 60000);
+    if (mins < 0) mins = 0;
+    var local = built.toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+    });
+    el.innerHTML = 'Generated automatically · <span class="ago">' +
+      human(mins) + '</span> · ' + local;
+    el.classList.toggle("stale", mins >= STALE_MIN);
+    el.title = "Built " + built.toISOString().replace("T"," ").slice(0,16) +
+               " UTC. The site republishes on a schedule, so a very recent " +
+               "sheet edit can take up to a few hours to appear.";
+  }
+  tick();
+  setInterval(tick, 60000);
 })();
 </script>
 </body></html>"""

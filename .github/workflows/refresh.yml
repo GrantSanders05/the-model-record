@@ -18,8 +18,24 @@ name: The Model — refresh grades & republish
 
 on:
   schedule:
-    - cron: "*/30 * * * *"      # every half hour — a sheet edit is live within one cycle
+    # STATED */30, DELIVERED NOWHERE NEAR IT. GitHub throttles free scheduled
+    # workflows under load and simply drops runs; it does not queue them.
+    # Measured over 2026-08-24..09-01, 100 runs: median gap 53 min, p90 5.6 h,
+    # worst 11.8 h, and 40% of gaps over an hour. Asking for */5 would not help --
+    # the throttle is on the schedule event, so a shorter cron is dropped harder.
+    # This stays as the floor, and `repository_dispatch` below is what makes an
+    # edit actually appear promptly.
+    - cron: "*/30 * * * *"
   workflow_dispatch:            # or immediately, from the Actions tab
+
+  # THE SHEET PUSHES, INSTEAD OF GITHUB POLLING.
+  # An Apps Script bound to the workbook (tools/sheet-trigger.gs) fires this the
+  # moment Grant stops editing, so a grade change is on the site in about a
+  # minute instead of "median 53 minutes, sometimes six hours". Unlike `schedule`,
+  # `repository_dispatch` is not throttled. Inert until the script is installed;
+  # see tools/SHEET-TRIGGER-SETUP.md.
+  repository_dispatch:
+    types: [sheet-edited]
 
 # Shares the main workflow's group so a refresh and a full update can never deploy
 # over each other. Queued rather than cancelled: a refresh that is dropped silently

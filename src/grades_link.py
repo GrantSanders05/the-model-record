@@ -31,6 +31,7 @@ Both feed the identical importer, so nothing downstream changes.
 import csv
 import io
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -52,6 +53,47 @@ def csv_url(sid, tab):
         BASE, sid, urllib.parse.quote(tab))
 
 
+# Transient HTTP codes. Everything else is a real answer -- 403 means the sheet
+# went private and 404 means the tab is gone, and retrying either just delays a
+# message Grant needs to read.
+RETRY_CODES = (429, 500, 502, 503, 504)
+RETRY_WAITS = (2, 6, 15)          # seconds between attempts; ~23s worst case
+
+
+def _fetch(url, timeout, what):
+    """
+    Open a URL, retrying only the failures that are worth retrying.
+
+    THE BUG THIS CLOSES: a read timeout raises a bare `TimeoutError`, which is
+    NOT a subclass of urllib.error.URLError. The handlers below intended to
+    catch "could not reach Google" and missed the single most common way that
+    happens -- so on 2026-09-01 a 90-second stall on Google's side escaped as a
+    raw traceback, failed the job, and skipped a publish cycle entirely. A
+    sheet edit made that morning sat unpublished for five hours.
+
+    Google's export endpoint stalls for a few seconds fairly often and is fine
+    on the next attempt, so one retry pass converts most of those into a normal
+    run instead of a missed one.
+    """
+    last = None
+    for attempt, wait in enumerate((RETRY_WAITS + (None,))[:len(RETRY_WAITS) + 1]):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                return r.read(), r.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as e:
+            if e.code not in RETRY_CODES:
+                raise                        # a real answer: let the caller read it
+            last = e
+        except (TimeoutError, urllib.error.URLError, ConnectionError, OSError) as e:
+            last = e
+        if wait is None:
+            break
+        print("  %s: %s -- retrying in %ds" % (what, last, wait))
+        time.sleep(wait)
+    raise RuntimeError("could not reach Google after %d attempts (%s): %s"
+                       % (len(RETRY_WAITS) + 1, what, last))
+
+
 def read_tab(sid, tab, timeout=45):
     """
     One tab as a list of rows, or None if that tab does not exist.
@@ -62,9 +104,8 @@ def read_tab(sid, tab, timeout=45):
     import reports "0 teams" as though the sheet were empty.
     """
     try:
-        with urllib.request.urlopen(csv_url(sid, tab), timeout=timeout) as r:
-            body = r.read().decode("utf-8", "replace")
-            ctype = r.headers.get("Content-Type", "")
+        raw, ctype = _fetch(csv_url(sid, tab), timeout, "tab %r" % tab)
+        body = raw.decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         if e.code in (400, 404):
             return None                      # no such tab, or no such document
@@ -74,8 +115,6 @@ def read_tab(sid, tab, timeout=45):
                 "Open it, press Share, and set General access to\n"
                 "  'Anyone with the link'  ->  Viewer." % e.code)
         raise
-    except urllib.error.URLError as e:
-        raise RuntimeError("could not reach Google: %s" % e)
 
     head = body.lstrip()[:200].lower()
     if "text/html" in ctype or head.startswith("<!doctype") or "<html" in head:
@@ -109,9 +148,7 @@ def export_workbook(sid, timeout=90):
     """
     url = "%s/%s/export?format=xlsx" % (BASE, sid)
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
-            body = r.read()
-            ctype = r.headers.get("Content-Type", "")
+        body, ctype = _fetch(url, timeout, "workbook export")
     except urllib.error.HTTPError as e:
         if e.code in (400, 404):
             return None
@@ -121,8 +158,6 @@ def export_workbook(sid, timeout=90):
                 "Open it, press Share, and set General access to\n"
                 "  'Anyone with the link'  ->  Viewer." % e.code)
         raise
-    except urllib.error.URLError as e:
-        raise RuntimeError("could not reach Google: %s" % e)
 
     # A private document answers with a sign-in page, not a spreadsheet. An xlsx
     # is a zip, so it always starts "PK".
