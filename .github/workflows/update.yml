@@ -20,6 +20,13 @@ on:
     - cron: "0 15 * * 2"        # Tuesday midday: rankings land, re-grade the week
     - cron: "0 16 * * 6"        # Saturday midday: catch grade edits before kickoffs
   workflow_dispatch:            # lets Grant trigger a run by hand from the Actions tab
+    inputs:
+      void_before:
+        description: >-
+          Void ungraded, not-yet-played picks published before this date
+          (YYYY-MM-DD), then let the run re-lock the near slate. Blank = do nothing.
+        required: false
+        default: ""
 
 concurrency:
   group: model-update
@@ -185,6 +192,24 @@ jobs:
         with:
           path: output/alerts.json
           key: model-alerts-v1-${{ github.run_id }}
+
+      # ONLY when explicitly dispatched with a date. Nothing scheduled can reach this.
+      #
+      # It exists because `ledger.lock` had no window and stamped all 869 remaining
+      # games on 6 August, from ratings whose quality-points term is zero and against
+      # lines for games no book had priced. `INSERT OR IGNORE` made them permanent,
+      # so every week of film graded afterwards was structurally unable to reach the
+      # record. Those picks are a bug's output, not the model's opinion.
+      #
+      # The rows are marked, never deleted; anything already played is refused; and
+      # `--restore` puts them back. See src/void_picks.py.
+      - name: Void preseason picks (only when asked)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.void_before != '' }}
+        env:
+          VOID_BEFORE: ${{ inputs.void_before }}
+        run: |
+          python3 src/void_picks.py --sport cfb --before "$VOID_BEFORE" --apply \
+            --reason "locked $VOID_BEFORE without a lock window — preseason ratings with no in-season film, against lines that did not exist yet"
 
       - name: Run the update
         env:
