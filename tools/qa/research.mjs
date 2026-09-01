@@ -436,8 +436,22 @@ console.log("\n── results / tracking ──");
     ok("...and only shows losses",
        $$("#rpicks tbody tr").every(tr => tr.querySelector(".res-l") !== null));
     $("#rfilter").value = "all"; fire($("#rfilter"), "change");
-    $("#rweek").value = String(T.weekly[0].key); fire($("#rweek"), "change");
-    ok("week filter narrows the pick list", matched() < allMatched, $("#rpicksnote").textContent);
+    // "narrows" is only true when more than one week has been graded. In the first
+    // week of a season, selecting the only week matches everything — correctly —
+    // and this failed for that reason, taking the deploy with it. Assert what the
+    // filter is actually for: it selects exactly that week.
+    const wk = T.weekly[0];
+    $("#rweek").value = String(wk.key); fire($("#rweek"), "change");
+    const wkMatched = matched();
+    ok("the week filter selects exactly that week's picks",
+       wkMatched === (wk.n ?? wk.graded ?? wkMatched),
+       `${wkMatched} shown, week ${wk.key} has ${wk.n ?? wk.graded}`);
+    if (T.weekly.length > 1)
+      ok("...which is fewer than the whole record", wkMatched < allMatched,
+         `${wkMatched} of ${allMatched}`);
+    else
+      ok("...and with one graded week that is the whole record so far",
+         wkMatched === allMatched, `${wkMatched} of ${allMatched}`);
     $("#rweek").value = ""; fire($("#rweek"), "change");
   }
 }
@@ -791,8 +805,24 @@ const wk1 = rows("#bets");
 ok("week filter is a subset of the mode", wk1 > 0 && wk1 <= spreadAll, `${wk1} of ${spreadAll}`);
 
 // A week with no priced spreads must show the empty state, not last week's rows.
-$("#wk").value = "8"; fire($("#wk"));
-ok("empty week shows the empty state", $("#bets .empty") !== null);
+// Week 8 was hard-coded here and stopped being empty the moment books posted lines
+// that far out, so the week is derived from the bundle instead. Which branch ran is
+// stated, because an assertion that quietly stops applying is worse than no
+// assertion at all.
+{
+  const offered = $$("#wk option").map(o => o.value).filter(Boolean);
+  const BUN = JSON.parse(bundle);
+  const priced = w => BUN.bets.filter(b => String(b.week) === w && b.spread_edge != null).length;
+  const emptyWeek = offered.find(w => priced(w) === 0);
+  if (emptyWeek) {
+    $("#wk").value = emptyWeek; fire($("#wk"));
+    ok("a week with no priced spreads shows the empty state",
+       $("#bets .empty") !== null, `week ${emptyWeek}`);
+  } else {
+    ok("every offered week has priced spreads, so none can be empty",
+       offered.every(w => priced(w) > 0), `${offered.length} weeks, all priced`);
+  }
+}
 
 $("#wk").value = ""; fire($("#wk"));
 $("#sortby").value = "ml"; fire($("#sortby"));
@@ -843,9 +873,25 @@ ok("budget is allocated PER WEEK, not once overall",
 // computed from one map, so this is really a rounding test: round on the way out and
 // seven $28.57 rows sit under a $400.00 total that does not add up.
 const stakedCard = $$("#betcards .card").find(c => c.querySelector(".k")?.textContent === "Staked");
+// Compare NUMBERS, not strings. The card is rendered with toLocaleString, so it
+// grows a thousands separator above $999.99 and a string match then fails on two
+// values that are equal — which is exactly what happened once the budget spanned
+// fourteen live weeks.
+const cardAmount = +(stakedCard?.querySelector(".v").textContent || "")
+  .replace(/[$,]/g, "");
 ok("the Staked card equals the column, to the cent",
-   stakedCard?.querySelector(".v").textContent === "$" + totalStaked().toFixed(2),
-   `card ${stakedCard?.querySelector(".v").textContent} vs column $${totalStaked().toFixed(2)}`);
+   near(cardAmount, totalStaked(), 0.005),
+   `card ${cardAmount.toFixed(2)} vs column ${totalStaked().toFixed(2)}`);
+
+// The card sums a Map keyed by game_id; the column sums rendered rows. They can
+// only disagree if a game appears on the board TWICE — one map entry, two rows —
+// which would also double-count that game's edge in every summary above it.
+{
+  const ids = JSON.parse(bundle).bets.map(b => b.game_id);
+  const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+  ok("no game appears on the bets board twice",
+     dupes.length === 0, `${dupes.length} duplicated, e.g. ${dupes[0] || "-"}`);
+}
 
 // Kelly-weighted and flat must differ wherever a week's edges differ. If they agree
 // everywhere the mode switch is decorative.
