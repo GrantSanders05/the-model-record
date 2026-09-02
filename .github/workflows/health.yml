@@ -1,0 +1,95 @@
+name: The Model — health check
+
+# ARE THE PAGES ACTUALLY SHOWING WHAT THE SHEET SAYS?
+#
+# Every other night at 10pm Eastern. This is deliberately NOT a check on whether
+# the jobs passed -- update.yml already opens an issue when it goes red. It
+# checks the PUBLISHED ARTEFACTS, because the two failures that actually bite
+# both leave every job green:
+#
+#   * the rebuild cron gets throttled and the site sits hours behind the sheet
+#     while looking perfectly normal
+#   * refresh.yml starts failing (it has no notifier of its own) and the pages
+#     keep serving the last good build -- correct-looking and stale
+#
+# It runs here rather than as a scheduled cloud agent because a cloud sandbox
+# can reach neither endpoint: its egress proxy blocks *.github.io by policy and
+# api.github.com needs an app connection the org has not granted. Inside Actions
+# both are free and already authenticated.
+
+on:
+  schedule:
+    # 02:00 UTC = 10pm US Eastern during EDT, on alternating days.
+    # TWO KNOWN WARTS, both harmless for a health check and both deliberate:
+    #   * `*/2` restarts at day 1 each month, so a 31-day month runs two nights
+    #     running at the turn.
+    #   * when EDT ends on 1 Nov 2026 this lands at 9pm Eastern until March.
+    # Neither is worth a second workflow to correct; adjust the hour in November
+    # if the time matters.
+    - cron: "0 2 */2 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write                 # the report is delivered as an issue, which emails
+
+concurrency:
+  group: model-health
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run the checks
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          python3 tools/health_check.py > report.md
+          echo "verdict=$?" >> "$GITHUB_OUTPUT"
+          cat report.md
+
+      # A clean night is silent. An alert that fires every time it runs is one
+      # nobody reads by the third week.
+      - name: File or update the alert
+        if: steps.check.outputs.verdict != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="Health check: the site needs attention"
+          BODY="$(cat report.md)
+
+          [View the run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          N=$(gh issue list --state open --search "$TITLE in:title" --json number -q '.[0].number')
+          if [ -n "$N" ]; then
+            gh issue comment "$N" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi
+
+      # AND IT CLOSES ITSELF WHEN THINGS RECOVER.
+      # A notifier with no exit is how issue #1 sat open for a day after the
+      # pipeline had been green for six consecutive runs -- and a permanently
+      # open alert trains you to ignore the next real one.
+      - name: Close the alert once healthy
+        if: steps.check.outputs.verdict == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for T in "Health check: the site needs attention" \
+                   "The scheduled update is failing"; do
+            N=$(gh issue list --state open --search "$T in:title" --json number -q '.[0].number')
+            if [ -n "$N" ]; then
+              gh issue close "$N" --comment "Recovered — the health check at $(date -u +'%Y-%m-%d %H:%M') UTC found the site current, the workflows green and the research app published. Reopening automatically if it regresses."
+              echo "closed #$N ($T)"
+            fi
+          done

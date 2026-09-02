@@ -655,6 +655,98 @@ finally:
     _gl.urllib.request.urlopen = _real_urlopen
 
 
+
+# ---------------------------------------------------------------------------
+# The health check reports problems it should and stays quiet when it should.
+#
+# A monitor is only worth having if its alarm path is exercised. The happy path
+# runs every other night and would look fine forever even if the PROBLEM branch
+# were unreachable -- which is the failure mode that makes people trust a
+# broken alarm. So the assertions here are mostly about the bad news.
+# ---------------------------------------------------------------------------
+print("\n── the health check can actually raise an alarm ──")
+
+import datetime as _dt2                                     # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import health_check as _hc                                  # noqa: E402
+
+_NOW = _dt2.datetime(2026, 9, 2, 12, 0, tzinfo=_dt2.timezone.utc)
+
+
+def _page(built):
+    return ('<div class="upd" id="upd" data-built="%s">x</div>' % built).encode()
+
+
+def _site(built):
+    _hc._get = lambda u, raw=False: _page(built)
+    return _hc.check_site(_NOW)
+
+
+_v, _d = _site("2026-09-02T11:30:00Z")
+ok("a 30-minute-old site is OK", _v == _hc.OK, "%s %s" % (_v, _d))
+_v, _d = _site("2026-09-02T07:00:00Z")
+ok("a 5-hour-old site WARNs", _v == _hc.WARN, "%s %s" % (_v, _d))
+_v, _d = _site("2026-09-01T20:00:00Z")
+ok("a 16-hour-old site is a PROBLEM", _v == _hc.PROBLEM, "%s %s" % (_v, _d))
+
+# A page with no stamp cannot tell a reader its age either -- the whole
+# staleness signal is gone, so this is a problem and not a WARN.
+_hc._get = lambda u, raw=False: b"<div class='upd'>no stamp</div>"
+ok("a page with no build stamp is a PROBLEM", _hc.check_site(_NOW)[0] == _hc.PROBLEM)
+
+
+def _fail(exc):
+    def g(u, raw=False):
+        raise exc
+    return g
+
+
+_hc._get = _fail(_ue.HTTPError("u", 404, "gone", {}, None))
+_v, _d = _hc.check_bundle()
+ok("a 404 research bundle is a PROBLEM", _v == _hc.PROBLEM, _d)
+ok("...and names RESEARCH_PASS as the cause", "RESEARCH_PASS" in _d, _d)
+
+_hc._get = lambda u, raw=False: b"x" * 1000
+ok("a truncated bundle is a PROBLEM", _hc.check_bundle()[0] == _hc.PROBLEM)
+_hc._get = lambda u, raw=False: b"x" * (2 * 1024 * 1024)
+ok("a full-size bundle is OK", _hc.check_bundle()[0] == _hc.OK)
+
+_hc._get = _fail(OSError("network down"))
+ok("an unreachable site is a PROBLEM, not a pass",
+   _hc.check_site(_NOW)[0] == _hc.PROBLEM)
+
+
+def _runs(rows):
+    _hc._get = lambda u, raw=False: {"workflow_runs": rows}
+    return _hc.check_runs(_NOW)
+
+
+def _r(name, concl, hours_ago):
+    t = (_NOW - _dt2.timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"name": name, "conclusion": concl, "created_at": t}
+
+
+ok("all-green runs are OK",
+   _runs([_r("a", "success", 1), _r("a", "success", 5)])[0] == _hc.OK)
+# The LAST run failing means the current state is broken -- distinct from a blip
+# that already recovered, which is why the newest run is weighted differently.
+ok("a workflow whose LAST run failed is a PROBLEM",
+   _runs([_r("a", "failure", 1), _r("a", "success", 5)])[0] == _hc.PROBLEM)
+ok("one old failure that recovered is only a WARN at most",
+   _runs([_r("a", "success", 1), _r("a", "failure", 5)])[0] != _hc.PROBLEM)
+ok("two failures in 48h WARNs even after recovery",
+   _runs([_r("a", "success", 1), _r("a", "failure", 5),
+          _r("a", "failure", 9)])[0] == _hc.WARN)
+# Failures older than the window must not keep an alarm alive forever.
+ok("failures outside the 48h window are ignored",
+   _runs([_r("a", "success", 1), _r("a", "failure", 100),
+          _r("a", "failure", 200)])[0] == _hc.OK)
+
+# CONTROL: prove these assertions can fail, rather than health_check having a
+# stuck return value that happens to satisfy them.
+ok("CONTROL: OK and PROBLEM are distinguishable",
+   _hc.OK != _hc.PROBLEM and _site("2026-09-02T11:30:00Z")[0] != _site("2026-09-01T20:00:00Z")[0])
+
 print("=" * 62)
 print("%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)
