@@ -816,11 +816,20 @@ for _f in ("refresh.yml", "update.yml", "health.yml"):
     ok("%s calls the notifier" % _f, "notify_failure.sh" in _t)
     ok("...and only on failure", "if: failure()" in _t)
 
-# CONTROL: prove the parse check can fail.
+# CONTROL: prove `bash -n` above can actually fail, rather than always passing.
+#
+# The first control here used the exact shape that broke -- `$(cat <<EOF ...)`
+# with an apostrophe inside -- and it was WRONG, because that shape is a bash 3.2
+# limitation, not a universal one. macOS ships bash 3.2 (2007, the last GPLv2
+# release) and rejects it; the Ubuntu runners have bash 5 and accept it happily.
+# So the control passed on the laptop, failed in CI, and in doing so corrected
+# the claim that the original notifier could never have run: on the runner, it
+# probably would have. Use a construct no bash accepts.
 _broken = os.path.join(os.path.dirname(_NF), ".nf_control.sh")
-open(_broken, "w").write('echo "$(cat <<EOF\nit\'s broken\nEOF\n)"\n')
-ok("CONTROL: bash -n rejects the shape that actually broke",
-   _sp.run(["bash", "-n", _broken], capture_output=True).returncode != 0)
+open(_broken, "w").write('if true; then\n  echo "unterminated\n')
+_ctl = _sp.run(["bash", "-n", _broken], capture_output=True)
+ok("CONTROL: bash -n rejects a genuinely invalid script", _ctl.returncode != 0,
+   "bash %s accepted it" % os.environ.get("BASH_VERSION", "?"))
 os.unlink(_broken)
 
 print("=" * 62)
