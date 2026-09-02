@@ -1,5 +1,18 @@
 /**
- * encrypt_bundle.mjs — encrypt the research bundle so it can be hosted in public.
+ * encrypt_bundle.mjs — NOT WIRED IN. Kept for reference and easy reversal.
+ *
+ * ⚠ THE PUBLISHED RESEARCH BUNDLE IS NO LONGER ENCRYPTED. Grant reviewed what it
+ * contains on 2026-09-02 -- no personal data, but the full film grades for all
+ * 138 teams -- and chose to publish it in the clear rather than carry a
+ * passphrase between machines. Both workflows now copy `data.json` straight into
+ * the site; nothing calls this script.
+ *
+ * It is left here because the decision is reversible and re-deriving this file
+ * would be the annoying part. To restore the gate you would need this, the
+ * `RESEARCH_PASS` secret, and the decrypt path in site/research/index.html
+ * (removed in the same commit -- recover it from git history).
+ *
+ * ORIGINAL RATIONALE, still accurate as a description of the trade:
  *
  * WHY THIS EXISTS
  * The research app needs to be reachable from a phone, for free, and the film

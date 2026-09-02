@@ -32,7 +32,7 @@ import urllib.request
 REPO = os.environ.get("GITHUB_REPOSITORY", "GrantSanders05/the-model-record")
 _owner, _name = REPO.split("/", 1)
 SITE = "https://%s.github.io/%s/" % (_owner.lower(), _name)
-BUNDLE = SITE + "research/data.enc.json"
+BUNDLE = SITE + "research/data.json"
 API = "https://api.github.com/repos/" + REPO
 
 STALE_WARN_H = 3        # the amber threshold the page itself uses
@@ -126,7 +126,7 @@ def check_bundle():
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return PROBLEM, ("research bundle is **404** — the research app is not "
-                             "being published (RESEARCH_PASS secret missing?)")
+                             "being published at all")
         return PROBLEM, "research bundle HTTP %d" % e.code
     except Exception as e:
         return PROBLEM, "research bundle unreachable: %s" % e
@@ -159,9 +159,9 @@ FIX = {
             "the sheet is not shared, the Google Sheet's sharing was changed — set "
             "it back to **Anyone with the link → Viewer**; the pipeline reads it "
             "through a link-shared export and has no other way in.",
-    "bundle": "Re-set the `RESEARCH_PASS` repo secret, then rebuild — the bundle is "
-              "encrypted at build time, so the new passphrase does nothing until "
-              "the site republishes.",
+    "bundle": "The assemble step did not copy `output/research/data.json` into the "
+              "published site. Check the most recent run's *Assemble site* step — it "
+              "hard-fails when the export produced no bundle.",
 }
 
 

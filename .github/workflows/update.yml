@@ -299,30 +299,28 @@ jobs:
 
       # ── assemble the site ────────────────────────────────────────────────
       # The public page is generated from the append-only ledger, so it can never
-      # disagree with the record it claims to show. The research app ships beside
-      # it with its data ENCRYPTED: a free GitHub account can only serve Pages
-      # from a public repo and Pages cannot do Basic auth, so the page is public
-      # and the grades are not.
+      # disagree with the record it claims to show.
+      #
+      # THE RESEARCH BUNDLE IS PUBLISHED IN THE CLEAR, DELIBERATELY. It used to
+      # ship as AES-GCM ciphertext behind a passphrase, because the film grades
+      # are the model's edge and Pages cannot do Basic auth on a free account.
+      # Grant reviewed the bundle's contents on 2026-09-02 and decided the grades
+      # do not need protecting; there is nothing personal in it, and the barrier
+      # cost him access from his own machines. So `teams[].grades` is now served
+      # openly. The consequence to keep in mind: anything that IS private must be
+      # kept OUT of this bundle by research_export.py, because the transport no
+      # longer protects anything.
       - name: Assemble site
-        env:
-          RESEARCH_PASS: ${{ secrets.RESEARCH_PASS }}
         run: |
           rm -rf _site && mkdir -p _site
           cp -r output/site/. _site/ 2>/dev/null || echo "no public page produced"
-          if [ -z "$RESEARCH_PASS" ]; then
-            echo "::warning::RESEARCH_PASS is not set — the research app will NOT be published."
-            echo "::warning::Set it and the encrypted bundle ships on the next run:"
-            echo "::warning::  gh secret set RESEARCH_PASS"
-          elif [ -f output/research/data.json ]; then
+          if [ -f output/research/data.json ]; then
             mkdir -p _site/research
             cp site/research/index.html _site/research/index.html
-            node tools/encrypt_bundle.mjs output/research/data.json _site/research/data.enc.json
-            # Belt and braces: the plaintext bundle must never reach the artifact.
-            # It is the one file in this repo that would leak every film grade.
-            if find _site -name 'data.json' | grep -q .; then
-              echo "::error::plaintext data.json found in _site — refusing to publish"; exit 1
-            fi
-            echo "research app published (encrypted)"
+            cp output/research/data.json _site/research/data.json
+            echo "research app published (public)"
+          else
+            echo "::error::no research bundle was built"; exit 1
           fi
           find _site -type f | sed 's/^/  /'
 

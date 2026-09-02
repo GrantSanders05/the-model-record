@@ -152,20 +152,15 @@ jobs:
 
       - name: Assemble site
         if: ${{ env.SKIP != 'true' }}
-        env:
-          RESEARCH_PASS: ${{ secrets.RESEARCH_PASS }}
         run: |
           rm -rf _site && mkdir -p _site
           cp -r output/site/. _site/ 2>/dev/null || echo "no public page produced"
-          if [ -z "$RESEARCH_PASS" ]; then
-            echo "::warning::RESEARCH_PASS is not set — the research app is NOT published."
-          elif [ -f output/research/data.json ]; then
+          if [ -f output/research/data.json ]; then
             mkdir -p _site/research
             cp site/research/index.html _site/research/index.html
-            node tools/encrypt_bundle.mjs output/research/data.json _site/research/data.enc.json
-            if find _site -name 'data.json' | grep -q .; then
-              echo "::error::plaintext data.json found in _site — refusing to publish"; exit 1
-            fi
+            cp output/research/data.json _site/research/data.json
+          else
+            echo "::error::no research bundle was built"; exit 1
           fi
           find _site -type f | sed 's/^/  /'
 

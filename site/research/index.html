@@ -66,12 +66,11 @@
 /* The `hidden` attribute hides an element through ONE rule -- `[hidden]{display:none}`
    -- and that rule lives in the user-agent stylesheet. Cascade order puts origin
    ABOVE specificity, so any normal author declaration of `display` beats it, even a
-   bare element selector. This is not theoretical: `#gate{display:grid}` and
-   `nav{display:flex}` below left the passphrase box and the tab bar painted on top
-   of an app that had already booted, and no amount of setting `.hidden = true` in JS
-   could take them away. Verified in Chrome -- with the attribute set, #gate computed
-   to `grid` and nav to `flex`. An author `!important` outranks both, so hiding works
-   again for every element on the page, including ones added later. */
+   bare element selector. This is not theoretical: `nav{display:flex}` below left the
+   tab bar painted on top of an app that had already booted, and no amount of setting
+   `.hidden = true` in JS could take it away. Verified in Chrome -- with the attribute
+   set, nav still computed to `flex`. An author `!important` outranks both, so hiding
+   works again for every element on the page, including ones added later. */
 [hidden]{display:none!important}
 
 html{-webkit-text-size-adjust:100%}
@@ -276,15 +275,6 @@ footer.note{color:var(--ink3);font-size:11.5px;line-height:1.55;margin:9px 0 0;m
 #banner:not(:empty){margin-bottom:18px}
 
 /* ── gate ───────────────────────────────────────────────────────────── */
-#gate{display:grid;place-items:center;min-height:62vh}
-.gatebox{background:var(--panel);border:1px solid var(--line);border-radius:14px;
-  padding:28px;max-width:400px;width:100%;box-shadow:var(--sh)}
-.gatebox b{display:block;font-size:16px;font-weight:640;letter-spacing:-.02em;margin-bottom:7px}
-.gatebox p{color:var(--ink2);font-size:12.5px;line-height:1.6;margin:0 0 16px}
-.gaterow{display:flex;gap:8px}
-.gaterow input{flex:1;min-width:0}
-.gateopt{display:flex;align-items:center;gap:7px;margin-top:11px;color:var(--ink3);font-size:12px}
-.gatemsg{margin-top:11px;color:var(--neg);font-size:12.5px;min-height:1.2em}
 
 /* ── charts ─────────────────────────────────────────────────────────── */
 svg{display:block;width:100%;height:auto}
@@ -335,20 +325,6 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
   </nav>
 </header>
 
-<section id="gate" hidden>
-  <div class="gatebox">
-    <b>This bundle is encrypted</b>
-    <p>The page is public; the grades are not. Enter the research passphrase and it
-       decrypts in your browser — nothing is sent anywhere.</p>
-    <div class="gaterow">
-      <input id="gate-pass" type="password" autocomplete="current-password"
-             placeholder="Research passphrase" aria-label="Research passphrase">
-      <button class="btn primary" id="gate-btn">Unlock</button>
-    </div>
-    <label class="gateopt"><input id="gate-remember" type="checkbox" checked> Remember on this device</label>
-    <div class="gatemsg" id="gate-msg" role="status"></div>
-  </div>
-</section>
 
 <div id="app" hidden>
 <div id="banner"></div>
@@ -727,54 +703,23 @@ function teamTotal(g,cfg){
        + cfg.raw_wl*((+g._wins||0)-(+g._losses||0));
 }
 
-/* ── loading ─────────────────────────────────────────────────────── */
-const PASS_KEY="tm_research_pass";
-const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
-async function deriveKey(pass,salt,iterations){
-  const base=await crypto.subtle.importKey("raw",new TextEncoder().encode(pass),
-    "PBKDF2",false,["deriveKey"]);
-  return crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations,hash:"SHA-256"},
-    base,{name:"AES-GCM",length:256},false,["decrypt"]);
-}
-async function decryptBundle(blob,pass){
-  const key=await deriveKey(pass,b64(blob.salt),blob.iterations);
-  const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:b64(blob.iv)},key,b64(blob.ct));
-  return JSON.parse(new TextDecoder().decode(plain));
-}
+/* ── loading ──────────────────────────────────────── */
+/* THIS BUNDLE IS PUBLIC, DELIBERATELY.
+   It used to ship as AES-GCM ciphertext behind a passphrase, because the film
+   grades are the model's edge and the repo hosting them is public. Grant decided
+   on 2026-09-02, with the contents in front of him, that the grades do not need
+   protecting -- there is nothing personal in the bundle, and one fewer barrier
+   beats a secret he has to carry between machines.
+
+   So `teams[].grades` -- every unit number for all 138 teams -- is now served in
+   the clear at a public URL. That is the intended behaviour, not an oversight.
+   Anything genuinely private must therefore be kept OUT of this bundle rather
+   than relying on the transport: see research_export.py. */
 async function load(){
-  let blob=null;
-  try{ const r=await fetch("data.enc.json",{cache:"no-store"}); if(r.ok) blob=await r.json(); }
-  catch(e){}
-  if(!blob){
-    const r=await fetch("data.json",{cache:"no-store"});
-    if(!r.ok) throw new Error("no bundle found");
-    D=await r.json(); return boot();
-  }
-  const saved=localStorage.getItem(PASS_KEY);
-  if(saved){ try{ D=await decryptBundle(blob,saved); return boot(); }
-             catch(e){ localStorage.removeItem(PASS_KEY); } }
-  showGate(blob);
-}
-function showGate(blob){
-  $("#gate").hidden=false; $("#app").hidden=true; $("#nav").hidden=true;
-  const go=async()=>{
-    const pass=$("#gate-pass").value; if(!pass) return;
-    $("#gate-msg").textContent="decrypting…"; $("#gate-btn").disabled=true;
-    try{
-      D=await decryptBundle(blob,pass);
-      if($("#gate-remember").checked) localStorage.setItem(PASS_KEY,pass);
-      boot();
-    }catch(e){
-      /* GCM authentication failing IS the wrong-passphrase signal. There is no
-         separate check, and no way to tell a wrong key from tampering — which is
-         exactly the property that makes the gate worth having. */
-      $("#gate-msg").textContent="That passphrase does not open this bundle.";
-      $("#gate-btn").disabled=false;
-    }
-  };
-  $("#gate-btn").onclick=go;
-  $("#gate-pass").onkeydown=e=>{ if(e.key==="Enter") go(); };
-  $("#gate-pass").focus();
+  const r=await fetch("data.json",{cache:"no-store"});
+  if(!r.ok) throw new Error("no bundle found (HTTP "+r.status+")");
+  D=await r.json();
+  boot();
 }
 load().catch(e=>{ $("#meta").textContent="could not load the research bundle"; console.error(e); });
 
@@ -790,7 +735,7 @@ function showTab(v){
 
 /* ── boot ────────────────────────────────────────────────────────── */
 function boot(){
-  $("#gate").hidden=true; $("#app").hidden=false; $("#nav").hidden=false;
+  $("#app").hidden=false; $("#nav").hidden=false;
   /* Freshness is the first question this page gets asked -- "I changed the sheet, is
      this showing it?" -- so the answer is in the header, naming the tab the grades
      came from and when it was last read. Without it, "the site did not update" and

@@ -704,7 +704,7 @@ def _fail(exc):
 _hc._get = _fail(_ue.HTTPError("u", 404, "gone", {}, None))
 _v, _d = _hc.check_bundle()
 ok("a 404 research bundle is a PROBLEM", _v == _hc.PROBLEM, _d)
-ok("...and names RESEARCH_PASS as the cause", "RESEARCH_PASS" in _d, _d)
+ok("...and says the app is not being published", "not being published" in _d, _d)
 
 _hc._get = lambda u, raw=False: b"x" * 1000
 ok("a truncated bundle is a PROBLEM", _hc.check_bundle()[0] == _hc.PROBLEM)

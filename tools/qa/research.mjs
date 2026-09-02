@@ -26,10 +26,8 @@ const dom = new JSDOM(html, {
   virtualConsole: vc,
   url: "https://example.test/research/",
   beforeParse(win) {
-    // Serve the plaintext bundle; the encrypted path is covered separately.
-    win.fetch = async (u) => u.includes("data.enc.json")
-      ? { ok: false, json: async () => { throw new Error("nope"); } }
-      : { ok: true, json: async () => JSON.parse(bundle) };
+    // One bundle, served in the clear -- the only path there is now.
+    win.fetch = async () => ({ ok: true, json: async () => JSON.parse(bundle) });
     win.matchMedia = () => ({ matches: false, addEventListener(){}, removeEventListener(){} });
   },
 });
@@ -79,20 +77,18 @@ const teamsOf = tr => [...(tr.querySelector("td.mu")?.querySelectorAll(".mu-t") 
 
 console.log("\n── app boots ──");
 ok("app is visible", $("#app") && !$("#app").hasAttribute("hidden"));
-ok("gate is hidden", $("#gate").hasAttribute("hidden"));
 ok("nav is visible", !$("#nav").hasAttribute("hidden"));
 
 // Asserting the ATTRIBUTE is not the same as asserting the element is gone, and the
-// difference shipped: `[hidden]{display:none}` is a user-agent rule, origin beats
-// specificity, so `#gate{display:grid}` outranked it and the passphrase box stayed
-// painted over a booted app forever. Every `hidden` assertion above passed the whole
-// time. Check what the cascade actually computes.
+// difference shipped once: `[hidden]{display:none}` is a user-agent rule, origin
+// beats specificity, so an author `display` rule outranked it and a hidden element
+// stayed painted over a booted app forever. Every `hidden` assertion passed the
+// whole time. Check what the cascade actually computes.
 const disp = s => window.getComputedStyle($(s)).display;
-ok("gate is really not displayed", disp("#gate") === "none", `computed: ${disp("#gate")}`);
 ok("app is really displayed", disp("#app") !== "none", `computed: ${disp("#app")}`);
-// jsdom resolves this collision by specificity only, so it catches `#gate` but NOT
-// `nav{display:flex}` — which real Chrome confirmed also loses. The stylesheet-level
-// guard is what covers the whole class, so assert the guard itself is present.
+// jsdom resolves this collision by specificity only, so it would not catch
+// `nav{display:flex}` — which real Chrome confirmed loses to the guard. The
+// stylesheet-level rule is what covers the whole class, so assert it is present.
 ok("stylesheet forces [hidden] to outrank author display rules",
    /\[hidden\]\s*\{\s*display\s*:\s*none\s*!important/.test(html));
 ok("meta populated", ($("#meta").textContent || "").includes("CFB"), $("#meta").textContent);
@@ -1045,78 +1041,26 @@ ok("at least one banner shown", $$("#banner .banner").length > 0,
 console.log("\n── no runtime errors ──");
 ok("zero JS errors during the whole run", errors.length === 0, errors.slice(0,3).join(" | "));
 
-/* ── the encrypted path, in a second document ──────────────────────────────
-   The run above served plaintext. This one serves a real encrypted bundle so
-   the gate, a wrong passphrase, and a right one are all exercised for real
-   rather than assumed to still work. */
-console.log("\n── encrypted bundle + gate ──");
+/* ── the bundle is public, and the page is built for that ────────────────
+   This used to be an encrypted-bundle + passphrase-gate block. Grant removed the
+   gate on 2026-09-02 after reviewing what the bundle holds. What replaces it is
+   NOT nothing: the old failure was "the gate stayed painted over a booted app",
+   and the new equivalent is "a leftover gate blocks a page that needs no
+   unlocking". So assert the removal is total. */
+console.log("\n── the bundle loads with no gate ──");
 {
-  const crypto = await import("node:crypto");
-  const nodeCrypto = crypto.default ?? crypto;
-  const PASS = "correct-horse-battery-staple-2026";
-  const salt = crypto.randomBytes(16), iv = crypto.randomBytes(12);
-  const key = crypto.pbkdf2Sync(PASS, salt, 600000, 32, "sha256");
-  const c = crypto.createCipheriv("aes-256-gcm", key, iv);
-  const ct = Buffer.concat([c.update(Buffer.from(bundle)), c.final()]);
-  const enc = { v:1, kdf:"PBKDF2-SHA256", iterations:600000,
-                salt: salt.toString("base64"), iv: iv.toString("base64"),
-                ct: Buffer.concat([ct, c.getAuthTag()]).toString("base64") };
-
-  const errs2 = [];
-  const vc2 = new VirtualConsole();
-  vc2.on("jsdomError", e => errs2.push(e.message));
-  const d2 = new JSDOM(html, {
-    runScripts: "dangerously", virtualConsole: vc2,
-    url: "https://example.test/research/",
-    beforeParse(win) {
-      win.fetch = async (u) => u.includes("data.enc.json")
-        ? { ok: true, json: async () => enc }
-        : { ok: false, json: async () => { throw new Error("no plaintext"); } };
-      win.matchMedia = () => ({ matches:false, addEventListener(){}, removeEventListener(){} });
-      // jsdom ships window.crypto WITHOUT subtle. Left alone, every call throws
-      // TypeError, the catch reports "that passphrase does not open this bundle",
-      // and the wrong-passphrase test passes because the API is missing rather
-      // than because the key is wrong — a test that cannot fail. Give it the real
-      // thing so the crypto path is genuinely exercised.
-      Object.defineProperty(win, "crypto", {
-        value: nodeCrypto.webcrypto, configurable: true, writable: true });
-    },
-  });
-  const w2 = d2.window, q2 = s => w2.document.querySelector(s);
-  await wait(300);
-
-  const disp2 = s => w2.getComputedStyle(q2(s)).display;
-  ok("gate is shown for an encrypted bundle", !q2("#gate").hasAttribute("hidden"));
-  // The guard is `display:none!important`, so it is worth proving it does not hide the
-  // gate when the gate is supposed to be up. An !important rule that over-applies would
-  // lock Grant out of his own site, which is a worse failure than the one it fixed.
-  ok("the gate is genuinely visible when it is up", disp2("#gate") === "grid",
-     `computed: ${disp2("#gate")}`);
-  ok("app stays hidden before unlock", q2("#app").hasAttribute("hidden"));
-  ok("app is genuinely not displayed before unlock", disp2("#app") === "none");
-  ok("no plaintext grades in the DOM before unlock",
-     !w2.document.body.innerHTML.includes("Ohio State"));
-
-  q2("#gate-pass").value = "wrong-passphrase";
-  q2("#gate-btn").dispatchEvent(new w2.Event("click", { bubbles:true }));
-  await until(() => (q2("#gate-msg").textContent||"").includes("does not open"));
-  ok("wrong passphrase is rejected",
-     (q2("#gate-msg").textContent||"").includes("does not open"), q2("#gate-msg").textContent);
-  ok("app still hidden after a wrong passphrase", q2("#app").hasAttribute("hidden"));
-
-  q2("#gate-pass").value = PASS;
-  q2("#gate-btn").dispatchEvent(new w2.Event("click", { bubbles:true }));
-  await until(() => !q2("#app").hasAttribute("hidden"));
-  ok("right passphrase unlocks", !q2("#app").hasAttribute("hidden"));
-  // THE REPORTED BUG, in its own words: the passphrase worked, the app booted
-  // underneath, and the "Unlock" box never went away. `hidden` was set correctly the
-  // whole time; the cascade simply ignored it.
-  ok("the gate disappears once unlocked", disp2("#gate") === "none",
-     `computed: ${disp2("#gate")}`);
-  ok("rankings render after unlock",
-     q2("#ranktbl tbody") && q2("#ranktbl").querySelectorAll("tbody tr").length === 138,
-     String(q2("#ranktbl")?.querySelectorAll("tbody tr").length));
-  ok("no errors on the encrypted path", errs2.length === 0, errs2.slice(0,2).join(" | "));
+  ok("no passphrase gate is left in the page", !html.includes('id="gate"'));
+  ok("no decryption code is left either",
+     !/decryptBundle|deriveKey|PBKDF2/.test(html));
+  ok("nothing still asks for data.enc.json", !html.includes("data.enc.json"));
+  // The page must boot from the plaintext fetch alone -- the run at the top of
+  // this file served exactly that, so if it had needed a second source the whole
+  // suite above would have had nothing to assert against.
+  ok("the app booted from data.json with no interaction",
+     !$("#app").hasAttribute("hidden"));
+  ok("...and rendered all 138 teams",
+     $("#ranktbl")?.querySelectorAll("tbody tr").length === 138,
+     String($("#ranktbl")?.querySelectorAll("tbody tr").length));
 }
 
 /* ── escaping is real, not decorative ────────────────────────────────── */
@@ -1131,9 +1075,7 @@ console.log("\n── injection ──");
     runScripts:"dangerously", virtualConsole:new VirtualConsole(),
     url:"https://example.test/research/",
     beforeParse(win){
-      win.fetch = async u => u.includes("data.enc.json")
-        ? { ok:false, json:async()=>{throw new Error("x")} }
-        : { ok:true, json:async()=>evil };
+      win.fetch = async () => ({ ok:true, json:async()=>evil });
       win.matchMedia = () => ({matches:false,addEventListener(){},removeEventListener(){}});
     },
   });
