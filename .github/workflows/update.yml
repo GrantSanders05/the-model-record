@@ -376,24 +376,8 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v4
-      - name: Open or update the failure issue
-        env:
+      - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          TITLE="The scheduled update is failing"
-          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
-                       --json number -q '.[0].number' || true)
-          BODY=$(printf '%s\n' \
-            "The nightly update failed on $(date -u +'%Y-%m-%d %H:%M') UTC." \
-            "" \
-            "**Nothing on the site is refreshing while this is red.** The half-hourly" \
-            "refresh job will keep succeeding and keep republishing the last good" \
-            "bundle, so the pages will look fine and will not be current." \
-            "" \
-            "Run: $RUN")
-          if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$BODY"
-          else
-            gh issue create --title "$TITLE" --body "$BODY"
-          fi
+          tools/notify_failure.sh "The scheduled update is failing" \
+            "The nightly update (results, lines, locking, publish) went red."

@@ -757,6 +757,72 @@ ok("...and a window containing only its own runs says so, rather than 'all clear
 ok("CONTROL: OK and PROBLEM are distinguishable",
    _hc.OK != _hc.PROBLEM and _site("2026-09-02T11:30:00Z")[0] != _site("2026-09-01T20:00:00Z")[0])
 
+
+# ---------------------------------------------------------------------------
+# The failure notifier can actually run.
+#
+# THIS IS NOT HYPOTHETICAL. The first version nested `$(cat <<EOF ...)` inside a
+# command substitution and an apostrophe in the prose ("the workbook's sharing")
+# broke the parse -- the script would not execute at all. A notifier only runs
+# when something is ALREADY broken, so that would have surfaced as silence at the
+# exact moment it mattered, which is the failure it exists to prevent.
+# ---------------------------------------------------------------------------
+print("\n── the failure notifier is not itself broken ──")
+
+import subprocess as _sp                                     # noqa: E402
+import stat as _stat                                         # noqa: E402
+
+_NF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notify_failure.sh")
+ok("the notifier exists", os.path.exists(_NF))
+ok("...and is executable", bool(os.stat(_NF).st_mode & _stat.S_IXUSR))
+ok("...and parses as bash",
+   _sp.run(["bash", "-n", _NF], capture_output=True).returncode == 0,
+   _sp.run(["bash", "-n", _NF], capture_output=True).stderr.decode()[:200])
+
+# Render the body with prose that contains the characters that broke it before --
+# an apostrophe, double quotes and a backtick -- and confirm the text survives.
+_env = dict(os.environ, GITHUB_SERVER_URL="https://github.com",
+            GITHUB_REPOSITORY="o/r", GITHUB_RUN_ID="1")
+_src = open(_NF).read().split("\nN=")[0]
+_probe = _src + '\ncat "$BODY_FILE"\n'
+_out = _sp.run(["bash", "-s", "T", "the workbook's \"sharing\" and a `tick` changed"],
+               input=_probe.encode(), capture_output=True, env=_env)
+ok("the body renders with apostrophes, quotes and backticks in the prose",
+   _out.returncode == 0, _out.stderr.decode()[:200])
+_body = _out.stdout.decode()
+ok("...and the caller's message survives into it",
+   "the workbook's" in _body and '"sharing"' in _body, _body[:120])
+ok("...with the run link filled in", "actions/runs/1" in _body, _body[:200])
+# The prose is hard-wrapped, so compare against collapsed whitespace rather than
+# the literal string -- otherwise this assertion breaks every time the paragraph
+# is re-flowed, which trains you to delete it.
+_flat = " ".join(_body.split())
+ok("...and the Pages cause named, since that is what took the site down",
+   "Ensure GitHub Pages has been enabled" in _flat)
+ok("...and the sheet-sharing cause too",
+   "Anyone with the link" in _flat)
+ok("...each with somewhere to go", "settings/pages" in _flat)
+
+# Refusing with no arguments beats filing a blank issue.
+_bad = _sp.run(["bash", _NF], capture_output=True, env=_env)
+ok("it refuses to run with no arguments", _bad.returncode != 0)
+
+# EVERY workflow must be wired to it. refresh.yml having no notifier is the
+# whole reason the site was down for ten hours unannounced.
+_wf = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                   ".github", "workflows")
+for _f in ("refresh.yml", "update.yml", "health.yml"):
+    _t = open(os.path.join(_wf, _f)).read()
+    ok("%s calls the notifier" % _f, "notify_failure.sh" in _t)
+    ok("...and only on failure", "if: failure()" in _t)
+
+# CONTROL: prove the parse check can fail.
+_broken = os.path.join(os.path.dirname(_NF), ".nf_control.sh")
+open(_broken, "w").write('echo "$(cat <<EOF\nit\'s broken\nEOF\n)"\n')
+ok("CONTROL: bash -n rejects the shape that actually broke",
+   _sp.run(["bash", "-n", _broken], capture_output=True).returncode != 0)
+os.unlink(_broken)
+
 print("=" * 62)
 print("%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)

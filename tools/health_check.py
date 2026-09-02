@@ -59,6 +59,19 @@ def check_site(now):
     try:
         html = _get(SITE, raw=True).decode("utf-8", "replace")
     except Exception as e:
+        # A 404 on the whole site has ONE overwhelmingly likely cause, and it is
+        # not a broken page: Pages gets switched off for the repo and every
+        # deploy starts failing with "Ensure GitHub Pages has been enabled".
+        # That happened on 2026-09-02 and cost ten hours. Naming it beats
+        # "unreachable", which sends you to read five workflow logs first.
+        if isinstance(e, urllib.error.HTTPError) and e.code == 404:
+            try:
+                on = _get(API)["has_pages"]
+            except Exception:
+                on = None
+            if on is False:
+                return PROBLEM, ("the whole site is **404 — GitHub Pages is "
+                                 "switched off for this repo**")
         return PROBLEM, "site unreachable: %s" % e
     marker = 'data-built="'
     i = html.find(marker)
@@ -151,6 +164,10 @@ def check_issues():
 TITLE = "Health check:"
 
 FIX = {
+    "pages_off": "Turn Pages back on: **Settings → Pages → Source: GitHub "
+                 "Actions**, or `gh api -X POST repos/OWNER/REPO/pages "
+                 "-f build_type=workflow`. Then re-run the refresh workflow. "
+                 "Every deploy fails with a 404 while it is off.",
     "site": "GitHub throttled the rebuild cron. Force one now: **Actions → "
             "“refresh grades & republish” → Run workflow.** If that fixes it, "
             "nothing is broken — install the sheet trigger "
@@ -184,6 +201,8 @@ def main():
         print("| %s | %s | %s |" % (icon[verdict], label, detail))
 
     bad = [k for k, _, v, _ in results if v == PROBLEM]
+    if any(k == "site" and "switched off" in d for k, _, v, d in results):
+        bad = ["pages_off" if k == "site" else k for k in bad]
     if bad:
         print("\n**What to do**\n")
         for k in bad:

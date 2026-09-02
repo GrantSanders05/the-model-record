@@ -86,10 +86,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           for T in "Health check: the site needs attention" \
-                   "The scheduled update is failing"; do
+                   "The scheduled update is failing" \
+                   "The half-hourly refresh is failing" \
+                   "The health check itself is failing"; do
             N=$(gh issue list --state open --search "$T in:title" --json number -q '.[0].number')
             if [ -n "$N" ]; then
               gh issue close "$N" --comment "Recovered — the health check at $(date -u +'%Y-%m-%d %H:%M') UTC found the site current, the workflows green and the research app published. Reopening automatically if it regresses."
               echo "closed #$N ($T)"
             fi
           done
+
+  # The run that fails is not the run anybody is watching. Without this, refresh
+  # failures were invisible: on 2026-09-02 the site was down for ten hours before
+  # a DIFFERENT workflow happened to fail and file the issue.
+  notify:
+    needs: check
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tools/notify_failure.sh "The health check itself is failing" \
+            "The monitor that watches the site is broken, so nothing is watching it now."

@@ -190,3 +190,20 @@ jobs:
         if: ${{ env.SKIP != 'true' }}
         id: pages
         uses: actions/deploy-pages@v4
+
+  # The run that fails is not the run anybody is watching. Without this, refresh
+  # failures were invisible: on 2026-09-02 the site was down for ten hours before
+  # a DIFFERENT workflow happened to fail and file the issue.
+  notify:
+    needs: refresh
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tools/notify_failure.sh "The half-hourly refresh is failing" \
+            "The refresh job (reads the grade sheet, re-prices, republishes) went red."
