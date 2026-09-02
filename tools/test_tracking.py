@@ -742,6 +742,16 @@ ok("failures outside the 48h window are ignored",
    _runs([_r("a", "success", 1), _r("a", "failure", 100),
           _r("a", "failure", 200)])[0] == _hc.OK)
 
+ok("in-flight runs are neither pass nor fail — they are skipped",
+   _runs([_r("a", None, 0), _r("a", "success", 5)])[0] == _hc.OK)
+ok("...and an in-flight FIRST run does not mask a real failure beneath it",
+   _runs([_r("a", None, 0), _r("a", "failure", 1)])[0] == _hc.PROBLEM)
+ok("the check does not report on itself",
+   "health" not in _runs([_r("The Model — health check", "success", 0),
+                          _r("a", "success", 1)])[1].lower())
+ok("...and a window containing only its own runs says so, rather than 'all clear'",
+   _runs([_r("The Model — health check", "success", 0)])[0] == _hc.WARN)
+
 # CONTROL: prove these assertions can fail, rather than health_check having a
 # stuck return value that happens to satisfy them.
 ok("CONTROL: OK and PROBLEM are distinguishable",

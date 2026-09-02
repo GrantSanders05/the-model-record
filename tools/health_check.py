@@ -88,7 +88,18 @@ def check_runs(now):
     lines, verdict = [], OK
     seen = {}
     for r in runs:
+        # Skip this workflow's own runs: the one asking the question is always
+        # in flight, so it reported itself as "last: None" every single time.
+        if "health" in r["name"].lower():
+            continue
+        # And skip anything still running anywhere -- a null conclusion is not a
+        # pass and not a failure, and counting it as either is a lie. It would
+        # also silently dilute the 48-hour failure ratio.
+        if r["conclusion"] is None:
+            continue
         seen.setdefault(r["name"], []).append(r)
+    if not seen:
+        return WARN, "no completed runs of the pipeline workflows in this window"
     for name, rs in seen.items():
         last = rs[0]
         recent = [r for r in rs
