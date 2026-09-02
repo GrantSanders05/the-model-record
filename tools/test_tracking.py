@@ -832,6 +832,81 @@ ok("CONTROL: bash -n rejects a genuinely invalid script", _ctl.returncode != 0,
    "bash %s accepted it" % os.environ.get("BASH_VERSION", "?"))
 os.unlink(_broken)
 
+
+# ---------------------------------------------------------------------------
+# The missed-lock classifier puts games in the right bucket.
+#
+# It exists to settle ONE question: is `missed_locks = 45` a survivorship hole in
+# the published record, or a metric counting games the model never picks? A
+# classifier that silently mislabels them would answer that question wrongly and
+# confidently, which is worse than not asking. So all three buckets are built
+# from synthetic games whose correct answer is known.
+# ---------------------------------------------------------------------------
+print("\n── the missed-lock classifier ──")
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import diagnose_locks as _dl                                # noqa: E402
+import tempfile as _tf3                                     # noqa: E402
+
+_t5 = _tf3.mkdtemp()
+_D5 = db.connect(os.path.join(_t5, "locks.db"))
+_PAST = "2026-08-20T00:00:00.000Z"
+_FUT = "2099-01-01T00:00:00.000Z"
+
+
+def _mkgame(gid, home, away, ko, hdiv="fbs", adiv="fbs"):
+    _D5.execute(
+        "INSERT OR REPLACE INTO games (game_id,sport,season,week,kickoff,"
+        "home_team,away_team,home_score,away_score,home_div,away_div) "
+        "VALUES (?,'cfb',2026,1,?,?,?,10,20,?,?)", (gid, ko, home, away, hdiv, adiv))
+    _D5.execute("INSERT OR REPLACE INTO lines (game_id,provider,home_margin) "
+                "VALUES (?,'DraftKings',-3.0)", (gid,))
+
+
+# Rated teams only exist if they have a grade row.
+for _t in ("Georgia", "Alabama"):
+    _D5.execute("INSERT OR REPLACE INTO grades (sport,season,week,team,position,grade) "
+                "VALUES ('cfb',2026,1,?,'qb',11.0)", (_t,))
+
+_mkgame("g-unrated", "Morehead State", "Ohio Dominican", _PAST, "fcs", "fcs")
+_mkgame("g-voided", "Georgia", "Alabama", _PAST)
+_mkgame("g-missed", "Alabama", "Georgia", _PAST)
+_mkgame("g-future", "Georgia", "Alabama", _FUT)          # not kicked off: excluded
+_D5.execute("INSERT INTO picks_voided (game_id,payload,voided_at,void_reason) "
+            "VALUES ('g-voided','{}','2026-09-01','test')")
+_D5.commit()
+
+_rows, _b, _rated, _voided = _dl.classify(_D5, "cfb", 2026)
+ok("only kicked-off games are counted", len(_rows) == 3, len(_rows))
+ok("an FCS-vs-FCS game lands in 'unrated'",
+   [d["game_id"] for d in _b["unrated"]] == ["g-unrated"], _b["unrated"])
+ok("a game whose pick was voided lands in 'voided'",
+   [d["game_id"] for d in _b["voided"]] == ["g-voided"], _b["voided"])
+ok("a rated, never-picked, never-voided game is a REAL miss",
+   [d["game_id"] for d in _b["genuinely missed"]] == ["g-missed"],
+   _b["genuinely missed"])
+ok("the three buckets partition the total",
+   sum(len(v) for v in _b.values()) == len(_rows))
+
+# A locked game must leave the count entirely -- that is the whole premise.
+_D5.execute("INSERT OR REPLACE INTO picks_log (game_id,sport,season,week,home_team,"
+            "away_team,kickoff,published_at,config_label,model_margin) "
+            "VALUES ('g-missed','cfb',2026,1,'Alabama','Georgia',?,?, 'x', 1.0)",
+            (_PAST, _PAST))
+_D5.commit()
+_rows2, _b2, _, _ = _dl.classify(_D5, "cfb", 2026)
+ok("locking the game removes it from the count",
+   len(_rows2) == 2 and not _b2["genuinely missed"], len(_rows2))
+
+# CONTROL: the buckets must be distinguishable, not all the same list.
+ok("CONTROL: the classifier does not put everything in one bucket",
+   len([k for k, v in _b.items() if v]) == 3, {k: len(v) for k, v in _b.items()})
+
+_D5.close()
+for _f in os.listdir(_t5):
+    os.unlink(os.path.join(_t5, _f))
+os.rmdir(_t5)
+
 print("=" * 62)
 print("%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)

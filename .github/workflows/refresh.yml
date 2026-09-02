@@ -142,6 +142,17 @@ jobs:
             python3 src/bet_log.py --sheet "$MODEL_GRADES_SHEET_ID"
           fi
 
+      # WHAT IS missed_locks ACTUALLY COUNTING?
+      # The research page reports 45 while only 8 games have kicked off, all of
+      # them locked and graded. That is either a survivorship hole in the record
+      # or a metric that cries wolf, and the two look identical from outside.
+      # It cannot be settled on a laptop -- the local database is a stale copy
+      # with 53 lined games where this one has 169 -- so it is answered here,
+      # read-only, in four lines when there is nothing to say.
+      - name: Classify the missed locks
+        if: ${{ env.SKIP != 'true' }}
+        run: python3 tools/diagnose_locks.py --sport cfb --season 2026
+
       # Re-price and rebuild. No --fetch anywhere in here: every number comes from
       # the restored database plus the grades just read.
       - name: Rebuild both pages
