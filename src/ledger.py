@@ -142,10 +142,36 @@ def missed_locks(conn, sport, season=None, now=None):
     them is the only thing standing between "the model went 5-3" and "the model went
     5-3 on the games the pipeline happened to be awake for".
 
-    Only games the model could actually price are counted: a fixture with no line is
-    one it declines to bet, not one it missed.
+    Only games the model could actually price are counted, and that takes TWO
+    conditions, not one. A fixture with no line is one it declines to bet. A
+    fixture where neither team is rated is one it has no opinion on at all.
+
+    THE SECOND CONDITION WAS MISSING AND THE METRIC CRIED WOLF. It read 45 on
+    2026-09-02 while exactly 8 games had kicked off, all locked and graded.
+    tools/diagnose_locks.py classified all 45 against the production database:
+    every one was an FCS-vs-FCS fixture -- Maine at Towson, Mercyhurst at
+    Youngstown State -- with a line but no rated team on either side. Genuinely
+    missed: zero. CFBD's schedule carries all divisions, and 750 of the season's
+    1,638 games have no FBS team in them; research_export.schedule already drops
+    exactly these, so the two now agree on what "a game this model plays" means.
+
+    A number that reads 45 every night when nothing is wrong is worse than no
+    number, because the night it means something nobody will look.
+
+    THE GUARD MATTERS AS MUCH AS THE FILTER: if a season has no grades loaded at
+    all, every game is "unrated" and this would go permanently, silently quiet --
+    which is the failure it exists to catch. So the filter only applies when
+    there are grades to filter by.
     """
     now = now or _now()
+    have_grades = conn.execute(
+        "SELECT 1 FROM grades WHERE sport=? AND (? IS NULL OR season=?) LIMIT 1",
+        (sport, season, season)).fetchone() is not None
+    rated_only = """
+              AND EXISTS (SELECT 1 FROM grades gr
+                           WHERE gr.sport = g.sport AND gr.season = g.season
+                             AND gr.team IN (g.home_team, g.away_team))""" \
+        if have_grades else ""
     rows = conn.execute(
         """SELECT g.game_id, g.season, g.week, g.kickoff, g.home_team, g.away_team
              FROM games g
@@ -154,7 +180,7 @@ def missed_locks(conn, sport, season=None, now=None):
             WHERE g.sport = ? AND p.game_id IS NULL
               AND l.home_margin IS NOT NULL
               AND g.kickoff IS NOT NULL AND g.kickoff <= ?
-              AND (? IS NULL OR g.season = ?)
+              AND (? IS NULL OR g.season = ?)""" + rated_only + """
          ORDER BY g.kickoff DESC""",
         (sport, now.isoformat(), season, season)).fetchall()
     return len(rows), [dict(r) for r in rows[:5]]

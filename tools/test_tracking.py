@@ -907,6 +907,59 @@ for _f in os.listdir(_t5):
     os.unlink(os.path.join(_t5, _f))
 os.rmdir(_t5)
 
+
+# The metric itself now agrees with the classifier above.
+print("\n── missed_locks counts only games the model plays ──")
+
+import ledger                                               # noqa: E402
+
+_t6 = _tf3.mkdtemp()
+_D6 = db.connect(os.path.join(_t6, "ml.db"))
+
+
+def _g6(gid, home, away, ko="2026-08-20T00:00:00.000Z", hd="fbs", ad="fbs"):
+    _D6.execute("INSERT OR REPLACE INTO games (game_id,sport,season,week,kickoff,"
+                "home_team,away_team,home_score,away_score,home_div,away_div) "
+                "VALUES (?,'cfb',2026,1,?,?,?,10,20,?,?)", (gid, ko, home, away, hd, ad))
+    _D6.execute("INSERT OR REPLACE INTO lines (game_id,provider,home_margin) "
+                "VALUES (?,'DraftKings',-3.0)", (gid,))
+
+
+_g6("fbs-1", "Georgia", "Alabama")
+_g6("fcs-1", "Towson", "Maine", hd="fcs", ad="fcs")
+_g6("fcs-2", "Lindenwood", "Charleston Southern", hd="fcs", ad="fcs")
+_D6.commit()
+
+# With NO grades loaded the guard must keep every game visible, because a season
+# whose grades failed to load is exactly when a silent zero would be worst.
+_n6, _ = ledger.missed_locks(_D6, "cfb", 2026)
+ok("with no grades at all, nothing is filtered out (the guard)", _n6 == 3, _n6)
+
+for _t in ("Georgia", "Alabama"):
+    _D6.execute("INSERT OR REPLACE INTO grades (sport,season,week,team,position,grade)"
+                " VALUES ('cfb',2026,1,?,'qb',11.0)", (_t,))
+_D6.commit()
+_n6b, _ex6 = ledger.missed_locks(_D6, "cfb", 2026)
+ok("once grades exist, FCS-only fixtures stop being counted", _n6b == 1, _n6b)
+ok("...and the one left is the rated game",
+   _ex6[0]["game_id"] == "fbs-1", _ex6[0]["game_id"])
+
+# One rated side is enough — Grant does have a view on those.
+_g6("mixed", "Georgia", "Maine", ad="fcs")
+_D6.commit()
+ok("a game with ONE rated team still counts",
+   ledger.missed_locks(_D6, "cfb", 2026)[0] == 2,
+   ledger.missed_locks(_D6, "cfb", 2026)[0])
+
+# CONTROL: prove the filter is what changed the number, not the fixture setup.
+ok("CONTROL: the same games counted 3 before grades and 2 after",
+   _n6 == 3 and ledger.missed_locks(_D6, "cfb", 2026)[0] == 2)
+
+_D6.close()
+for _f in os.listdir(_t6):
+    os.unlink(os.path.join(_t6, _f))
+os.rmdir(_t6)
+
 print("=" * 62)
 print("%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)
