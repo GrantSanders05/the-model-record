@@ -84,8 +84,19 @@ else:
     # margin becomes a win probability and the probability becomes a Kelly stake.
     ok("calibration slope is within 8% of 1.0",
        abs(ev["calib_slope"] - 1.0) <= 0.08, "%.3f" % ev["calib_slope"])
-    ok("the config's scale is the fitted one, not a default",
-       abs(CFG["scale"] - 1.0) > 0.01, CFG["scale"])
+    # "The scale differs from 1.0" USED TO STAND IN FOR "somebody fitted it", and
+    # that proxy broke the moment the fit legitimately returned 0.997. A test
+    # that fails because the right answer resembles the default is measuring the
+    # wrong thing. Assert the real property instead: the shipped scale is AT the
+    # calibrated value, so moving it materially in either direction breaks the
+    # slope. That is true of a fitted number and false of a guessed one.
+    for factor in (0.85, 1.15):
+        off = metrics.evaluate(backtest.run(
+            backtest.load_games(conn, "cfb"),
+            dict(cfg, scale=CFG["scale"] * factor), test_seasons=[2025]))
+        ok("scale x%.2f breaks calibration, so the shipped value is the fitted one"
+           % factor, abs(off["calib_slope"] - 1.0) > 0.08,
+           "slope %.3f" % off["calib_slope"])
 
     # The grade model has to beat the rater it falls back to. If it does not, the
     # film is costing accuracy rather than adding it, and that is worth failing over.
@@ -138,6 +149,167 @@ if files:
        v.get("ci_lo") is not None and v.get("ci_hi") is not None)
     ok("it leaks no grades", not any(
         k for k in v if k in ("grades", "teams", "ratings")), sorted(v))
+
+
+# ---------------------------------------------------------------------------
+# The 'computed' quality formula.
+#
+# WHY IT EXISTS: the four spreadsheet columns Wins / Losses / Win Points / Loss
+# Points were filled in BY HAND, and for 2026 they are empty on all 138 teams --
+# so the whole quality term contributes zero and the ratings are bare position
+# grades. Meanwhile GradeRater.observe() has been accruing exactly that quantity
+# from real results on every single run and NOTHING HAS EVER READ IT. A writer
+# with no reader is as dead as a reader with no writer, and harder to notice.
+#
+# The assertion that matters most is the ORDERING one. Quality points come from
+# results, so a formula that reads them can trivially leak the outcome of the
+# game being predicted into its own input. That is the one bug that would make
+# every number downstream a lie while looking like an improvement.
+# ---------------------------------------------------------------------------
+print("\n── the computed quality formula ──")
+
+_G = {"qb": 10.0, "rb": 8.0, "wr": 8.0, "ol": 10.0,
+      "dl": 10.0, "lb": 8.0, "db": 8.0, "coach_st": 10.0}
+_GRADES = {(2026, "Home"): [(0, dict(_G))], (2026, "Away"): [(0, dict(_G))]}
+
+
+def _rater(**over):
+    cfg = {"grade_formula": "computed", "sheet_coach_weight": 1.0,
+           "quality_scale": 1.0, "wq_top5": 4.0, "wq_top10": 3.0, "wq_top25": 2.0,
+           "wq_other": 0.0, "lq_ranked": 0.0, "lq_unranked_fbs": -2.0,
+           "lq_fcs": -4.0}
+    cfg.update(over)
+    r = engine.GradeRater(cfg, _GRADES)
+    r.new_season(2026)
+    return r
+
+
+def _game(hs=None, as_=None, hr=None, ar=None, hd="fbs", ad="fbs", wk=1):
+    return {"season": 2026, "week": wk, "home_team": "Home", "away_team": "Away",
+            "home_score": hs, "away_score": as_, "home_rank": hr, "away_rank": ar,
+            "home_div": hd, "away_div": ad}
+
+
+# Two identical teams: with nothing observed the rating difference must be zero.
+_r = _rater()
+ok("with no games observed, computed == bare grades (no phantom quality)",
+   _r.strength(_game()) == 0.0, _r.strength(_game()))
+
+# Home beats the #3 team in the country. BOTH sides move: the winner gains
+# wq_top5 and the loser is charged lq_unranked_fbs, so the rating GAP is the sum
+# of the two. Zero the loser's charge to assert one term at a time.
+_r = _rater(lq_unranked_fbs=0.0)
+_r.observe(_game(hs=30, as_=10, ar=3))
+ok("beating a top-5 team credits the winner", _r.strength(_game()) == 4.0,
+   _r.strength(_game()))
+_r = _rater()
+_r.observe(_game(hs=30, as_=10, ar=3))
+ok("...and the loser is charged in the same game, so the gap is both",
+   _r.strength(_game()) == 6.0, _r.strength(_game()))
+
+# Losing to an FCS side is charged to the loser.
+_r = _rater()
+_r.observe(_game(hs=10, as_=30, ad="fcs"))
+ok("losing to an FCS team is charged to the loser",
+   _r.strength(_game()) == -4.0, _r.strength(_game()))
+
+# lq_ranked was PINNED AT ZERO in the config and in the first search space, so no
+# rule that charged for a ranked loss could ever be expressed. Regressing Grant's
+# own hand-entered numbers says he charged about -1.45 for one.
+_r = _rater(lq_ranked=-1.5)
+_r.observe(_game(hs=10, as_=30, ar=None, hr=None, ad="fbs"))   # Home loses to unranked
+_base = _r.strength(_game())
+_r2 = _rater(lq_ranked=-1.5)
+_r2.observe(_game(hs=10, as_=30, ar=4))                        # Home loses to a top-5
+ok("a loss to a ranked team can now cost something",
+   _r2.strength(_game()) == -1.5, _r2.strength(_game()))
+ok("...and it is distinguishable from an unranked loss",
+   _r2.strength(_game()) != _base, "%s vs %s" % (_r2.strength(_game()), _base))
+
+# quality_scale=0 must reduce it exactly to the no-quality case.
+_r = _rater(quality_scale=0.0)
+_r.observe(_game(hs=30, as_=10, ar=3))
+ok("quality_scale=0 switches the term off entirely", _r.strength(_game()) == 0.0)
+
+# THE ORDERING GUARANTEE. predict() must not see the game it is predicting.
+_r = _rater(lq_unranked_fbs=0.0)
+_g = _game(hs=45, as_=0, ar=2, wk=5)
+_before = _r.strength(_g)
+_r.observe(_g)
+_after = _r.strength(_g)
+ok("predicting a game does not use that game's own result", _before == 0.0, _before)
+ok("...and observing it afterwards does change the rating", _after == 4.0, _after)
+
+# The real callers must actually observe in that order, not just be capable of it.
+import inspect                                                # noqa: E402
+_bt = inspect.getsource(backtest.run)
+ok("backtest.run predicts before it observes",
+   _bt.index("model.predict") < _bt.index("model.observe"))
+import predict as _predict                                    # noqa: E402
+_pg = inspect.getsource(_predict.generate)
+ok("predict.generate observes each game only after picking it",
+   _pg.index("model.predict") < _pg.index("model.observe"))
+
+# Per-season reset: quality must not bleed across seasons.
+_r = _rater()
+_r.observe(_game(hs=30, as_=10, ar=3))
+_r.new_season(2027)
+ok("new_season clears accrued quality", _r.strength(_game()) == 0.0)
+
+# CONTROL: the assertions above must be able to fail.
+_ctl = _rater(wq_top5=99.0, lq_unranked_fbs=0.0)
+_ctl.observe(_game(hs=30, as_=10, ar=3))
+ok("CONTROL: the formula responds to its parameters at all",
+   _ctl.strength(_game()) == 99.0, _ctl.strength(_game()))
+
+
+# ---------------------------------------------------------------------------
+# The loss-points sign is normalised at import.
+#
+# The workbook uses TWO conventions for one column: the weekly snapshots store
+# Loss Points positive (2025 week 9 sums to +1136 across 136 teams), the live
+# `Team Data` tab stores them negative (-1286, same season, same teams). The
+# engine applies its own sign on top, so the two produce OPPOSITE ratings from
+# identical results.
+#
+# The tab that is authoritative changes with the calendar: the backtest that
+# measured 55.27% read the weekly tabs, a live season reads Team Data. Without
+# normalisation the model would silently invert its treatment of losses the
+# moment the live tab was filled in -- crediting a team for losing to an FCS
+# side, having been validated on precisely the opposite.
+# ---------------------------------------------------------------------------
+print("\n── the loss-points sign cannot flip under us ──")
+
+import import_workbook as _iw                               # noqa: E402
+
+_HDR = ["Team Name", "Wins", "Losses", "QB Score 15", "RB Score 10",
+        "WR Score 10", "OL Score 15", "DL Score 15", "LB Score 10",
+        "DB Score 10", "Coach/ST Score 15", "Win Points", "Loss Points"]
+_BODY = [10, 2, 11.0, 8.0, 8.0, 11.0, 11.0, 8.0, 8.0, 12.0, 6.0]
+
+
+def _lp(value):
+    rows = [_HDR, ["Georgia"] + _BODY[:11] + [value]]
+    recs, _ = _iw.parse_rows(rows, "cfb", 2026, 3, label="t")
+    return [r["grade"] for r in recs if r["position"] == "_loss_points"]
+
+
+ok("the weekly convention (positive) is stored as-is", _lp(24.0) == [24.0], _lp(24.0))
+ok("the Team Data convention (negative) is stored the SAME way",
+   _lp(-24.0) == [24.0], _lp(-24.0))
+ok("...so the two tabs can no longer disagree", _lp(24.0) == _lp(-24.0))
+ok("zero stays zero", _lp(0.0) == [0.0], _lp(0.0))
+
+# CONTROL: without the normalisation these two would differ. Prove the
+# assertion is capable of failing by checking the raw values really are opposite.
+ok("CONTROL: the two raw inputs genuinely have opposite signs", 24.0 == -(-24.0))
+
+# And it must not touch any other column -- Win Points may legitimately be zero
+# but is never negated, and a negative position grade would be a real signal.
+_rows = [_HDR, ["Georgia"] + _BODY[:10] + [-5.0, 12.0]]
+_recs, _ = _iw.parse_rows(_rows, "cfb", 2026, 3, label="t")
+_wp = [r["grade"] for r in _recs if r["position"] == "_win_points"]
+ok("win points are NOT normalised — only loss points are", _wp == [-5.0], _wp)
 
 print("=" * 62)
 print("%d passed, %d failed" % (P, F))

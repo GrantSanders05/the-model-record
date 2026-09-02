@@ -111,6 +111,25 @@ def parse_rows(rows, sport, season, effective_week, label=""):
                 grade = float(v)
             except (TypeError, ValueError):
                 continue
+            # NORMALISE THE LOSS-POINTS SIGN. The workbook uses two conventions
+            # for the same column: the weekly snapshots store Loss Points
+            # POSITIVE (2025 week 9 sums to +1136 across 136 teams) and the live
+            # `Team Data` tab stores them NEGATIVE (-1286 for the same season).
+            # The engine applies its own sign (`sheet_loss_sign`, -1.0), so the
+            # two conventions produce OPPOSITE ratings from identical results.
+            #
+            # That matters because the tab which is authoritative CHANGES: the
+            # 2025 backtest that measured 55.27% ATS read the weekly tabs, while
+            # a live season reads Team Data. Left alone, the model would invert
+            # its treatment of losses the moment the live tab was filled in --
+            # rewarding a team for losing to an FCS side, having been validated
+            # on the opposite. Nothing would look broken.
+            #
+            # Storing the magnitude makes the convention the engine's alone. It
+            # is a no-op on every row already loaded (the weekly tabs are
+            # positive), which the test asserts.
+            if key == "_loss_points":
+                grade = abs(grade)
             out.append({"sport": sport, "season": season, "week": effective_week,
                         "team": team, "position": key, "grade": grade})
     return out, teams

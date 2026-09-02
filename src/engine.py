@@ -237,6 +237,31 @@ class GradeRater:
                     + self.cfg.get("sheet_raw_wl", 1.0)
                     * (g.get("_wins", 0.0) - g.get("_losses", 0.0)))
 
+        if formula == "computed":
+            # THE SAME FORMULA AS 'sheet', WITH ONE THING CHANGED: the win/loss
+            # quality points come from the games actually played instead of from
+            # four spreadsheet columns. Everything else -- the doubled seven, the
+            # Coach/ST weight -- is byte-identical, deliberately, because bundling
+            # several changes at once is how the first pass produced a "fix" that
+            # scored worse with no way to tell which part caused it.
+            #
+            # WHY THIS EXISTS. Those four columns (Wins, Losses, Win Points, Loss
+            # Points) were filled in BY HAND. For 2026 they are empty on all 138
+            # teams, so the whole quality term contributes exactly zero and the
+            # ratings are bare position grades. Meanwhile `observe()` below has
+            # been accruing the same quantity from real results on every run and
+            # NOTHING HAS EVER READ IT -- a writer with no reader, the mirror of
+            # the usual defect and just as dead.
+            #
+            # Safe because both callers are strictly predict-then-observe:
+            # backtest.run() predicts at line ~129 and observes at ~146, and
+            # predict.generate() observes each game only after any pick on it is
+            # recorded. So self.quality holds prior games only, never this one.
+            seven = sum(g.get(p, 0.0) for p in SEVEN_PLAYER_GROUPS)
+            return (2.0 * seven
+                    + self.cfg.get("sheet_coach_weight", 1.0) * g.get("coach_st", 0.0)
+                    + self.cfg.get("quality_scale", 1.0) * self.quality.get(team, 0.0))
+
         # 'fixed' and 'tuned' share a corrected structure:
         #   * every position group weighted the same way (Coach/ST no longer half)
         #   * loss points ADDED with their stored sign, so a bad loss hurts
@@ -253,9 +278,10 @@ class GradeRater:
         if gh is None or ga is None:
             return None                    # caller falls back to Elo
         # _grade_total already returns a COMPLETE team rating -- scaling and
-        # quality points are applied inside it, and in 'sheet' mode the win/loss
-        # points come from the spreadsheet itself. Re-applying grade_scale or
-        # adding self.quality here would double-count both.
+        # quality points are applied inside it. In 'sheet' mode the win/loss
+        # points come from the spreadsheet; in 'computed' mode _grade_total reads
+        # self.quality itself. Re-applying grade_scale or adding self.quality
+        # here would double-count both.
         return gh - ga
 
     def observe(self, game):
