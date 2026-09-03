@@ -129,12 +129,29 @@ ok("no-match shows empty state", $("#ranktbl .empty") !== null);
 $("#q").value = ""; fire($("#q"));
 ok("clearing search restores all", rows("#ranktbl") === 138);
 
+// Columns are found by their heading, never by position. Two of these tests
+// read a cell out of the rankings row, and both broke the day a column was
+// inserted to their left -- reporting "conference filter is broken" and "QB
+// sort is NaN" when the filter and the sort were fine and the test was reading
+// the wrong cell. A heading is what the page promises; an index is an accident
+// of layout.
+const colIdx = (table, heading) =>
+  $$(`${table} thead th`).findIndex(th =>
+    th.textContent.replace(/[▲▼]/g, "").trim() === heading);
+
+ok("every rankings column the tests read is present",
+   ["Conference", "QB", "W-L", "Win Pts", "Loss Pts", "Total"]
+     .every(h => colIdx("#ranktbl", h) >= 0),
+   ["Conference", "QB", "W-L", "Win Pts", "Loss Pts", "Total"]
+     .filter(h => colIdx("#ranktbl", h) < 0).join(",") || "all present");
+
 // Drive the filter off whatever conferences the bundle actually has, so this
 // keeps working through realignment instead of hard-coding this year's names.
 const someConf = $$("#confchips .chip")[0]?.dataset.c;
+const CONF_COL = colIdx("#ranktbl", "Conference");
 const confSize = someConf
   ? [...$$("#ranktbl tbody tr")].filter(tr =>
-      tr.children[2].textContent.includes(someConf)).length
+      tr.children[CONF_COL].textContent.includes(someConf)).length
   : 0;
 $("#conf").value = someConf; fire($("#conf"), "change");
 ok("conference filter narrows to that conference",
@@ -156,7 +173,8 @@ if (chip) {
 }
 
 $("#rsort").value = "qb"; fire($("#rsort"), "change");
-const qbCells = () => $$("#ranktbl tbody tr").map(tr => parseFloat(tr.children[3].textContent));
+const QB_COL = colIdx("#ranktbl", "QB");
+const qbCells = () => $$("#ranktbl tbody tr").map(tr => parseFloat(tr.children[QB_COL].textContent));
 const qbs = qbCells();
 ok("sort by QB is descending", qbs[0] >= qbs[1] && qbs[1] >= qbs[2], qbs.slice(0,3).join(","));
 $("#rdir").value = "asc"; fire($("#rdir"), "change");
@@ -173,6 +191,78 @@ const th = $$("#ranktbl th.sortable").find(t => t.dataset.k === "total");
 th.dispatchEvent(new window.Event("click", { bubbles: true }));
 ok("header click sorts", $("#ranktbl th[aria-sort]") !== null);
 
+// ── the record and the points a team's results earned ────────────────────────
+//
+// The rankings table totalled a team from the spreadsheet's hand-entered
+// Win/Loss Points columns while the engine rated it from quality accrued off
+// real games. Both produce a number, so nothing was visibly wrong; the page was
+// simply several rating points adrift of the picks beside it, and said in a
+// footnote that the two were the same.
+{
+  const B = JSON.parse(bundle);
+  $("#rreset").dispatchEvent(new window.Event("click", { bubbles: true }));
+  const WL_COL = colIdx("#ranktbl", "W-L");
+  const WP_COL = colIdx("#ranktbl", "Win Pts");
+  const LP_COL = colIdx("#ranktbl", "Loss Pts");
+  const TOT_COL = colIdx("#ranktbl", "Total");
+  const cellsFor = team => {
+    const tr = $$("#ranktbl tbody tr").find(r => r.children[1].textContent.trim() === team);
+    return tr ? [...tr.children].map(td => td.textContent.trim()) : null;
+  };
+
+  // Every team carries a record, and it is the bundle's, not a guess.
+  const anyTeam = Object.keys(B.teams)[0];
+  const rec0 = B.teams[anyTeam].record;
+  ok("every team ships a record", rec0 && typeof rec0.wins === "number",
+     JSON.stringify(rec0));
+  ok("the W-L column shows it",
+     cellsFor(anyTeam)?.[WL_COL] === `${rec0.wins}-${rec0.losses}`,
+     `${cellsFor(anyTeam)?.[WL_COL]} vs ${rec0.wins}-${rec0.losses}`);
+
+  // A team that has not played reads 0-0 rather than blank: 0-0 is a fact, and
+  // an em dash would say "we do not know".
+  const unplayed = Object.entries(B.teams)
+    .find(([, v]) => !v.record.wins && !v.record.losses)?.[0];
+  if (unplayed) {
+    ok("an unplayed team reads 0-0, not blank", cellsFor(unplayed)?.[WL_COL] === "0-0",
+       cellsFor(unplayed)?.[WL_COL]);
+  } else {
+    ok("an unplayed team reads 0-0, not blank", true, "every team has played");
+  }
+
+  // A team that HAS played shows the points its results earned.
+  const charged = Object.entries(B.teams)
+    .find(([, v]) => v.record.loss_points)?.[0];
+  if (charged) {
+    const c = cellsFor(charged), r = B.teams[charged].record;
+    ok("loss points are shown where they were charged",
+       parseFloat(c[LP_COL]) === r.loss_points, `${c[LP_COL]} vs ${r.loss_points}`);
+    ok("...and the total already contains them",
+       parseFloat(c[TOT_COL]) === B.teams[charged].total,
+       `${c[TOT_COL]} vs ${B.teams[charged].total}`);
+  } else {
+    ok("loss points are shown where they were charged", true, "nobody has lost yet");
+    ok("...and the total already contains them", true, "nobody has lost yet");
+  }
+
+  const credited = Object.entries(B.teams).find(([, v]) => v.record.win_points)?.[0];
+  ok("win points are shown where they were credited",
+     !credited || parseFloat(cellsFor(credited)[WP_COL]) === B.teams[credited].record.win_points,
+     credited ? `${cellsFor(credited)[WP_COL]} vs ${B.teams[credited].record.win_points}` : "no ranked wins yet");
+
+  // The footnote has to describe the formula that actually ran. The old one
+  // named the spreadsheet arithmetic whatever the config said.
+  const note = $("#ranknote").textContent;
+  ok("the footnote names the live formula",
+     B.config.formula === "computed"
+       ? /taken from the rating engine itself/.test(note)
+       : /hand-entered/.test(note), note.slice(0, 90));
+
+  // And the caption must not print the Team Data sentinel as a week number.
+  ok("the grades caption never says week 99", !/week 99/.test($("#ranksub").textContent),
+     $("#ranksub").textContent);
+}
+
 console.log("\n── schedule ──");
 {
   const B = JSON.parse(bundle);
@@ -184,6 +274,27 @@ console.log("\n── schedule ──");
      `${B.schedule.length} scheduled vs ${B.bets.length} on the board`);
   ok("games the model will not price are present, not dropped",
      B.schedule.some(g => g.status === "blowout"));
+
+  // Records ride on the shared matchup cell, so this covers the bets board and
+  // the three results tables as well as the schedule. Only teams that have
+  // played carry one — an 0-0 tag on every name in week one would be noise.
+  {
+    const played = Object.entries(B.teams)
+      .filter(([, v]) => v.record.wins || v.record.losses).map(([t]) => t);
+    if (played.length) {
+      const withRec = $$("#schedtbl tbody td.mu")
+        .filter(td => td.querySelector(".rec")).length;
+      ok("a played team's record shows beside its name in a matchup",
+         withRec > 0, `${withRec} matchup cells carry a record`);
+      const tags = $$("#schedtbl tbody td.mu .rec").map(e => e.textContent.trim());
+      ok("...and it reads as a record, not a stray number",
+         tags.every(t => /^\d+-\d+$/.test(t)), tags.slice(0, 5).join(" "));
+    } else {
+      ok("a played team's record shows beside its name in a matchup", true,
+         "no games played yet");
+      ok("...and it reads as a record, not a stray number", true, "no games played yet");
+    }
+  }
 
   // Week 0 is DERIVED, and whether one exists is a fact about this season's
   // calendar, not about this code. Asserting "a week 0 exists" made the schedule
@@ -971,12 +1082,16 @@ ok("preferences are persisted", (window.localStorage.getItem("tm_bet_prefs") || 
 
 console.log("\n── team ──");
 ok("team select populated", $$("#team option").length === 138);
-ok("team cards render", $$("#teamcards .card").length === 10);
+// By the labels they carry, not by how many there happen to be — a count is a
+// test that fails when a card is ADDED, which is the wrong thing to defend.
+const cardLabels = () => $$("#teamcards .card .k").map(k => k.textContent.trim());
+ok("team cards render",
+   ["National rank", "Record", "Quality points", "QB", "Total"]
+     .every(l => cardLabels().includes(l)), cardLabels().join(","));
 const effHas = $("#effchart").innerHTML.length > 50;
 ok("efficiency chart or honest empty", effHas);
 $("#team").value = "Alabama"; fire($("#team"));
-ok("switching team re-renders", $("#teamcards").innerHTML.includes("Alabama") ||
-   $$("#teamcards .card").length === 10);
+ok("switching team re-renders", cardLabels().includes("Total"), cardLabels().join(","));
 
 console.log("\n── line movement ──");
 ok("game select populated", $$("#game option").length > 0, String($$("#game option").length));
