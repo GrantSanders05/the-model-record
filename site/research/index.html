@@ -203,6 +203,11 @@ tbody tr:hover{background:var(--raised)}
 .neg{color:var(--neg);font-weight:600}
 .muted{color:var(--ink3)}
 .strong{font-weight:640}
+/* A won-lost record beside a team name. Quiet, tabular and never wrapping: it
+   is context for the name, not a figure competing with the numbers to its
+   right. */
+.rec{font-family:var(--mono);font-size:11px;color:var(--ink3);
+     font-variant-numeric:tabular-nums;white-space:nowrap}
 .nowrap{white-space:nowrap}
 
 /* ── matchup + team/number pairs ─────────────────────────────────────────
@@ -667,11 +672,17 @@ function logCell(g, sidePick){
 function matchupCell(away, home, neutral){
   /* "@" is load-bearing -- it is the only thing on the row that says who is at
      home, and home field is worth 4 points to this model. Neutral sites get
-     "vs" and no emphasis, because neither team is hosting. */
+     "vs" and no emphasis, because neither team is hosting.
+
+     Records ride along with both names. One cell, five callers -- the bets
+     board, the schedule and three results tables all get them from here, which
+     is why the record lives in this function rather than at each call site.
+     `wlTag` prints nothing for an 0-0 team, so in week one this adds no clutter
+     and the cell fills out as the season does. */
   return `<td class="mu">`+
-    `<span class="mu-t">${esc(away)}</span>`+
+    `<span class="mu-t">${esc(away)}</span>${wlTag(away)}`+
     `<span class="mu-at">${neutral?"vs":"@"}</span>`+
-    `<span class="mu-t ${neutral?"":"mu-home"}">${esc(home)}</span>`+
+    `<span class="mu-t ${neutral?"":"mu-home"}">${esc(home)}</span>${wlTag(home)}`+
     (neutral?`<span class="mu-n">neutral</span>`:"")+`</td>`;
 }
 function ouCell(pick, total){
@@ -694,13 +705,38 @@ function ouCell(pick, total){
   });
 })();
 
-/* ── the model's own arithmetic, from the exported config ────────── */
-function teamTotal(g,cfg){
+/* ── the model's own arithmetic, from the exported config ──────────
+   The formula is now read from the config rather than assumed. This function
+   used to hard-code the spreadsheet version — 2x(seven) + Coach/ST + WinPts −
+   LossPts + W − L — which was right until the config moved to `computed`, and
+   then quietly wrong: the four sheet columns it reads are hand-entered and are
+   empty for 2026, so it returned bare position grades while the model was
+   betting on quality points earned from real results. Two arithmetics for one
+   number, and nothing to make them disagree out loud. */
+function teamTotal(g,cfg,record){
   if(!g) return null;
   const seven=["qb","rb","wr","ol","dl","lb","db"].reduce((s,p)=>s+(+g[p]||0),0);
-  return 2*seven + cfg.coach_weight*(+g.coach_st||0)
-       + (+g._win_points||0) + cfg.loss_sign*(+g._loss_points||0)
+  const base=2*seven + cfg.coach_weight*(+g.coach_st||0);
+  if(cfg.formula==="computed"){
+    /* Quality from the games actually played. `record.quality` is the rating
+       engine's own accumulator, exported rather than recomputed here. */
+    return base + (cfg.quality_scale??1) * (record ? (+record.quality||0) : 0);
+  }
+  return base + (+g._win_points||0) + cfg.loss_sign*(+g._loss_points||0)
        + cfg.raw_wl*((+g._wins||0)-(+g._losses||0));
+}
+
+/* A team's record as "2-1", or "0-0" before anyone has played. An em dash would
+   read as "unknown"; 0-0 is a fact. */
+function wl(record){
+  if(!record) return "0-0";
+  return `${record.wins|0}-${record.losses|0}`;
+}
+/* The same, for putting beside a team name inline. */
+function wlTag(team){
+  const r=D.teams&&D.teams[team]&&D.teams[team].record;
+  if(!r||(!r.wins&&!r.losses)) return "";
+  return ` <span class="rec">${wl(r)}</span>`;
 }
 
 /* ── loading ──────────────────────────────────────── */
@@ -759,8 +795,15 @@ function boot(){
   const teams=Object.keys(D.teams).sort();
   const weeks=[...new Set(D.bets.map(b=>b.week))].sort((a,b)=>a-b);
   $("#wk").innerHTML='<option value="">All</option>'+weeks.map(w=>`<option>${w}</option>`).join("");
-  $("#team").innerHTML=teams.map(t=>`<option>${esc(t)}</option>`).join("");
-  $("#wteam").innerHTML=teams.map(t=>`<option>${esc(t)}</option>`).join("");
+  /* The value stays the bare team name -- everything downstream looks teams up
+     by it -- and only the label carries the record. */
+  const teamOpts=teams.map(t=>{
+    const r=D.teams[t]&&D.teams[t].record;
+    const tag=(r&&(r.wins||r.losses))?` (${wl(r)})`:"";
+    return `<option value="${esc(t)}">${esc(t)}${tag}</option>`;
+  }).join("");
+  $("#team").innerHTML=teamOpts;
+  $("#wteam").innerHTML=teamOpts;
   $("#game").innerHTML=Object.keys(D.movement).map(g=>{
     const b=D.bets.find(x=>x.game_id===g);
     return `<option value="${esc(g)}">${esc(b?b.away+" @ "+b.home:g)}</option>`;}).join("");
@@ -865,14 +908,27 @@ function banners(){
 const RANK_COLS=[
   {k:"rank",     t:"#",         n:true,  w:"1%"},
   {k:"team",     t:"Team",      n:false},
+  {k:"record",   t:"W-L",       n:true},
   {k:"conference",t:"Conference",n:false},
   ...POS.map(p=>({k:p,t:LABEL[p],n:true,grade:true})),
+  /* The two halves of the quality term, separately. Together they are what a
+     result did to a rating, and a coach asking "why did we drop four points"
+     is asking about exactly these two columns. */
+  {k:"win_points", t:"Win Pts",  n:true},
+  {k:"loss_points",t:"Loss Pts", n:true},
   {k:"total",    t:"Total",     n:true,  bar:true},
 ];
 function rankRows(){
   return Object.entries(D.teams).map(([team,v])=>{
+    const r=v.record||{wins:0,losses:0,win_points:0,loss_points:0};
     const o={team, conference:v.conference||"—", rank:v.rank??999,
-             total:v.total, conf_rank:v.conf_rank, conf_size:v.conf_size, week:v.week};
+             total:v.total, conf_rank:v.conf_rank, conf_size:v.conf_size, week:v.week,
+             wins:r.wins|0, losses:r.losses|0,
+             win_points:+r.win_points||0, loss_points:+r.loss_points||0,
+             /* Sorting on a record has to mean something. Wins first, then
+                fewer losses — "3-0" above "3-1" above "2-0", which is the order
+                a standings table is read in. */
+             record:(r.wins|0)*100-(r.losses|0)};
     POS.forEach(p=>o[p]=v.grades[p]);
     return o;
   });
@@ -940,9 +996,12 @@ function drawRank(){
         return `<tr>
           <td class="num"><span class="rk ${tier}">${r.rank??"—"}</span></td>
           <td class="team">${esc(r.team)}</td>
+          <td class="num"><span class="rec">${r.wins}-${r.losses}</span></td>
           <td><span class="conf">${esc(r.conference)}</span>${
             r.conf_rank?` <span class="muted" style="font-size:11px">#${r.conf_rank}/${r.conf_size}</span>`:""}</td>
           ${POS.map(p=>`<td class="num">${num(r[p])}</td>`).join("")}
+          <td class="num ${r.win_points?"pos":"muted"}">${r.win_points?sgn(r.win_points):"—"}</td>
+          <td class="num ${r.loss_points?"neg":"muted"}">${r.loss_points?sgn(r.loss_points):"—"}</td>
           <td class="num bar-cell strong"><i style="width:${pct.toFixed(1)}%"></i><span>${num(r.total)}</span></td>
         </tr>`;
       }).join("")
@@ -958,14 +1017,31 @@ function drawRank(){
     drawRank();
   });
 
+  const cfg=D.config, qr=cfg.quality_rule||{};
+  /* Week 99 is not a week. It is the sentinel the importer gives the workbook's
+     "Team Data" tab, which has no week of its own, and printing it as "week 99"
+     told a reader the grades came from a week that does not exist. */
+  const gw=shown[0]?shown[0].week:null;
+  const gwLabel = gw==null ? "—" : (gw===99 ? "the Team Data tab" : `week ${gw}`);
   $("#ranksub").textContent =
-    `All ${total} FBS teams, ranked by the sheet's own TOTAL. Grades are from `+
-    `week ${shown[0]?shown[0].week:"—"} of ${D.grade_season}. `+
+    `All ${total} FBS teams, ranked by the TOTAL the model bets. Grades are from `+
+    `${gwLabel} of ${D.grade_season}. `+
     `Sort any column, filter by conference, or search.`;
-  $("#ranknote").textContent =
-    `Showing ${shown.length} of ${total}. TOTAL = 2 × (QB+RB+WR+OL+DL+LB+DB) + Coach/ST `+
-    `+ Win Points − Loss Points, which is exactly what the model bets — the sheet and the `+
-    `picks are the same number.`;
+
+  /* Say which arithmetic produced the column, and where the win/loss points
+     came from. The old note claimed the sheet formula "is exactly what the
+     model bets" — true when it was written, false from the day the config moved
+     to `computed`, and the kind of false that nobody can see from the page. */
+  $("#ranknote").textContent = cfg.formula==="computed"
+    ? `Showing ${shown.length} of ${total}. TOTAL = 2 × (QB+RB+WR+OL+DL+LB+DB) + Coach/ST `+
+      `+ win and loss points, taken from the rating engine itself, so this column and the `+
+      `picks are the same number by construction. Points come from results, not from the `+
+      `spreadsheet: a win is ${sgn(qr.wq_top5)} over a top-5 side, ${sgn(qr.wq_top10)} over a `+
+      `top-10, ${sgn(qr.wq_top25)} over a top-25 and ${num(qr.wq_other)} otherwise; a loss is `+
+      `${sgn(qr.lq_unranked_fbs)} to an unranked FBS side, ${sgn(qr.lq_fcs)} to an FCS side and `+
+      `${num(qr.lq_ranked)} to a ranked one.`
+    : `Showing ${shown.length} of ${total}. TOTAL = 2 × (QB+RB+WR+OL+DL+LB+DB) + Coach/ST `+
+      `+ Win Points − Loss Points, read from the spreadsheet's own hand-entered columns.`;
 }
 
 /* ── SCHEDULE ─────────────────────────────────────────────────────
@@ -2171,13 +2247,23 @@ function drawMyBets(){
 function drawTeam(){
   const t=$("#team").value, info=D.teams[t]; if(!info) return;
   const g=info.grades, cfg=D.config;
+  const rec=info.record||{wins:0,losses:0,win_points:0,loss_points:0,quality:0};
+  const qpts=(+rec.win_points||0)+(+rec.loss_points||0);
   $("#teamcards").innerHTML=
     `<div class="card"><div class="k">National rank</div><div class="v">${info.rank??"—"}</div>
       <div class="s">${esc(info.conference||"")}${info.conf_rank?` · #${info.conf_rank} in conf`:""}</div></div>`+
+    /* The record, and what it has been worth. Two cards rather than one,
+       because "3-1" and "+5 of rating" answer different questions and a coach
+       asks the second one only after the first. */
+    `<div class="card"><div class="k">Record</div><div class="v">${wl(rec)}</div>
+      <div class="s">${rec.wins+rec.losses===0?"not played yet":"this season"}</div></div>`+
+    `<div class="card"><div class="k">Quality points</div>
+      <div class="v ${cls(qpts)}">${rec.wins+rec.losses===0?"—":sgn(qpts)}</div>
+      <div class="s">${sgn(+rec.win_points||0)} from wins, ${sgn(+rec.loss_points||0)} from losses</div></div>`+
     POS.map(p=>`<div class="card"><div class="k">${LABEL[p]}</div>
       <div class="v">${num(g[p])}</div><div class="s">of ${MAXV[p]}</div></div>`).join("")+
-    `<div class="card"><div class="k">Total</div><div class="v">${num(teamTotal(g,cfg))}</div>
-      <div class="s">as of wk ${info.week}</div></div>`;
+    `<div class="card"><div class="k">Total</div><div class="v">${num(teamTotal(g,cfg,rec))}</div>
+      <div class="s">${info.week===99?"Team Data tab":"as of wk "+info.week}</div></div>`;
 
   const eff=D.efficiency[t]||[];
   $("#effchart").innerHTML = eff.length>1
@@ -2186,12 +2272,15 @@ function drawTeam(){
 
   const res=(D.results[t]||[]).filter(r=>r.margin!=null);
   $("#teamgames").innerHTML = res.length
-    ? `<thead><tr><th class="num">Wk</th><th>Opponent</th><th>H/A</th>
+    ? `<thead><tr><th class="num">Wk</th><th>Opponent</th><th>H/A</th><th>W/L</th>
         <th class="num">Result</th><th class="num">Line</th><th class="num">vs Line</th></tr></thead>
        <tbody>${res.map(r=>{
          const ats = r.line!=null? r.margin - r.line : null;
-         return `<tr><td class="num">${r.week}</td><td>${esc(r.opp)}</td>
+         const won = r.margin>0;
+         return `<tr><td class="num">${r.week}</td>
+           <td>${esc(r.opp)}${wlTag(r.opp)}</td>
            <td class="muted">${r.home?"H":"A"}</td>
+           <td class="${won?"pos":"neg"}">${won?"W":"L"}</td>
            <td class="num ${cls(r.margin)}">${sgn(r.margin,0)}</td>
            <td class="num muted">${sgn(r.line)}</td>
            <td class="num ${cls(ats)}">${sgn(ats)}</td></tr>`}).join("")}</tbody>`
@@ -2230,7 +2319,12 @@ function drawWhatIf(){
     EDITS[e.target.dataset.p]=+e.target.value; drawWhatIf();
   });
 
-  const t0=teamTotal(base,cfg), t1=teamTotal(cur,cfg), d=t1-t0;
+  /* The team's real record is held constant across both totals — the sliders
+     move grades, not results — so the delta is unchanged, and the two absolute
+     figures now agree with the rankings table instead of sitting several points
+     below it. */
+  const wrec=info.record;
+  const t0=teamTotal(base,cfg,wrec), t1=teamTotal(cur,cfg,wrec), d=t1-t0;
   $("#wcards").innerHTML=`
     <div class="card"><div class="k">Current total</div><div class="v">${num(t0)}</div></div>
     <div class="card"><div class="k">Adjusted total</div><div class="v">${num(t1)}</div></div>

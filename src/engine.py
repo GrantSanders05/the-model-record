@@ -171,6 +171,45 @@ class EloRater:
             self.r[game["away_team"]] = ra - delta
 
 
+# ── the win/loss quality rule ──────────────────────────────────────────────────
+#
+# Grant's own scoring, written in a note beside the columns of every weekly tab
+# of the spreadsheet:
+#
+#     beat a top-5  +5      lose to a ranked team    0
+#     beat a top-10 +4      lose to an unranked FBS  -4
+#     beat a top-25 +3      lose to an FCS side      -4
+#     beat anyone else 0
+#
+# Module level, and taking cfg rather than reading self, so that the exporter
+# can grant the same points the rater grants. When this lived inside observe()
+# the research site had no way to reach it and computed the team page's TOTAL
+# from four spreadsheet columns instead -- columns that are empty for 2026, so
+# the page showed bare position grades while the model bet on these. The page
+# then told the reader the two were "the same number".
+
+def win_points(cfg, opp_rank):
+    """Points for beating a team ranked `opp_rank` (None = unranked)."""
+    if opp_rank is None:
+        return cfg["wq_other"]
+    if opp_rank <= 5:
+        return cfg["wq_top5"]
+    if opp_rank <= 10:
+        return cfg["wq_top10"]
+    if opp_rank <= 25:
+        return cfg["wq_top25"]
+    return cfg["wq_other"]
+
+
+def loss_points(cfg, opp_rank, opp_div):
+    """Points for losing to that team. Negative, or zero for a ranked opponent."""
+    if opp_div and opp_div not in ("fbs", "nfl"):
+        return cfg["lq_fcs"]
+    if opp_rank is not None and opp_rank <= 25:
+        return cfg["lq_ranked"]
+    return cfg["lq_unranked_fbs"]
+
+
 class GradeRater:
     """
     Grant's film grades. Reproduces his arithmetic exactly:
@@ -189,11 +228,35 @@ class GradeRater:
         self.cfg = cfg
         self.grades = grades_by_team      # {(season, team): [(week, {pos: grade})]}
         self.quality = defaultdict(float)
+        # The same accrual, kept in its parts. `quality` is what the rating uses
+        # and is unchanged; these exist so the team page can show a coach WHY a
+        # rating moved -- "2-1, +5 for beating a top-5, -4 for the FCS loss" --
+        # instead of one opaque number. Derived here rather than recomputed
+        # anywhere else, because two implementations of a scoring rule is how
+        # the page and the picks came to disagree in the first place.
+        self.wins = defaultdict(int)
+        self.losses = defaultdict(int)
+        self.win_quality = defaultdict(float)
+        self.loss_quality = defaultdict(float)
         self._season = None
 
     def new_season(self, season):
         self._season = season
         self.quality.clear()              # quality points are per-season
+        self.wins.clear()
+        self.losses.clear()
+        self.win_quality.clear()
+        self.loss_quality.clear()
+
+    def record(self, team):
+        """Everything accrued for one team this season, for display."""
+        return {
+            "wins": self.wins.get(team, 0),
+            "losses": self.losses.get(team, 0),
+            "win_points": round(self.win_quality.get(team, 0.0), 1),
+            "loss_points": round(self.loss_quality.get(team, 0.0), 1),
+            "quality": round(self.quality.get(team, 0.0), 1),
+        }
 
     def _snapshot(self, season, team, week):
         """Most recent grade snapshot effective at or before `week`."""
@@ -293,30 +356,23 @@ class GradeRater:
         h_rank = game.get("home_rank")
         a_rank = game.get("away_rank")
 
-        def win_pts(opp_rank):
-            if opp_rank is None:
-                return cfg["wq_other"]
-            if opp_rank <= 5:
-                return cfg["wq_top5"]
-            if opp_rank <= 10:
-                return cfg["wq_top10"]
-            if opp_rank <= 25:
-                return cfg["wq_top25"]
-            return cfg["wq_other"]
-
-        def loss_pts(opp_rank, opp_div):
-            if opp_div and opp_div not in ("fbs", "nfl"):
-                return cfg["lq_fcs"]
-            if opp_rank is not None and opp_rank <= 25:
-                return cfg["lq_ranked"]
-            return cfg["lq_unranked_fbs"]
-
         if hs > as_:
-            self.quality[game["home_team"]] += win_pts(a_rank)
-            self.quality[game["away_team"]] += loss_pts(h_rank, game["home_div"])
+            winner, loser = game["home_team"], game["away_team"]
+            wp = win_points(cfg, a_rank)
+            lp = loss_points(cfg, h_rank, game["home_div"])
         elif as_ > hs:
-            self.quality[game["away_team"]] += win_pts(h_rank)
-            self.quality[game["home_team"]] += loss_pts(a_rank, game["away_div"])
+            winner, loser = game["away_team"], game["home_team"]
+            wp = win_points(cfg, h_rank)
+            lp = loss_points(cfg, a_rank, game["away_div"])
+        else:
+            return                        # a tie earns neither side anything
+
+        self.wins[winner] += 1
+        self.losses[loser] += 1
+        self.win_quality[winner] += wp
+        self.loss_quality[loser] += lp
+        self.quality[winner] += wp
+        self.quality[loser] += lp
 
 
 class BlendRater:

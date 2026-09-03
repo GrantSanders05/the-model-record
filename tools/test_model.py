@@ -311,6 +311,92 @@ _recs, _ = _iw.parse_rows(_rows, "cfb", 2026, 3, label="t")
 _wp = [r["grade"] for r in _recs if r["position"] == "_win_points"]
 ok("win points are NOT normalised — only loss points are", _wp == [-5.0], _wp)
 
+# ── the team page and the picks are one number ────────────────────────────────
+#
+# The rankings table totalled a team from four spreadsheet columns while the
+# engine rated it from quality points accrued off real results, and a footnote
+# underneath told the reader they were the same number. For 2026 those columns
+# are empty on all 138 teams, so the page was showing bare position grades for
+# every team that had played.
+#
+# These do not check the arithmetic -- the block above already does. They check
+# that there is only ONE arithmetic, by requiring the exported figure to equal
+# what the rater itself returns.
+
+print("\n── the team page shows what the model bets ──")
+
+import research_export   # noqa: E402
+
+_qcfg = dict(CFG)
+_qcfg["grade_formula"] = "computed"
+
+_grades = {(2026, "Alpha"): [(1, {"qb": 10, "rb": 8, "wr": 8, "ol": 9, "dl": 9,
+                                  "lb": 7, "db": 7, "coach_st": 8})],
+           (2026, "Beta"):  [(1, {"qb": 9, "rb": 8, "wr": 8, "ol": 8, "dl": 8,
+                                  "lb": 7, "db": 7, "coach_st": 8})]}
+_r = engine.GradeRater(_qcfg, _grades)
+_r.new_season(2026)
+_before = _r._grade_total(2026, "Alpha", 1)
+
+# Alpha beats a top-5 Beta; Beta is charged for losing to an unranked side.
+_r.observe({"home_team": "Alpha", "away_team": "Beta", "home_score": 30,
+            "away_score": 10, "home_rank": None, "away_rank": 3,
+            "home_div": "fbs", "away_div": "fbs"})
+
+_after = _r._grade_total(2026, "Alpha", 1)
+ok("a win moves the rating the rater reports",
+   round(_after - _before, 6) == CFG["wq_top5"], (_before, _after))
+
+_rec = _r.record("Alpha")
+ok("the record counts the game", (_rec["wins"], _rec["losses"]) == (1, 0), _rec)
+ok("win points are broken out", _rec["win_points"] == CFG["wq_top5"], _rec)
+ok("...and the loser's are charged separately",
+   _r.record("Beta")["loss_points"] == CFG["lq_unranked_fbs"], _r.record("Beta"))
+ok("the parts add up to the accumulator the rating uses",
+   round(_rec["win_points"] + _rec["loss_points"], 6) == _rec["quality"], _rec)
+
+# The exported total is the rater's own number, not a second implementation.
+_page = _before + _qcfg.get("quality_scale", 1.0) * _r.record("Alpha")["quality"]
+ok("the page's total equals the rater's total",
+   round(_page, 6) == round(_after, 6), (_page, _after))
+
+# And a team that has not played shows zeroes rather than nothing: 0-0 is a
+# fact, and a blank would read as "unknown".
+_r2 = engine.GradeRater(_qcfg, _grades)
+_r2.new_season(2026)
+ok("an unplayed team reports 0-0 and no points",
+   _r2.record("Alpha") == {"wins": 0, "losses": 0, "win_points": 0.0,
+                           "loss_points": 0.0, "quality": 0.0}, _r2.record("Alpha"))
+
+# A tie is neither, and must not be counted as either.
+_r3 = engine.GradeRater(_qcfg, _grades)
+_r3.new_season(2026)
+_r3.observe({"home_team": "Alpha", "away_team": "Beta", "home_score": 21,
+             "away_score": 21, "home_rank": None, "away_rank": None,
+             "home_div": "fbs", "away_div": "fbs"})
+ok("a tie is not a win and not a loss",
+   _r3.record("Alpha")["wins"] == 0 and _r3.record("Alpha")["losses"] == 0,
+   _r3.record("Alpha"))
+
+# new_season must clear the record as well as the points, or week 1 of 2027
+# opens with 2026's wins still on the board.
+_r.new_season(2027)
+ok("a new season clears the record, not just the points",
+   _r.record("Alpha") == {"wins": 0, "losses": 0, "win_points": 0.0,
+                          "loss_points": 0.0, "quality": 0.0}, _r.record("Alpha"))
+
+# CONTROL: the sheet formula genuinely ignores the accrued quality, which is
+# why the page needed changing at all.
+_scfg = dict(CFG); _scfg["grade_formula"] = "sheet"
+_sr = engine.GradeRater(_scfg, _grades)
+_sr.new_season(2026)
+_s0 = _sr._grade_total(2026, "Alpha", 1)
+_sr.observe({"home_team": "Alpha", "away_team": "Beta", "home_score": 30,
+             "away_score": 10, "home_rank": None, "away_rank": 3,
+             "home_div": "fbs", "away_div": "fbs"})
+ok("CONTROL: under the sheet formula a win changes nothing (the old bug)",
+   _sr._grade_total(2026, "Alpha", 1) == _s0)
+
 print("=" * 62)
 print("%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)

@@ -26,6 +26,7 @@ import backtest
 import best_bets
 import bet_log
 import db
+import engine
 import ledger
 import predict
 import tracking
@@ -262,8 +263,52 @@ def schedule(conn, sport, season, priced, labels, rated=(), keep=()):
     return out
 
 
-def team_snapshot(conn, sport, season):
-    """Latest grade per team, with its conference, TOTAL and national rank."""
+def season_rater(conn, sport, season, config):
+    """
+    The rating engine, wound forward through every completed game up to `season`.
+
+    Same class, same games, same order as `predict.generate` — so a number read
+    off this object IS the number the model is betting, rather than a second
+    implementation of the same arithmetic that agrees until it doesn't.
+
+    That second implementation is what this replaces. The team page used to
+    total a team from four spreadsheet columns (`Wins`, `Losses`, `Win Points`,
+    `Loss Points`) that are hand-entered and empty for 2026 — so it showed bare
+    position grades while the model bet on quality points accrued from real
+    results, and the footnote underneath told the reader they were the same
+    number.
+    """
+    games = backtest.load_games(conn, sport)
+    grades = backtest.load_grades(conn, sport)
+    if not grades:
+        return None
+    cfg = dict(config)
+    cfg.pop("_grades", None)
+    model = engine.Model(cfg, grades)
+
+    seen = None
+    for g in games:
+        if g["season"] > season:
+            break
+        if g["season"] != seen:
+            seen = g["season"]
+            model.new_season(seen)
+        model.observe(g)
+    return model
+
+
+def grade_rater(model):
+    """The GradeRater inside whichever rater is configured, or None."""
+    if model is None:
+        return None
+    r = model.rater
+    if isinstance(r, engine.GradeRater):
+        return r
+    return getattr(r, "grades", None)      # BlendRater keeps one alongside Elo
+
+
+def team_snapshot(conn, sport, season, model=None, week=None):
+    """Latest grade per team, with its conference, record, TOTAL and rank."""
     out = {}
     for r in conn.execute(
             "SELECT week, team, position, grade FROM grades "
@@ -272,18 +317,31 @@ def team_snapshot(conn, sport, season):
         t["grades"][r["position"]] = r["grade"]
         t["week"] = max(t["week"], r["week"])
 
+    rater = grade_rater(model)
     conf = conferences(season)
     for team, blob in out.items():
         g = blob["grades"]
         blob["conference"] = conf.get(team, "Independent")
-        # The sheet's own TOTAL, recomputed here so the rankings table and the
-        # spreadsheet agree without the browser having to know the formula.
-        if all(p in g for p in SEVEN):
-            blob["total"] = round(
-                2 * sum(g[p] for p in SEVEN) + g.get("coach_st", 0.0)
-                + g.get("_win_points", 0.0) - g.get("_loss_points", 0.0), 1)
-        else:
-            blob["total"] = None
+
+        # This season's record and the quality points it earned, from the games
+        # actually played. Zeroes rather than blanks: 0-0 is a fact about a team
+        # that has not played, and it is the honest thing to print in week one.
+        blob["record"] = (rater.record(team) if rater
+                          else {"wins": 0, "losses": 0, "win_points": 0.0,
+                                "loss_points": 0.0, "quality": 0.0})
+
+        # THE TOTAL IS THE MODEL'S OWN. Asking the rater for it, rather than
+        # re-deriving the formula here, is what makes "the sheet and the picks
+        # are the same number" true by construction instead of by comment.
+        total = None
+        if rater is not None:
+            total = rater._grade_total(season, team, week or blob["week"])
+        if total is None and all(p in g for p in SEVEN):
+            # No rater (or no grade snapshot at that week) — fall back to the
+            # sheet arithmetic so the page still ranks, and say so on the page.
+            total = (2 * sum(g[p] for p in SEVEN) + g.get("coach_st", 0.0)
+                     + g.get("_win_points", 0.0) - g.get("_loss_points", 0.0))
+        blob["total"] = round(total, 1) if total is not None else None
 
     ranked = sorted((t for t in out if out[t]["total"] is not None),
                     key=lambda t: -out[t]["total"])
@@ -497,6 +555,11 @@ def main():
         (args.sport, season)).fetchone()["n"] == 0
 
     grade_season = latest_season_with(conn, "grades", args.sport, season) or season
+
+    # Wound forward through this season's completed games, so the team page can
+    # show each team's record, the quality points those results earned, and a
+    # TOTAL that is the model's own number rather than a copy of its formula.
+    rater_model = season_rater(conn, args.sport, season, config)
     eff_found = latest_season_with(conn, "team_game_stats", args.sport, season,
                                    where="AND off_ppa IS NOT NULL")
     eff_season = eff_found or season
@@ -518,6 +581,23 @@ def main():
             # "worth" of an edge rather than the raw gap.
             "edge_realised": config.get("edge_realised", 1.0),
             "coach_weight": config.get("sheet_coach_weight", 1.0),
+            # WHICH formula, so the browser stops guessing. It recomputed every
+            # team total with the spreadsheet arithmetic regardless — fine while
+            # that was the live formula, wrong the day the config moved to
+            # 'computed', and wrong silently, because both produce a number.
+            "formula": config.get("grade_formula", "sheet"),
+            "quality_scale": config.get("quality_scale", 1.0),
+            # The rule itself, so the page can explain a team's points rather
+            # than just print them.
+            "quality_rule": {
+                "wq_top5": config.get("wq_top5", 0.0),
+                "wq_top10": config.get("wq_top10", 0.0),
+                "wq_top25": config.get("wq_top25", 0.0),
+                "wq_other": config.get("wq_other", 0.0),
+                "lq_ranked": config.get("lq_ranked", 0.0),
+                "lq_unranked_fbs": config.get("lq_unranked_fbs", 0.0),
+                "lq_fcs": config.get("lq_fcs", 0.0),
+            },
             "loss_sign": config.get("sheet_loss_sign", -1.0),
             "raw_wl": config.get("sheet_raw_wl", 0.0),
         },
@@ -540,7 +620,7 @@ def main():
         # bets he types on the site live in his browser and never reach this file.
         "tracking": tracking.summary(conn, args.sport, season=None, week_labels=labels),
         "mybets": mybets,
-        "teams": team_snapshot(conn, args.sport, grade_season),
+        "teams": team_snapshot(conn, args.sport, grade_season, model=rater_model),
         "efficiency": efficiency_trend(conn, args.sport, eff_season),
         "results": team_results(conn, args.sport, eff_season),
         "movement": line_movement(conn, args.sport, season),
