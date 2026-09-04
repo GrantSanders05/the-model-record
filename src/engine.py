@@ -334,6 +334,42 @@ class GradeRater:
         quality = g.get("_win_points", 0.0) + g.get("_loss_points", 0.0)
         return base * self.cfg["grade_scale"] + quality * self.cfg["quality_scale"]
 
+    def _grade_parts(self, season, team, week):
+        """(position-grade points, raw quality points) — the rating, unmixed.
+
+        Only defined for `computed`, the only formula where the two halves are
+        separable: under `sheet` the quality points live inside the snapshot and
+        cannot be told apart from the position grades.
+        """
+        if self.cfg.get("grade_formula") != "computed":
+            return None
+        g = self._snapshot(season, team, week)
+        if g is None:
+            return None
+        base = (2.0 * sum(g.get(p, 0.0) for p in SEVEN_PLAYER_GROUPS)
+                + self.cfg.get("sheet_coach_weight", 1.0) * g.get("coach_st", 0.0))
+        return base, self.quality.get(team, 0.0)
+
+    def parts(self, game):
+        """The two halves of `strength`, for calibration. See calibrate.py.
+
+        WHY THIS IS EXPOSED. `scale` multiplies the whole rating, but the rating
+        is two quantities with different units: position grades, which are fixed
+        all season, and quality points, which start at zero and accumulate. One
+        multiplier cannot be right for both, and measurably was not -- the
+        calibration slope ran 1.09 over weeks 1-4 and 0.80 over weeks 11+, light
+        on every early-season game and heavy on every late one. Splitting them
+        needs the two differences separately, and deriving them here rather than
+        in the fitter is what stops the fit from being run against arithmetic
+        nobody ships.
+        """
+        season, week = game["season"], game["week"] or 1
+        ph = self._grade_parts(season, game["home_team"], week)
+        pa = self._grade_parts(season, game["away_team"], week)
+        if ph is None or pa is None:
+            return None
+        return ph[0] - pa[0], ph[1] - pa[1]
+
     def strength(self, game):
         season, week = game["season"], game["week"] or 1
         gh = self._grade_total(season, game["home_team"], week)
@@ -563,20 +599,36 @@ class Model:
         if self.totals:
             self.totals.new_season(season)
 
+    def parts(self, game):
+        """The rater's two rating halves, when it has them. See GradeRater.parts."""
+        fn = getattr(self.rater, "parts", None)
+        return fn(game) if fn else None
+
     def predict(self, game):
         """Predicted HOME margin (+ = home favored) and, optionally, total."""
         s = self.rater.strength(game)
         self.predictions += 1
+        borrowed = False
         if s is None and self._fallback:
             # Counted, because a fallback is a DIFFERENT MODEL answering. One team
             # missing a grade is a fine reason to borrow Elo for that game; every
             # team missing one means the run is Elo wearing the grade model's name,
             # and it reports itself as the grade model all the way to the website.
             self.fallbacks += 1
+            borrowed = True
             s = self._fallback.strength(game)
         if s is None:
             s = 0.0
-        margin = s * self.cfg["scale"] + self.hfa_for(game)
+        # AND IT NEEDS ITS OWN SCALE, for the reason `hfa` needs one: a scale is
+        # fitted to a particular rater's units and carries that rater's mean
+        # offset. Sharing it meant re-fitting the grade model silently re-tuned
+        # Elo -- measured, when `scale` moved 0.997 -> 1.311 on the strength of
+        # 808 graded games, the 126 borrowed ones went 65-61 to 62-64 against the
+        # spread without anybody having fitted anything about them.
+        # Defaults to `scale`, so a config that has not fitted one behaves exactly
+        # as it did before this existed.
+        scale = self.cfg.get("fallback_scale") if borrowed else None
+        margin = s * (self.cfg["scale"] if scale is None else scale) + self.hfa_for(game)
         # Market anchoring happens LAST, after the model has had its say. The
         # closing line is public before kickoff, so using it is information, not
         # look-ahead.
@@ -584,7 +636,7 @@ class Model:
         if anchor > 0:
             import pro_models
             margin = pro_models.market_anchor(margin, game.get("market_margin"), anchor)
-        out = {"pred_margin": margin}
+        out = {"pred_margin": margin, "borrowed": borrowed}
         if self.totals:
             out["pred_total"] = self.totals.predict(game)
         return out

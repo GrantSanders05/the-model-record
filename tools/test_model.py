@@ -27,6 +27,7 @@ import db            # noqa: E402
 import engine        # noqa: E402
 import metrics       # noqa: E402
 import pro_models    # noqa: E402
+import best_bets     # noqa: E402
 
 P = F = 0
 
@@ -98,6 +99,28 @@ else:
            % factor, abs(off["calib_slope"] - 1.0) > 0.08,
            "slope %.3f" % off["calib_slope"])
 
+    # AND IT HAS TO HOLD AT BOTH ENDS OF THE SEASON, ON THE GAMES THE GRADE RATER
+    # ACTUALLY ANSWERED. The check above passed at 1.000 while the grade model was
+    # at 0.870 and swinging from 1.09 in September to 0.80 in November: the Elo
+    # fallback was over-dispersed at 1.141, the grade model under-dispersed, and
+    # pooling them cancelled to a perfect score. A gate averaged over two models
+    # measures neither. Splitting `scale` from `quality_scale` is what fixed the
+    # swing — the position grades are fixed all season and the quality points
+    # accumulate, so one multiplier over their sum has to be wrong somewhere.
+    graded = [p for p in preds if not p.get("borrowed")]
+    early = [p for p in graded if (p["week"] or 0) <= 4]
+    late = [p for p in graded if (p["week"] or 0) >= 11]
+    for label, subset in (("the grade rater's own games", graded),
+                          ("weeks 1-4, before quality points accrue", early),
+                          ("weeks 11+, once they dominate", late)):
+        sub = metrics.evaluate(subset)
+        ok("calibrated on %s" % label,
+           abs(sub["calib_slope"] - 1.0) <= 0.10,
+           "%.3f on %d games" % (sub["calib_slope"], len(subset)))
+    ok("...and the fallback is a small enough share to be a fallback",
+       len(graded) / len(preds) >= 0.80,
+       "%d of %d grade-rated" % (len(graded), len(preds)))
+
     # The grade model has to beat the rater it falls back to. If it does not, the
     # film is costing accuracy rather than adding it, and that is worth failing over.
     elo_cfg = dict(CFG, rater="elo")
@@ -111,8 +134,31 @@ else:
 
     # Not "is it profitable" — one season cannot answer that — but the published
     # record must never silently fall under the number it is compared against.
-    ok("ATS is above break-even on the validation season",
-       ev["ats_pct"] > 52.38, "%.2f%%" % ev["ats_pct"])
+    #
+    # SCORED ON THE GAMES THE MODEL ACTUALLY OFFERS. best_bets.rank() marks every
+    # game outside +/-BLOWOUT_LINE `no_bet` and excludes it from every ranking and
+    # every stake, so a hundred and twenty games that are never bet were being
+    # counted in the record they are compared against. The threshold below has not
+    # moved; what it reads has, to the set the sentence above describes. The
+    # all-games number is printed alongside so a divergence between the two stays
+    # visible instead of being hidden by the narrower gate.
+    priced = [p for p in preds if p["market_margin"] is not None]
+    offered = [p for p in priced
+               if abs(p["market_margin"]) <= best_bets.BLOWOUT_LINE]
+    ev_offered = metrics.evaluate(offered)
+    ok("ATS is above break-even on the games the model offers",
+       ev_offered["ats_pct"] > 52.38,
+       "%.2f%% on %d offered (all %d priced: %.2f%%)"
+       % (ev_offered["ats_pct"], len(offered), len(priced), ev["ats_pct"]))
+    # Read off the SHIPPED function rather than re-stating its rule here, so that
+    # if best_bets ever changes what it declines, this gate stops matching it
+    # instead of quietly scoring a set nobody bets.
+    _offered_ids = {p["game_id"] for p in offered}
+    _board = [r for r in best_bets.rank(conn, "cfb", dict(CFG), season=2025)
+              if r["market_margin"] is not None]
+    ok("...and the games it excludes are exactly the ones best_bets declines",
+       all((r["game_id"] in _offered_ids) != r["no_bet"] for r in _board),
+       "%d of %d declined" % (len(priced) - len(offered), len(priced)))
 
     print("\n── proving these can fail ──")
     before = F
@@ -344,8 +390,19 @@ _r.observe({"home_team": "Alpha", "away_team": "Beta", "home_score": 30,
             "home_div": "fbs", "away_div": "fbs"})
 
 _after = _r._grade_total(2026, "Alpha", 1)
+# The move is the quality points TIMES quality_scale, which is no longer 1.0:
+# `scale` and `quality_scale` are now fitted separately, because one multiplier
+# on the sum of the position grades and the accrued quality was measurably wrong
+# for both -- calibrated at 1.09 over weeks 1-4 and 0.80 over weeks 11+. Writing
+# the wq_top5 constant here on its own asserted an identity that had quietly
+# stopped holding, which is the whole reason it is spelled out.
 ok("a win moves the rating the rater reports",
-   round(_after - _before, 6) == CFG["wq_top5"], (_before, _after))
+   round(_after - _before, 6) == round(CFG["wq_top5"] * CFG["quality_scale"], 6),
+   (_before, _after))
+ok("...scaled by quality_scale, not raw",
+   round(_after - _before, 6) != CFG["wq_top5"] or CFG["quality_scale"] == 1.0,
+   "moved %.3f on %.1f points at quality_scale %.3f"
+   % (_after - _before, CFG["wq_top5"], CFG["quality_scale"]))
 
 _rec = _r.record("Alpha")
 ok("the record counts the game", (_rec["wins"], _rec["losses"]) == (1, 0), _rec)

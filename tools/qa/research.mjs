@@ -258,6 +258,20 @@ ok("header click sorts", $("#ranktbl th[aria-sort]") !== null);
        ? /taken from the rating engine itself/.test(note)
        : /hand-entered/.test(note), note.slice(0, 90));
 
+  // The quality half enters the total at its own fitted weight. A note that lists
+  // "+5 for a top-5 win" while the total moves by 2.3 is describing arithmetic the
+  // page is not doing -- the same defect as the sentence above, one layer down.
+  const qs = B.config.quality_scale == null ? 1 : +B.config.quality_scale;
+  ok("the footnote says the weight when quality points are not counted 1-for-1",
+     Math.abs(qs - 1) < 1e-9 ? !/enter the TOTAL at/.test(note)
+                             : /enter the TOTAL at ×/.test(note),
+     `quality_scale ${qs}`);
+  if (Math.abs(qs - 1) >= 1e-9) {
+    const want = (B.config.quality_rule.wq_top5 * qs).toFixed(1).replace(/\.0$/, "");
+    ok("...and states what a top-5 win is actually worth in rating",
+       note.includes(want), `looking for ${want} in the note`);
+  }
+
   // And the caption must not print the Team Data sentinel as a week number.
   ok("the grades caption never says week 99", !/week 99/.test($("#ranksub").textContent),
      $("#ranksub").textContent);

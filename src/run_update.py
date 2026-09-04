@@ -104,17 +104,36 @@ def validation_backtest(conn, sport, current_season, config):
               "committed validation summary instead (see data/validation/).")
         return None
     try:
-        _, m = season_grade(conn, sport, season, config)
+        preds, m = season_grade(conn, sport, season, config)
     except Exception as e:                         # noqa: BLE001 - never block a run
         print("  WARNING: validation backtest failed — %s" % e)
         return None
     if not m.get("ats_pct"):
         return None
     lo, hi = m["ats_ci95"]
-    return {"season": season, "n": m["ats_n"], "ats_pct": m["ats_pct"],
-            "roi": m["roi"], "ci_lo": lo, "ci_hi": hi,
-            "vs_baseline": round(m.get("su_edge_vs_baseline") or 0.0, 2),
-            "calib_slope": m.get("calib_slope"), "mae": m.get("mae")}
+    out = {"season": season, "n": m["ats_n"], "ats_pct": m["ats_pct"],
+           "roi": m["roi"], "ci_lo": lo, "ci_hi": hi,
+           "vs_baseline": round(m.get("su_edge_vs_baseline") or 0.0, 2),
+           "calib_slope": m.get("calib_slope"), "mae": m.get("mae")}
+
+    # AND THE SAME REPLAY OVER THE GAMES THE MODEL WOULD ACTUALLY HAVE OFFERED.
+    # best_bets marks everything outside +/-BLOWOUT_LINE `no_bet` and gives it no
+    # stake, so the headline above is the record of a strategy nobody runs: it bets
+    # a hundred and twenty games a season that the board declines. Both are carried
+    # because either one alone is a half-truth -- the wide number understates what
+    # the model does, and the narrow one, published alone, would look like the
+    # blowouts had been dropped for being losers.
+    import best_bets
+    offered = [p for p in preds
+               if p.get("market_margin") is not None
+               and abs(p["market_margin"]) <= best_bets.BLOWOUT_LINE]
+    if offered:
+        om = metrics.evaluate(offered)
+        if om.get("ats_pct"):
+            out.update({"offered_n": om["ats_n"], "offered_ats_pct": om["ats_pct"],
+                        "offered_roi": om["roi"],
+                        "blowout_line": best_bets.BLOWOUT_LINE})
+    return out
 
 
 def resolve_config(explicit, sport):

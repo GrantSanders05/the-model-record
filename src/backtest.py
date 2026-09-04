@@ -138,6 +138,13 @@ def run(games, config, test_seasons=None, score_only_with_line=True):
                     "market_margin": g["market_margin"],
                     "actual_margin": g["home_score"] - g["away_score"],
                 }
+                # Recorded at PREDICT time, before observe() moves the quality
+                # points, so the fitter sees exactly the rating the pick used.
+                rec["borrowed"] = p["borrowed"]
+                rec["is_home"] = 0.0 if g["neutral_site"] else 1.0
+                halves = model.parts(g)
+                if halves is not None:
+                    rec["grade_diff"], rec["quality_diff"] = halves
                 if "pred_total" in p:
                     rec["pred_total"] = p["pred_total"]
                     rec["market_total"] = g["market_total"]

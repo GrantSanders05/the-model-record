@@ -1032,6 +1032,18 @@ function drawRank(){
      came from. The old note claimed the sheet formula "is exactly what the
      model bets" — true when it was written, false from the day the config moved
      to `computed`, and the kind of false that nobody can see from the page. */
+  /* The quality half carries its own weight now. `scale` and `quality_scale` are
+     fitted separately, because one multiplier over the position grades AND the
+     accrued points was measurably wrong for both — calibrated at 1.09 over weeks
+     1-4 and 0.80 over weeks 11+. So a win is still WORTH +5 and is still SHOWN as
+     +5 in the Win Pts column, but it enters the TOTAL at the fitted weight, and a
+     note that listed the points without saying so would describe arithmetic this
+     page is not doing. */
+  const qs = cfg.quality_scale==null ? 1 : +cfg.quality_scale;
+  const qsNote = Math.abs(qs-1)<1e-9 ? ""
+    : ` Those points enter the TOTAL at ×${num(qs)}, the weight fitted for them `+
+      `separately from the position grades — so ${sgn(qr.wq_top5)} for a top-5 win `+
+      `is ${num(qr.wq_top5*qs)} of rating.`;
   $("#ranknote").textContent = cfg.formula==="computed"
     ? `Showing ${shown.length} of ${total}. TOTAL = 2 × (QB+RB+WR+OL+DL+LB+DB) + Coach/ST `+
       `+ win and loss points, taken from the rating engine itself, so this column and the `+
@@ -1039,7 +1051,7 @@ function drawRank(){
       `spreadsheet: a win is ${sgn(qr.wq_top5)} over a top-5 side, ${sgn(qr.wq_top10)} over a `+
       `top-10, ${sgn(qr.wq_top25)} over a top-25 and ${num(qr.wq_other)} otherwise; a loss is `+
       `${sgn(qr.lq_unranked_fbs)} to an unranked FBS side, ${sgn(qr.lq_fcs)} to an FCS side and `+
-      `${num(qr.lq_ranked)} to a ranked one.`
+      `${num(qr.lq_ranked)} to a ranked one.` + qsNote
     : `Showing ${shown.length} of ${total}. TOTAL = 2 × (QB+RB+WR+OL+DL+LB+DB) + Coach/ST `+
       `+ Win Points − Loss Points, read from the spreadsheet's own hand-entered columns.`;
 }
