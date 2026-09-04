@@ -202,13 +202,31 @@ def render(conn, sport="cfb", backtest_summary=None):
       <div class="stat"><span class="k">Picking winners</span>
         <span class="v">%+.2f</span>
         <span class="sub">points vs backing the favourite</span></div>
-    </div>
+    </div>%s
     <p class="verdict">%s</p>
   </section>""" % (
         b["season"], b["n"], b["ats_pct"],
         ("95%% CI %.1f–%.1f%%" % (b["ci_lo"], b["ci_hi"])
          if b.get("ci_lo") is not None else "one season"),
         b["roi"], b["vs_baseline"],
+        # BOTH RECORDS, BECAUSE EITHER ALONE IS A HALF-TRUTH. The figures above
+        # bet every game with a line, including the ones the board marks `no bet`
+        # and never stakes — a hundred and twenty a season, all of them blowouts
+        # where the film grades are weakest. Publishing only those understates
+        # what the model does; publishing only the narrower set, with no sign of
+        # the wider one, would look like the losers had been quietly dropped. So
+        # the headline stays the wide number and the narrow one sits under it,
+        # with the rule that separates them stated.
+        ("""
+    <p class="note">Those figures bet <em>every</em> game with a line. The board
+       does not: anything outside &plusmn;%.0f points is marked <em>no bet</em> and
+       never staked, because a spread that wide is where the grades are least able
+       to tell two teams apart. On the %d games it would actually have offered,
+       the same replay is <strong>%.2f%%</strong> ATS for <strong>%+.2f%%</strong>
+       ROI. Both are shown because either on its own tells you something the other
+       corrects.</p>""" % (b["blowout_line"], b["offered_n"],
+                           b["offered_ats_pct"], b["offered_roi"])
+         if b.get("offered_ats_pct") is not None else ""),
         (("The whole interval sits above break-even, which is the test that matters."
           if b.get("ci_lo", 0) > 52.38 else
           "The interval still includes break-even. Above it is encouraging; proven "

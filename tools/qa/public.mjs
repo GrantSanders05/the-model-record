@@ -11,6 +11,10 @@ import fs from "node:fs";
 const path = process.env.QA_PAGE ||
   new URL("../../output/site/index.html", import.meta.url).pathname;
 const html = fs.readFileSync(path, "utf8");
+// The committed summary the page renders from, so the gate compares the printed
+// figures against their source rather than against numbers typed in here.
+const VALIDATION = new URL("../../data/validation/cfb_2025.json",
+                           import.meta.url).pathname;
 
 const errors = [];
 const vc = new VirtualConsole();
@@ -118,6 +122,23 @@ console.log("\n── the backtest states its own uncertainty ──");
        t.slice(t.indexOf("ATS %"), t.indexOf("ATS %") + 90));
     ok("...and a verdict that does not overclaim",
        /interval still includes break-even|whole interval sits above/.test(t));
+
+    // The headline bets every game with a line; the board does not. Publishing
+    // only the wide number understates the model, and only the narrow one would
+    // read as dropping the losers. If the summary carries both, the page has to
+    // print both -- and print the wide one FIRST, so the better figure can never
+    // be the headline.
+    const V = JSON.parse(fs.readFileSync(VALIDATION, "utf8"));
+    if (V.offered_ats_pct != null) {
+      ok("both records are published, not just the flattering one",
+         t.includes(V.offered_ats_pct.toFixed(2)) && t.includes(V.ats_pct.toFixed(2)),
+         `looking for ${V.ats_pct.toFixed(2)} and ${V.offered_ats_pct.toFixed(2)}`);
+      ok("...the wide one is the headline, the narrow one sits under it",
+         t.indexOf(V.ats_pct.toFixed(2)) < t.indexOf(V.offered_ats_pct.toFixed(2)));
+      ok("...and the page says which games the narrow one leaves out",
+         /no bet/i.test(t) && t.includes(String(Math.round(V.blowout_line))),
+         `blowout line ${V.blowout_line}`);
+    }
   }
 }
 
