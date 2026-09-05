@@ -186,6 +186,45 @@ def missed_locks(conn, sport, season=None, now=None):
     return len(rows), [dict(r) for r in rows[:5]]
 
 
+def stale_locks(conn, sport, season=None, now=None, slack_days=2):
+    """
+    Picks sitting in the ledger that were locked far outside the window.
+
+    Returns (count, examples). Zero when the pipeline is healthy.
+
+    `missed_locks` above catches a game with NO pick. This catches the opposite and
+    more dangerous shape: a pick that IS there, so nothing looks missing, but that
+    was made weeks before kickoff and can never be replaced -- `lock` writes with
+    INSERT OR IGNORE, so an existing row silently wins over every better pick the
+    model would make later.
+
+    THAT IS NOT HYPOTHETICAL, IT IS WHAT HAPPENED. The 6 August run locked all 888
+    games of the 2026 season in one go. Adding LOCK_WINDOW_DAYS afterwards fixed
+    nothing, because every future game already held an August row: the window was
+    correct, in the code, and INERT. Saturday of week 1 was still being played from
+    an August pick a month later, and the only visible symptom was a bad record.
+
+    A rule that cannot take effect looks exactly like a rule that is working.
+
+    `slack_days` above the window, so a pick locked a day early by a scheduler that
+    ran late is not reported. Anything beyond that had a better pick available and
+    was not allowed to make it.
+    """
+    now = now or _now()
+    horizon_days = LOCK_WINDOW_DAYS + slack_days
+    rows = conn.execute(
+        """SELECT p.game_id, p.season, p.week, p.kickoff, p.published_at,
+                  p.home_team, p.away_team
+             FROM picks_log p
+            WHERE p.sport = ? AND p.graded_at IS NULL AND p.voided_at IS NULL
+              AND p.kickoff IS NOT NULL AND p.kickoff > ?
+              AND (? IS NULL OR p.season = ?)
+              AND julianday(p.kickoff) - julianday(p.published_at) > ?
+         ORDER BY p.kickoff""",
+        (sport, now.isoformat(), season, season, horizon_days)).fetchall()
+    return len(rows), [dict(r) for r in rows[:5]]
+
+
 def grade(conn, sport, now=None):
     """Grade every locked pick whose game is now final. Returns how many were graded."""
     now = now or _now()

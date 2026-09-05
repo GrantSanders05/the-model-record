@@ -301,6 +301,18 @@ def main():
         for e in examples:
             print("    wk %-3s %s  %s @ %s"
                   % (e["week"], (e["kickoff"] or "")[:10], e["away_team"], e["home_team"]))
+    stale, stale_ex = ledger.stale_locks(conn, args.sport, season, now=started)
+    if stale:
+        print("  WARNING: %d pick(s) are locked far outside the %d-day window."
+              % (stale, ledger.LOCK_WINDOW_DAYS))
+        print("  They cannot be replaced — lock() writes INSERT OR IGNORE, so these")
+        print("  win over every better pick the model makes between now and kickoff.")
+        print("  Retire them with:  python3 src/void_picks.py --sport %s --before "
+              "<date> --reason '...' --apply" % args.sport)
+        for e in stale_ex:
+            print("    wk %-3s kicks %s, locked %s  %s @ %s"
+                  % (e["week"], (e["kickoff"] or "")[:10], (e["published_at"] or "")[:10],
+                     e["away_team"], e["home_team"]))
     rec = ledger.record(conn, args.sport)
     if rec.get("ats_pct") is not None:
         lo, hi = rec["ats_ci95"]

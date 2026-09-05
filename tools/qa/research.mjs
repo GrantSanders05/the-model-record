@@ -1163,6 +1163,37 @@ console.log("\n── pipeline health ──");
      (H.ungraded_finals || H.missed_locks) || !txt.includes("not graded yet"));
 }
 
+console.log("\n── stale locks are announced ──");
+{
+  const B = JSON.parse(bundle);
+  ok("the bundle carries the stale-lock count", B.health && "stale_locks" in B.health,
+     JSON.stringify(B.health));
+  ok("a healthy pipeline reports zero of them", B.health.stale_locks === 0,
+     `${B.health.stale_locks} stale`);
+
+  // A count that is only ever zero proves nothing. Load a SECOND copy of the page
+  // against a doctored bundle and require the banner to appear -- this is the
+  // check the August lock bug needed and did not have: for a month the count
+  // would have been 861 and no surface anywhere would have said so.
+  const doctored = JSON.parse(bundle);
+  doctored.health.stale_locks = 7;
+  const probe = new JSDOM(html, {
+    runScripts: "dangerously", virtualConsole: new VirtualConsole(),
+    url: "https://example.test/research/",
+    beforeParse(win) {
+      win.fetch = async () => ({ ok: true, json: async () => doctored });
+      win.matchMedia = () => ({ matches: false, addEventListener(){}, removeEventListener(){} });
+    },
+  });
+  await wait(400);
+  const txt = probe.window.document.body.textContent;
+  ok("...and a non-zero count raises a banner on the page",
+     /7 picks locked far ahead of kickoff/.test(txt),
+     txt.slice(0, 120).replace(/\s+/g, " "));
+  ok("...that says how to clear it", /void_picks/.test(txt));
+  probe.window.close();
+}
+
 console.log("\n── banners ──");
 ok("at least one banner shown", $$("#banner .banner").length > 0,
    String($$("#banner .banner").length));

@@ -162,8 +162,29 @@ def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
             # with its numbers and excluded from every ranking and stake, rather
             # than dropped -- a silently missing game looks like an oversight,
             # and its enormous fake EV is exactly what would top the board.
-            "no_bet": (p["market_margin"] is not None
-                       and abs(p["market_margin"]) > BLOWOUT_LINE),
+            #
+            # TWO WAYS A GAME IS OUT OF REACH, and only one of them was checked.
+            # The second is a game where a team has NO FILM GRADE, so Elo answered
+            # instead -- and Elo gives every non-FBS team the same rating,
+            # `elo_fcs_rating`, forever. On the 5 September slate the market priced
+            # FCS opponents across a 24-point range while the model held them all
+            # equal, so the disagreement averaged 9.0 points against 4.9 on
+            # FBS-vs-FBS and SIX OF THE TOP TEN claimed edges were manufactured by
+            # a constant. Bowling Green -1.5 over Tarleton State came out as a
+            # 20-point edge and topped the board.
+            #
+            # It is not an edge the record supports either: those games went 4-6
+            # in week 1, against 9-5 where both teams were graded, and on 2025 the
+            # borrowed games were a coin flip at every scale tested. The film is
+            # what this model sells; a game the film cannot see is one it has no
+            # opinion on, exactly as ledger.missed_locks already says.
+            "no_bet": ((p["market_margin"] is not None
+                        and abs(p["market_margin"]) > BLOWOUT_LINE)
+                       or bool(p.get("unrated"))),
+            "no_bet_reason": ("unrated" if p.get("unrated")
+                              else ("blowout" if (p["market_margin"] is not None
+                                    and abs(p["market_margin"]) > BLOWOUT_LINE)
+                                    else None)),
         }
 
         ph, pa = devig(implied_prob(home_ml), implied_prob(away_ml))

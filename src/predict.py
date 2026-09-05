@@ -83,6 +83,11 @@ def generate(conn, sport, config, week=None, season=None):
                 "kickoff": g["kickoff"],
                 "away": g["away_team"],
                 "home": g["home_team"],
+                # Whether the FILM GRADES actually answered this game, or Elo
+                # did because a team has no grade. Carried through to the board,
+                # which declines to offer a bet the grade model did not make --
+                # see best_bets.rank.
+                "unrated": bool(p.get("borrowed")),
                 "model_margin": round(p["pred_margin"], 1),
                 "market_margin": mkt,
                 "edge": round(edge, 1) if edge is not None else None,

@@ -897,6 +897,18 @@ function banners(){
     `run skipped, not a random sample. They are gone for good: locking one now would `+
     `be picking a game after it was played. The count stays here so the record is `+
     `read next to it.`);
+  /* The shape no "is anything missing" check can see: a pick that IS there, but
+     was locked weeks early and can never be replaced, because lock() writes with
+     INSERT OR IGNORE. The 6 August run recorded all 888 games of the season at
+     once; adding a 3-day window afterwards fixed nothing, because every future
+     game already held an August row. A rule that cannot take effect looks exactly
+     like a rule that is working. */
+  if(H.stale_locks) add(
+    `${H.stale_locks} pick${H.stale_locks===1?"":"s"} locked far ahead of kickoff`,
+    `Those were recorded weeks early and cannot be replaced — an existing pick wins `+
+    `over every better one the model makes before kickoff, so the film graded between `+
+    `now and then cannot reach the record. Retire them with void_picks.py; they move `+
+    `to picks_voided and the window locks fresh ones.`);
   if(D.excluded_blowouts) add(
     `${D.excluded_blowouts} game${D.excluded_blowouts===1?"":"s"} left off the board`,
     `The line is wider than ${D.blowout_line} points. A grade sheet spans about 30 rating `+

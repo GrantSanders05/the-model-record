@@ -467,11 +467,15 @@ def health(conn, sport, season):
                       .replace("away_score", "g.away_score"),
         (sport,)).fetchone()["c"]
     missed, _ = ledger.missed_locks(conn, sport, season)
+    # The third number that cannot look healthy while the pipeline is broken: a
+    # pick that exists but was locked weeks early, which no "is anything missing"
+    # check can see. See ledger.stale_locks.
+    stale, _ = ledger.stale_locks(conn, sport, season)
     last = conn.execute(
         "SELECT MAX(kickoff) k FROM games WHERE sport=? AND season=? AND " + db.FINAL_SQL,
         (sport, season)).fetchone()["k"]
     return {"ungraded_finals": ungraded, "missed_locks": missed,
-            "last_final_kickoff": last}
+            "stale_locks": stale, "last_final_kickoff": last}
 
 
 def build_my_bets(conn, sport, season, labels):

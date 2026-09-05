@@ -153,12 +153,34 @@ else:
     # Read off the SHIPPED function rather than re-stating its rule here, so that
     # if best_bets ever changes what it declines, this gate stops matching it
     # instead of quietly scoring a set nobody bets.
-    _offered_ids = {p["game_id"] for p in offered}
-    _board = [r for r in best_bets.rank(conn, "cfb", dict(CFG), season=2025)
+    #
+    # AGAINST THE CURRENT SEASON, AND COUNTED FIRST. The first version of this
+    # asked best_bets for the 2025 board -- but predict.generate only prices games
+    # that have NOT been played, so a finished season returns nothing and `all()`
+    # over an empty list is True. It passed for a week while examining zero rows,
+    # which is the exact failure the rest of this file exists to catch.
+    _season = conn.execute(
+        "SELECT MAX(season) s FROM games WHERE sport='cfb' AND home_score IS NULL"
+    ).fetchone()["s"]
+    _board = [r for r in best_bets.rank(conn, "cfb", dict(CFG), season=_season)
               if r["market_margin"] is not None]
-    ok("...and the games it excludes are exactly the ones best_bets declines",
-       all((r["game_id"] in _offered_ids) != r["no_bet"] for r in _board),
-       "%d of %d declined" % (len(priced) - len(offered), len(priced)))
+    ok("there is a live board to check the no-bet rule against",
+       len(_board) > 20, "%d priced games on the %s board" % (len(_board), _season))
+    ok("...and every declined game is declined for a stated reason",
+       all(bool(r["no_bet"]) == (r["no_bet_reason"] is not None) for r in _board),
+       "%d declined" % sum(1 for r in _board if r["no_bet"]))
+    ok("...blowouts outside +/-%.0f are declined" % best_bets.BLOWOUT_LINE,
+       all(r["no_bet"] for r in _board
+           if abs(r["market_margin"]) > best_bets.BLOWOUT_LINE),
+       "%d over the line" % sum(1 for r in _board
+                                if abs(r["market_margin"]) > best_bets.BLOWOUT_LINE))
+    # The film is what this model sells. A game where a team has no grade is
+    # answered by Elo, which holds every non-FBS team at one constant rating, so
+    # the "edge" it reports there is the constant talking. See best_bets.rank.
+    _unrated = [r for r in _board if r["no_bet_reason"] == "unrated"]
+    ok("...and games the film grades could not answer are declined too",
+       all(r["no_bet"] for r in _unrated) and len(_unrated) > 0,
+       "%d of %d unrated" % (len(_unrated), len(_board)))
 
     print("\n── proving these can fail ──")
     before = F
