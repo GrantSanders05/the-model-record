@@ -1194,6 +1194,36 @@ console.log("\n── stale locks are announced ──");
   probe.window.close();
 }
 
+console.log("\n── the board says WHY it left games off ──");
+{
+  const B = JSON.parse(bundle);
+  ok("exclusions are counted by reason", !!B.excluded_by_reason,
+     JSON.stringify(B.excluded_by_reason));
+  const EX = B.excluded_by_reason || {};
+  ok("...and the two reasons add up to the total",
+     (EX.blowout || 0) + (EX.unrated || 0) === B.excluded_blowouts,
+     `${EX.blowout}+${EX.unrated} vs ${B.excluded_blowouts}`);
+  ok("no game left on the board was declined",
+     B.bets.every(b => !b.no_bet), "a no_bet row is on the board");
+  const t = window.document.body.textContent;
+  if (EX.unrated) {
+    ok("the page explains the unrated ones as a missing grade, not a wide line",
+       /no film grade/.test(t), "banner text");
+    // Not "does the word blowout appear" -- both reasons can be on screen at
+    // once. The check that matters is that the unrated COUNT is attached to the
+    // grade sentence and not to the line-width one. Built with RegExp, not a
+    // regex literal: `${...}` inside /.../ is literal text, so the first version
+    // of this line could never match and passed on every input.
+    ok("...and the unrated count is attached to the grade sentence",
+       new RegExp(EX.unrated + " because a team has no film grade").test(t),
+       `looking for "${EX.unrated} because a team has no film grade"`);
+  }
+  if (EX.blowout) {
+    ok("the page explains the blowouts as a wide line",
+       /line is wider than/.test(t), "banner text");
+  }
+}
+
 console.log("\n── banners ──");
 ok("at least one banner shown", $$("#banner .banner").length > 0,
    String($$("#banner .banner").length));

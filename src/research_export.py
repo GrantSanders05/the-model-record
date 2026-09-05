@@ -549,6 +549,13 @@ def main():
     # badge is not enough to stop a number that big from being read as the best
     # bet available.
     n_all = len(bets)
+    # COUNTED BY REASON, because they are two different problems and a reader who
+    # is told "the line is wider than 28" about a game the film never graded has
+    # been told something false. The first is the grade sheet failing to span a
+    # 45-point spread; the second is a team with no grade at all, where Elo
+    # answered and holds every non-FBS side at one constant.
+    excluded = {"blowout": sum(1 for b in bets if b.get("no_bet_reason") == "blowout"),
+                "unrated": sum(1 for b in bets if b.get("no_bet_reason") == "unrated")}
     bets = [b for b in bets if not b.get("no_bet")]
 
     # Until a game is played the quality-points half of the formula is zero, so
@@ -609,6 +616,7 @@ def main():
         "preseason": preseason,
         "alerts": load_alerts(),
         "excluded_blowouts": n_all - len(bets),
+        "excluded_by_reason": excluded,
         "blowout_line": best_bets.BLOWOUT_LINE,
         "record": {k: v for k, v in rec.items() if k not in ("rows", "curve")},
         "curve": rec.get("curve", []),

@@ -909,11 +909,19 @@ function banners(){
     `over every better one the model makes before kickoff, so the film graded between `+
     `now and then cannot reach the record. Retire them with void_picks.py; they move `+
     `to picks_voided and the window locks fresh ones.`);
+  /* Two reasons, named separately. Calling them all blowouts was true when that
+     was the only rule; a game the film never graded is a different problem and
+     saying "the line is wider than 28" about it is simply false. */
+  const EX = D.excluded_by_reason || {};
   if(D.excluded_blowouts) add(
     `${D.excluded_blowouts} game${D.excluded_blowouts===1?"":"s"} left off the board`,
-    `The line is wider than ${D.blowout_line} points. A grade sheet spans about 30 rating `+
-    `points end to end, so it cannot express a 45-point spread — those games carry the `+
-    `biggest EV numbers on the page and every one is an artefact.`);
+    [EX.blowout ? `${EX.blowout} because the line is wider than ${D.blowout_line} points — a `+
+       `grade sheet spans about 25 rating points end to end, so it cannot express a `+
+       `45-point spread.` : "",
+     EX.unrated ? `${EX.unrated} because a team has no film grade, so Elo answered instead — `+
+       `and Elo holds every non-FBS team at one constant rating, however the market `+
+       `prices them.` : ""].filter(Boolean).join(" ") +
+    ` Those games carry the biggest EV numbers on the page and every one is an artefact.`);
 }
 
 /* ── RANKINGS ────────────────────────────────────────────────────── */
