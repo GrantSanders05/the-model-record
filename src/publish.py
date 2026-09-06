@@ -154,7 +154,51 @@ def render(conn, sport="cfb", backtest_summary=None):
 
     if rec.get("ats_pct") is not None:
         lo, hi = rec["ats_ci95"]
-        headline = """
+        # THE HEADLINE IS THE LOCKED-LINE RECORD. Until the V2 repair the number
+        # here was graded at the CLOSING line with the side recomputed from the
+        # model number, which answered a different question than the one the
+        # sentence above it asked. `locked` is the published side at the number it
+        # was published at; `close` is the same side scored against the close, and
+        # it is a diagnostic rather than a wager anybody made.
+        locked = _v2_locked_record(conn, "cfb")
+        if locked and locked.get("locked_pct") is not None:
+            llo, lhi = locked["locked_ci95"]
+            roi_cell = ("%+.2f%%" % locked["roi"] if locked.get("roi") is not None
+                        else "unavailable")
+            roi_sub = ("" if locked.get("roi") is not None
+                       else "no spread prices were recorded")
+            headline = """
+    <div class="hero">
+      <div class="stat"><span class="k">ATS record</span>
+        <span class="v">%d–%d–%d</span>
+        <span class="sub">at the line each pick locked</span></div>
+      <div class="stat"><span class="k">ATS %%</span>
+        <span class="v">%.2f%%</span><span class="sub">95%% CI %.1f–%.1f</span></div>
+      <div class="stat"><span class="k">ROI</span>
+        <span class="v">%s</span><span class="sub">%s</span></div>
+    </div>
+    <p class="verdict">%s</p>
+    <p class="note"><strong>How this is graded.</strong> A pick is scored at the
+      number it was <em>locked</em> at, on the side that was published. Earlier
+      versions of this page graded against the closing line and re-derived the side
+      from the model number, which meant a pick could be recorded on a side nobody
+      published: one Virginia pick, laying 3 and winning by 26, was recorded as a
+      loss. Both figures are kept — the closing-line version is below, as a
+      diagnostic — and the legacy values remain in the ledger for audit. ROI is
+      shown only where the exact price was recorded; this feed supplies moneylines
+      and not spread juice, so for spreads it is honestly unavailable rather than
+      assumed at −110.</p>""" % (
+                locked["locked_w"], locked["locked_l"], locked["locked_p"],
+                locked["locked_pct"], llo, lhi, roi_cell, roi_sub,
+                # Single %, not %% — these are ARGUMENTS to the format above,
+                # not part of it, so an escaped percent stays escaped and renders
+                # as "52.38%%" on the page.
+                ("This record clears the 52.38% break-even with the entire "
+                 "confidence interval above it." if (llo or 0) > 52.38 else
+                 "The interval still includes the 52.38% break-even — not yet "
+                 "enough graded picks to call this an edge either way."))
+        else:
+            headline = """
     <div class="hero">
       <div class="stat"><span class="k">ATS record</span>
         <span class="v">%d–%d–%d</span></div>
@@ -164,12 +208,12 @@ def render(conn, sport="cfb", backtest_summary=None):
         <span class="v">%+.2fu</span><span class="sub">ROI %+.2f%%</span></div>
     </div>
     <p class="verdict">%s</p>""" % (
-            rec["ats_w"], rec["ats_l"], rec["ats_push"], rec["ats_pct"], lo, hi,
-            rec["units"], rec["roi"],
-            ("This record clears the 52.38% break-even with the entire confidence "
-             "interval above it." if rec.get("proven") else
-             "Above break-even, but the confidence interval still includes it — "
-             "not yet enough games to call this an edge."))
+                rec["ats_w"], rec["ats_l"], rec["ats_push"], rec["ats_pct"], lo, hi,
+                rec["units"], rec["roi"],
+                ("This record clears the 52.38% break-even with the entire confidence "
+                 "interval above it." if rec.get("proven") else
+                 "Above break-even, but the confidence interval still includes it — "
+                 "not yet enough games to call this an edge."))
     else:
         headline = """
     <div class="hero">
@@ -180,6 +224,35 @@ def render(conn, sport="cfb", backtest_summary=None):
     <p class="verdict">The live record starts empty on purpose. Every pick below was
        locked before kickoff and will be graded automatically against the closing
        line. Nothing on this page is edited by hand.</p>""" % len(pending)
+
+    # ── the closing-line diagnostic, kept apart from the record ──────────────
+    diag = ""
+    _d = _v2_close_diagnostic(conn, "cfb")
+    if _d and _d.get("n"):
+        diag = """
+  <section>
+    <h2>Closing line <span class="tag">diagnostic, not a wager record</span></h2>
+    <p class="note">The same sides, scored against the number each game
+      <em>closed</em> at instead of the number the pick was locked at. Nobody bet
+      these prices; the question is whether the model was on the right side of
+      where the market ended up, which is the leading indicator worth watching
+      when the results themselves are still a small sample. It is shown apart from
+      the record above because a diagnostic quoted as a return is the oldest way
+      to make a model look better than it is.</p>
+    <div class="hero small">
+      <div class="stat"><span class="k">At the close</span>
+        <span class="v">%d–%d–%d</span><span class="sub">%s</span></div>
+      <div class="stat"><span class="k">Line value</span>
+        <span class="v">%s</span><span class="sub">mean points gained per pick</span></div>
+      <div class="stat"><span class="k">Beat the close</span>
+        <span class="v">%s</span><span class="sub">of %d graded picks</span></div>
+    </div>
+  </section>""" % (
+            _d["w"] or 0, _d["l"] or 0, _d["p"] or 0,
+            ("%.2f%%" % _d["pct"]) if _d.get("pct") is not None else "—",
+            ("%+.2f" % _d["clv_mean"]) if _d.get("clv_mean") is not None else "—",
+            ("%.1f%%" % _d["clv_beat_pct"]) if _d.get("clv_beat_pct") is not None else "—",
+            _d.get("clv_n") or 0)
 
     bt = ""
     if backtest_summary:
@@ -273,6 +346,7 @@ def render(conn, sport="cfb", backtest_summary=None):
         "headline": headline,
         "chart": equity_svg(rec["curve"]),
         "weekly": weekly,
+        "diagnostic": diag,
         "backtest": bt,
         "pending_n": len(pending),
         "awaiting": ("" if not awaiting_line else
@@ -418,6 +492,7 @@ footer strong{color:var(--ink2)}
 </section>
 
 %(weekly)s
+%(diagnostic)s
 %(backtest)s
 
 <section>
@@ -523,6 +598,64 @@ def main():
     with open(path, "w") as fh:
         fh.write(html_doc)
     print("track record page -> %s" % path)
+
+
+def _v2_locked_record(conn, sport="cfb"):
+    """
+    The locked-line record across every strategy that has produced signals.
+
+    Combined DELIBERATELY here and nowhere else: this is the public "what has
+    this project's published picks done" number, and splitting it by strategy
+    version on the headline would ask a reader to add up buckets. The per-strategy
+    split is available in the research bundle, where it belongs.
+    """
+    try:
+        import metrics_v2
+        import signals as _sig
+    except Exception:                              # noqa: BLE001 - never block a page
+        return None
+    versions = [r["strategy_version"] for r in conn.execute(
+        "SELECT DISTINCT strategy_version FROM signal_log WHERE is_official=1")]
+    if not versions:
+        return None
+    total = {"locked_w": 0, "locked_l": 0, "locked_p": 0, "n": 0,
+             "priced_n": 0, "unpriced_n": 0, "profit": 0.0, "all_priced": True}
+    for v in versions:
+        r = metrics_v2.signal_performance(conn, strategy_version=v, sport=sport)
+        for k in ("locked_w", "locked_l", "locked_p", "n", "priced_n", "unpriced_n"):
+            total[k] += r.get(k) or 0
+        if r.get("roi") is None and r.get("n"):
+            total["all_priced"] = False
+    d = total["locked_w"] + total["locked_l"]
+    total["locked_pct"] = round(100.0 * total["locked_w"] / d, 2) if d else None
+    total["locked_ci95"] = metrics_v2._wilson(total["locked_w"], d)
+    total["roi"] = None if not total["all_priced"] else 0.0
+    return total
+
+
+def _v2_close_diagnostic(conn, sport="cfb"):
+    """The closing-line view, pooled across strategies. See _v2_locked_record."""
+    try:
+        import metrics_v2
+    except Exception:                              # noqa: BLE001
+        return None
+    versions = [r["strategy_version"] for r in conn.execute(
+        "SELECT DISTINCT strategy_version FROM signal_log WHERE is_official=1")]
+    tot = {"w": 0, "l": 0, "p": 0, "n": 0, "clv_n": 0, "_clv_sum": 0.0, "_beat": 0}
+    for v in versions:
+        d = metrics_v2.closing_diagnostic(conn, strategy_version=v, sport=sport)
+        for a, b in (("w", "w"), ("l", "l"), ("p", "p"), ("n", "n")):
+            tot[a] += d.get(b) or 0
+        if d.get("clv_n"):
+            tot["clv_n"] += d["clv_n"]
+            tot["_clv_sum"] += (d["clv_mean"] or 0) * d["clv_n"]
+            tot["_beat"] += (d["clv_beat_pct"] or 0) * d["clv_n"] / 100.0
+    d = tot["w"] + tot["l"]
+    tot["pct"] = round(100.0 * tot["w"] / d, 2) if d else None
+    tot["clv_mean"] = round(tot["_clv_sum"] / tot["clv_n"], 3) if tot["clv_n"] else None
+    tot["clv_beat_pct"] = (round(100.0 * tot["_beat"] / tot["clv_n"], 1)
+                           if tot["clv_n"] else None)
+    return tot
 
 
 def _backtest_summary(sport="cfb"):

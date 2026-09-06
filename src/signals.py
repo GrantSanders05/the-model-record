@@ -329,12 +329,23 @@ def official_record(conn, *, strategy_version=None, sport="cfb"):
         p = sum(1 for r in rows if r[col] == "P")
         out["%s_w" % label], out["%s_l" % label], out["%s_p" % label] = w, l, p
         out["%s_pct" % label] = round(100.0 * w / (w + l), 2) if (w + l) else None
-    priced = [r for r in rows if r["profit_units"] is not None]
+    # ROI NEEDS THE PRICE, AND A LOSS DOES NOT REVEAL IT. A losing spread bet
+    # costs exactly one unit whatever the juice was, so `profit_units` is known
+    # for every loss and unknown for every win where no price was recorded.
+    # Averaging over "rows with a known profit" therefore averages over LOSSES
+    # ONLY and produces a confident -100%.
+    #
+    # That is the -110 trap wearing different clothes: an invented number that
+    # looks like a measurement. ROI is reported only when the PRICE was recorded,
+    # which for spreads in this feed is currently never.
+    priced = [r for r in rows if r["price"] is not None]
     out["priced_n"] = len(priced)
-    # ROI only over signals whose price is actually known. A record where no
-    # price was recorded has no ROI, and saying None is the whole point.
-    out["roi"] = (round(100.0 * sum(r["profit_units"] for r in priced) / len(priced), 2)
-                  if priced else None)
+    out["unpriced_n"] = len(rows) - len(priced)
+    if priced and all(r["profit_units"] is not None for r in priced):
+        out["roi"] = round(
+            100.0 * sum(r["profit_units"] for r in priced) / len(priced), 2)
+    else:
+        out["roi"] = None
     clvs = [r["line_clv"] for r in rows if r["line_clv"] is not None]
     out["clv_n"] = len(clvs)
     out["clv_mean"] = round(sum(clvs) / len(clvs), 3) if clvs else None

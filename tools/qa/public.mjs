@@ -142,6 +142,45 @@ console.log("\n── the backtest states its own uncertainty ──");
   }
 }
 
+console.log("\n── the record is the locked line, and the close is a diagnostic ──");
+{
+  // Whitespace-normalised, because the page source wraps prose across lines and
+  // an assertion about a SENTENCE should not fail when the wrapping moves.
+  const t = window.document.body.textContent.replace(/\s+/g, " ");
+  // THE CUTOVER, ASSERTED. Before the V2 repair the headline was graded at the
+  // CLOSING line with the side recomputed from the model number — so a pick could
+  // be recorded on a side nobody published. One Virginia pick, laying 3 and
+  // winning by 26, was a recorded LOSS. If the page ever reverts to that, this
+  // is what says so.
+  ok("the headline says which number the record is graded at",
+     /at the line each pick locked/i.test(t), "headline subtitle");
+  ok("...and explains the change in definition",
+     /How this is graded/i.test(t) && /side that was published/i.test(t));
+  ok("...naming the failure it replaces",
+     /recorded on a side nobody published|recorded as a loss/i.test(t));
+
+  const hasDiag = /Closing line/i.test(t);
+  ok("the closing-line view is present", hasDiag);
+  if (hasDiag) {
+    ok("...labelled a diagnostic, not a record",
+       /diagnostic, not a wager record/i.test(t));
+    ok("...and says plainly that nobody bet those prices",
+       /Nobody bet these prices/i.test(t));
+    // The two must not be the same number presented twice.
+    const locked = t.match(/ATS record\s*(\d+)[–-](\d+)[–-](\d+)/);
+    const close = t.match(/At the close\s*(\d+)[–-](\d+)[–-](\d+)/);
+    ok("...and the two records are reported separately",
+       !!locked && !!close, `${locked && locked[0]} / ${close && close[0]}`);
+  }
+
+  // No invented ROI. The feed carries moneylines and not spread juice, so a
+  // spread ROI is unavailable rather than assumed.
+  if (/ROI/i.test(t)) {
+    ok("an unavailable ROI says so rather than showing -110 arithmetic",
+       !/ROI[^%]{0,40}-110/i.test(t), "a -110 assumption reached the page");
+  }
+}
+
 console.log("\n── pending picks are picks ──");
 {
   // A locked row with no side is not a pick. They used to fill this table with em

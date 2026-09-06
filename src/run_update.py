@@ -42,6 +42,22 @@ import sync_grades
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "output")
 
+# ── the cutover ───────────────────────────────────────────────────────────────
+#
+# True: V2 writes the official signals, and the legacy `ledger.lock` path stops
+# creating picks of its own. False: V2 runs in shadow and the legacy path is the
+# official writer.
+#
+# ONE OF THEM, NEVER BOTH. Two pipelines independently publishing official picks
+# for the same game is the single failure mode a transition must not have — the
+# record would contain two opinions and no way to say which was the one that
+# counted. So this is a switch and not two flags.
+#
+# The legacy ledger is still GRADED and still READ: every settled pick keeps its
+# row, and the historical record it holds was carried into signal_log by
+# migrate_v2 under strategy_version 'S-legacy'. What stops is new picks.
+V2_OFFICIAL = os.environ.get("MODEL_V2_OFFICIAL", "1") not in ("0", "false", "no")
+
 
 def refresh(sport, season):
     """Pull the current season fresh. Cached history is left alone."""
@@ -285,14 +301,24 @@ def main():
 
     label = "%s@%s" % (os.path.basename(cfg_path).replace(".json", ""),
                        started.strftime("%Y-%m-%d"))
-    locked, already_started, deferred = ledger.lock(
-        conn, args.sport, picks, label, now=started)
-    graded = ledger.grade(conn, args.sport, now=started)
-    print("  locked %d new pick(s); skipped %d already under way; graded %d"
-          % (locked, already_started, graded))
-    print("  held back %d pick(s) beyond the %d-day window — they are locked closer"
-          % (deferred, ledger.LOCK_WINDOW_DAYS))
-    print("  to kickoff, from that week's grades and a line near its close.")
+    if V2_OFFICIAL:
+        # AFTER THE CUTOVER the legacy path grades and reports; it does not lock.
+        # Its settled picks stay exactly where they are and are still graded as
+        # games finish, so nothing already recorded moves. New official picks are
+        # V2 signals, taken at T2 with a strategy version attached.
+        locked, already_started, deferred = 0, 0, 0
+        graded = ledger.grade(conn, args.sport, now=started)
+        print("  legacy ledger: no new picks (V2 is the official writer); graded %d"
+              % graded)
+    else:
+        locked, already_started, deferred = ledger.lock(
+            conn, args.sport, picks, label, now=started)
+        graded = ledger.grade(conn, args.sport, now=started)
+        print("  locked %d new pick(s); skipped %d already under way; graded %d"
+              % (locked, already_started, graded))
+        print("  held back %d pick(s) beyond the %d-day window — they are locked closer"
+              % (deferred, ledger.LOCK_WINDOW_DAYS))
+        print("  to kickoff, from that week's grades and a line near its close.")
     missed, examples = ledger.missed_locks(conn, args.sport, season, now=started)
     if missed:
         print("  WARNING: %d priced game(s) kicked off with NO pick locked." % missed)
@@ -321,6 +347,30 @@ def main():
                  rec["units"], rec["roi"], lo, hi))
     else:
         print("  LIVE ledger: no graded picks yet")
+
+    print("\n[5b/9] V2 forecasts and official signals")
+    try:
+        import forecast_v2
+        forecast_v2.run_snapshots(conn, sport=args.sport, config=config,
+                                  official=V2_OFFICIAL,
+                                  run_id=os.environ.get("GITHUB_RUN_ID"))
+        # And grade the V2 signals: at the line each one locked, using the side
+        # it recorded, and separately at the close.
+        import signals as _sig
+        n_sig = _sig.grade_signals(conn, sport=args.sport)
+        if n_sig:
+            print("  graded %d V2 signal(s)" % n_sig)
+        rec_v2 = _sig.official_record(conn)
+        if rec_v2["n"]:
+            print("  V2 official (%s): %d-%d-%d at the locked line, %d-%d-%d at the close"
+                  % (rec_v2["strategy_version"], rec_v2["locked_w"], rec_v2["locked_l"],
+                     rec_v2["locked_p"], rec_v2["close_w"], rec_v2["close_l"],
+                     rec_v2["close_p"]))
+    except Exception as e:                         # noqa: BLE001 - never block the run
+        print("  WARNING: the V2 pass failed — %s: %s" % (type(e).__name__, e))
+        import traceback
+        traceback.print_exc()
+
 
     print("\n[6/9] write local artifacts")
     os.makedirs(OUT, exist_ok=True)
@@ -355,20 +405,6 @@ def main():
     # the official writer, and two pipelines both publishing official picks is
     # the one failure mode a transition must not have. Phase 1C flips this, once
     # the shadow forecasts have been compared side by side with the legacy path.
-    print("\n[5b/9] V2 shadow forecasts")
-    try:
-        import forecast_v2
-        forecast_v2.run_snapshots(conn, sport=args.sport, config=config,
-                                  official=False,
-                                  run_id=os.environ.get("GITHUB_RUN_ID"))
-    except Exception as e:                         # noqa: BLE001 - shadow must not block
-        # A shadow layer that can take the production run down is worse than no
-        # shadow layer. Reported loudly, never silently.
-        print("  WARNING: the V2 shadow pass failed — %s: %s"
-              % (type(e).__name__, e))
-        import traceback
-        traceback.print_exc()
-
     print("\n[8/9] build private research bundle")
     try:
         import subprocess as _sp
