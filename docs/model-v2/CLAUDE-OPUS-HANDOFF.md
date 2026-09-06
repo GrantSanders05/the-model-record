@@ -2,6 +2,8 @@
 
 This file is the repository-side handoff for implementing the V2 research plan. The full implementation specification is the separately generated `Model_Record_V2_Master_Implementation_Build_Doc.md` (approximately 12,800 words / 3,700 lines). Give that master document to the coding agent together with this repository.
 
+**Generated master document SHA-256:** `b3c5b033df65fd83bfa342e755744aa84a21db5837898cf561239548131114dc`
+
 ## Read first
 
 Before editing code, read:
