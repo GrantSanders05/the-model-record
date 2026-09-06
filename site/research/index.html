@@ -630,6 +630,14 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
      pipeline that failed on the other sixty.</p>
   <div class="panel scroll"><table id="labdeclined"></table></div>
 
+  <h2>Shadow inputs — availability and weather</h2>
+  <p class="sub">Who is listed as unavailable, recorded as a stream of observations
+     rather than one status that gets overwritten. It adjusts nothing: there is no
+     calibrated probability that a Thursday “questionable” means a Saturday absence,
+     and inventing one would be worse than the gap.</p>
+  <div class="panel" id="labavail"></div>
+  <div class="panel" id="labwx" style="margin-top:10px"></div>
+
   <h2>How this record is defined</h2>
   <div class="panel" id="labmethod"></div>
 </section>
@@ -2472,6 +2480,8 @@ function drawLab(){
       "means the export could not read the V2 tables, and nothing below should be trusted.";
     $("#labdeclined").innerHTML="";
     $("#labstrategy").innerHTML="";
+    $("#labavail").innerHTML="";
+    $("#labwx").innerHTML="";
     $("#labmethod").innerHTML="";
     return;
   }
@@ -2609,6 +2619,56 @@ function drawLab(){
     : `<tbody><tr><td><div class="empty">Nothing has been declined yet — which for a `+
       `strategy that has evaluated nothing is the expected answer, not a clean board.`+
       `</div></td></tr></tbody>`;
+
+  /* §22 in shadow. The panel exists so the layer is visible: a table written
+     every run and read by nothing stops being written and nobody notices. */
+  const A=V.availability;
+  $("#labavail").innerHTML = !A || !A.available
+    ? `<div class="empty">The availability layer is not in this bundle${
+        A&&A.why?` — ${esc(A.why)}`:""}.</div>`
+    : `<div style="padding:14px 15px;font-size:12.5px;line-height:1.62">
+       <p style="margin:0 0 10px"><b>${A.observations} observation${
+         A.observations===1?"":"s"} recorded</b>${
+         A.latest_observed_at?`, most recently ${
+           esc(String(A.latest_observed_at).slice(0,16).replace("T"," "))} UTC`:""}.
+       ${A.observations?esc(Object.keys(A.by_status).sort()
+           .map(k=>`${A.by_status[k]} ${k.toLowerCase()}`).join(" · ")):
+         "College football has no mandatory injury report, so an empty stream in "+
+         "the preseason is the expected answer rather than a broken feed — but it "+
+         "is also what a broken feed looks like, which is why the timestamp is here."}</p>
+       <p style="margin:0 0 10px"><b>It adjusts nothing.</b> ${esc(A.why_not||"")}</p>
+       <p style="margin:0">Only tiers ${esc((A.auto_adjust_eligible_tiers||[]).join(", "))}
+       — ${esc((A.auto_adjust_eligible_tiers||[]).map(t=>(A.source_tiers||{})[String(t)])
+              .filter(Boolean).join(", "))} — would ever be eligible to move a model.
+       ${A.line_movement_n} status change${A.line_movement_n===1?"":"s"} so far
+       ${A.line_movement_n?"had a quote on both sides of it":
+         "has a quote on both sides of it, which is a sample-size statement and not a finding"}.</p>
+       </div>${A.line_movement_n?`<div class="scroll"><table>
+       <thead><tr><th>Team</th><th>Change</th><th class="num">Hours out</th>
+       <th class="num">Modelled</th><th class="num">Market moved</th></tr></thead><tbody>${
+       A.line_movement.map(m=>`<tr><td class="team">${esc(m.team)}</td>
+         <td class="muted">${esc(m.from_status)} → ${esc(m.to_status)}</td>
+         <td class="num">${num(m.hours_to_kickoff,1)}</td>
+         <td class="num">${num(m.modelled_impact,2)}</td>
+         <td class="num ${cls(m.move)}">${sgn(m.move,2)}</td></tr>`).join("")}
+       </tbody></table></div>`:""}`;
+
+  /* §23. The gap is stated on the page, not only in a docstring: a weather
+     panel that showed a temperature and said nothing about wind would read as a
+     weather model to anyone who did not go looking. */
+  const W=V.weather;
+  $("#labwx").innerHTML = !W || !W.available
+    ? `<div class="empty">No weather layer in this bundle${
+        W&&W.why?` — ${esc(W.why)}`:""}.</div>`
+    : `<div style="padding:14px 15px;font-size:12.5px;line-height:1.62">
+       <p style="margin:0 0 10px"><b>${W.snapshots} forecast snapshot${
+         W.snapshots===1?"":"s"}</b> from ${esc(W.source)}${
+         W.latest_observed_at?`, most recently ${
+           esc(String(W.latest_observed_at).slice(0,16).replace("T"," "))} UTC`:""}
+       ${W.indoor_games?` · ${W.indoor_games} indoor game${W.indoor_games===1?"":"s"}`:""}.</p>
+       <p style="margin:0"><b>Wind is missing, and wind is the point.</b>
+       ${esc(W.gap||"")} ${W.with_wind} snapshot${W.with_wind===1?"":"s"} carry a
+       wind reading. Nothing here adjusts a model.</p></div>`;
 
   /* §27.5 — the transition, stated on the page rather than in a commit message. */
   $("#labmethod").innerHTML=`<div style="padding:14px 15px;font-size:12.5px;line-height:1.62">

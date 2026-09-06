@@ -1175,6 +1175,139 @@ _fv2.register_model(_lc_conn, model_version="E098-empty", model_id="form-quality
 ok("CONTROL: a registry row with no coefficients is skipped, not run empty",
    "E098-empty" not in dict(_fv2.load_challengers(_lc_conn)))
 
+# ── §22 availability: observations, never a mutable status ───────────────────
+import availability as _av                                      # noqa: E402
+
+ok("an unrecognised status is UNKNOWN, not quietly filed as OUT",
+   _av.normalize_status("wibble") == _av.UNKNOWN)
+ok("...and so is an absent one", _av.normalize_status(None) == _av.UNKNOWN)
+ok("the wordings a real feed uses all map",
+   [_av.normalize_status(x) for x in ("Out", "questionable", "Suspension",
+                                      "Day-To-Day", "Probable")]
+   == [_av.OUT, _av.QUESTIONABLE, _av.SUSPENDED, _av.QUESTIONABLE, _av.PROBABLE])
+ok("only tiers 1-3 could ever move a model",
+   _av.AUTO_ADJUST_ELIGIBLE == (1, 2, 3))
+ok("...and ESPN is tier 3, a verified feed and not an announcement",
+   _av.SOURCE_TIER[_av.SOURCE_ESPN] == _av.TIER_VERIFIED_FEED)
+
+_aconn = _db.connect(os.path.join(tempfile.mkdtemp(), "avail.db"))
+_r1 = _av.record(_aconn, sport="cfb", season=2026, team="Oregon", player="A Back",
+                 player_key="a back", position="RB", status_raw="Questionable",
+                 impact_points=1.2, observed_at="2026-09-03T12:00:00+00:00")
+_r2 = _av.record(_aconn, sport="cfb", season=2026, team="Oregon", player="A Back",
+                 player_key="a back", position="RB", status_raw="Questionable",
+                 impact_points=1.2, observed_at="2026-09-04T12:00:00+00:00")
+_r3 = _av.record(_aconn, sport="cfb", season=2026, team="Oregon", player="A Back",
+                 player_key="a back", position="RB", status_raw="Out",
+                 impact_points=1.2, observed_at="2026-09-05T12:00:00+00:00")
+ok("a new status appends", _r1 == "appended" and _r3 == "appended")
+ok("...and restating the same one does not", _r2 == "unchanged",
+   "an unchanged status observed hourly would bury the transitions")
+
+# §22.2 is the whole design: the Thursday row must still be there on Saturday.
+_hist = _av.transitions(_aconn, "cfb", 2026)["a back"]
+ok("the earlier status is still readable after it changed",
+   [r["status"] for r in _hist] == [_av.QUESTIONABLE, _av.OUT],
+   [r["status"] for r in _hist])
+ok("CONTROL: nothing was updated in place — both rows survive", len(_hist) == 2)
+
+# Exactly-as-of: asking on Friday cannot see Saturday's downgrade.
+_fri = _av.team_status_asof(_aconn, "cfb", 2026, "Oregon",
+                            "2026-09-04T18:00:00+00:00")
+ok("an as-of view cannot see an observation made later",
+   len(_fri) == 1 and _fri[0]["status"] == _av.QUESTIONABLE, _fri[0]["status"])
+_sat = _av.team_status_asof(_aconn, "cfb", 2026, "Oregon",
+                            "2026-09-06T00:00:00+00:00")
+ok("...and does see it once it has been made", _sat[0]["status"] == _av.OUT)
+
+_sum = _av.team_summary(_aconn, "cfb", 2026, "Oregon", "2026-09-06T00:00:00+00:00")
+ok("the summary prices only the players actually listed out",
+   _sum["out_impact_points"] == 1.2, _sum["out_impact_points"])
+ok("...and says on its face that it adjusts nothing", _sum["adjusts_model"] is False)
+ok("...and carries how stale it is, in minutes",
+   _sum["staleness_minutes"] == 720.0, _sum["staleness_minutes"])
+# "Nobody is listed out" and "nobody looked" are different states, and this is
+# the module that exists because of that distinction.
+ok("a team nobody has observed returns None, not a zeroed summary",
+   _av.team_summary(_aconn, "cfb", 2026, "Washington",
+                    "2026-09-06T00:00:00+00:00") is None)
+
+# §22.3, the sentence it ends on: do not turn Questionable into Out.
+ok("no probability of absence is published, because none is calibrated",
+   not any(k in _sum for k in ("p_absent", "probability", "expected_impact")),
+   sorted(_sum))
+ok("the strategy does not consume availability — that would be a version change",
+   "availability" not in json.dumps(sig.STRATEGY_V0))
+
+# ── §23 weather: what is real, and the gap said out loud ─────────────────────
+import weather as _wx                                           # noqa: E402
+
+_EV = {"id": "9", "date": "2026-09-06T20:00Z",
+       "weather": {"displayValue": "Partly sunny", "temperature": 71,
+                   "conditionId": "3"},
+       "competitions": [{"venue": {"fullName": "Husky Stadium", "indoor": False},
+                         "competitors": [
+                             {"team": {"location": "Washington",
+                                       "displayName": "Washington Huskies"}},
+                             {"team": {"location": "Washington State",
+                                       "displayName": "Washington State Cougars"}}]}]}
+_p = _wx.parse_event(_EV)
+ok("a forecast is parsed into what this schema stores", _p["temperature_f"] == 71.0)
+# The source has no wind. A zero would read as a still day, which is a claim.
+ok("wind is NULL, not zero — a still day and an unmeasured day differ",
+   _p["wind_mph"] is None and _p["gust_mph"] is None)
+ok("the dome flag is captured, because it is the one weather fact that is certain",
+   _p["indoor"] == 0)
+# ESPN's displayName carries the mascot and this database does not. Every row
+# went unmatched while the fetch reported success.
+ok("teams come from `location`, not the mascot-bearing display name",
+   _p["teams"] == ["Washington", "Washington State"], _p["teams"])
+ok("CONTROL: the display names would not have matched anything",
+   sorted(c["team"]["displayName"] for c in _EV["competitions"][0]["competitors"])
+   != _p["teams"])
+ok("an event with neither weather nor a venue yields nothing",
+   _wx.parse_event({"competitions": [{}]}) is None)
+
+_wconn = _db.connect(os.path.join(tempfile.mkdtemp(), "wx.db"))
+_wconn.execute(
+    "INSERT INTO games (game_id, sport, season, week, home_team, away_team,"
+    " kickoff, neutral_site) VALUES ('w1','cfb',2026,2,'Washington',"
+    "'Washington State','2026-09-06T20:00:00+00:00',0)")
+_wconn.commit()
+ok("an ESPN event matches this database's game", _wx.match_game(_wconn, "cfb", _p) == "w1")
+ok("CONTROL: a game that is not there matches nothing, rather than the closest one",
+   _wx.match_game(_wconn, "cfb", dict(_p, teams=["Oregon", "Boise State"])) is None)
+
+_wx.store(_wconn, sport="cfb", game_id="w1", row=_p, horizon="T24",
+          observed_at="2026-09-05T20:00:00+00:00")
+_wx.store(_wconn, sport="cfb", game_id="w1",
+          row=dict(_p, temperature_f=58.0, condition="Rain"), horizon="T2",
+          observed_at="2026-09-06T18:00:00+00:00")
+ok("both readings are kept — the T24 forecast is not overwritten by the T2 one",
+   _wconn.execute("SELECT COUNT(*) c FROM weather_snapshots").fetchone()["c"] == 2)
+ok("an as-of read cannot see a forecast published later",
+   _wx.summary_asof(_wconn, "w1", "2026-09-06T00:00:00+00:00")["temperature_f"] == 71.0)
+ok("...and does see it once it has been", 
+   _wx.summary_asof(_wconn, "w1", "2026-09-06T19:00:00+00:00")["condition"] == "Rain")
+ok("nothing recorded reads as None, never as fair and still",
+   _wx.summary_asof(_wconn, "w2", "2026-09-06T19:00:00+00:00") is None)
+ok("the summary says on its face that it adjusts nothing",
+   _wx.summary_asof(_wconn, "w1", "2026-09-06T19:00:00+00:00")["adjusts_model"] is False)
+
+ok("the horizon label is the nearest standardized one",
+   _wx.nearest_horizon("2026-09-06T20:00:00+00:00", "2026-09-05T21:00:00+00:00") == "T24")
+ok("...and a reading after kickoff is not labelled a pregame horizon",
+   _wx.nearest_horizon("2026-09-06T20:00:00+00:00", "2026-09-06T21:00:00+00:00") is None)
+
+# §23: a weather source failing must degrade only models that need weather.
+_dead = _wx.refresh(_wconn, sport="cfb", days=1, fetch=lambda url: None, verbose=False)
+ok("a dead weather source is counted as a failure and raises nothing",
+   _dead["failed"] == 1 and _dead["stored"] == 0)
+def _boom(url):
+    raise RuntimeError("network on fire")
+ok("...and one that throws does not reach the caller either",
+   _wx.refresh(_wconn, sport="cfb", days=1, fetch=_boom, verbose=False)["failed"] == 1)
+
 # The point of the whole file: the Champion's rule is untouched.
 import engine as _eng                                           # noqa: E402
 ok("the Champion still awards its threshold quality points",

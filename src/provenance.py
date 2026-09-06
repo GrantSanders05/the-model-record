@@ -37,6 +37,8 @@ PREFIXES = {
     "signal": "sg",
     "event": "evt",
     "artifact": "art",
+    "availability_event": "av",
+    "weather_snapshot": "wx",
 }
 
 # How much of a record's provenance genuinely exists.

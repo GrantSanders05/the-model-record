@@ -180,6 +180,23 @@ jobs:
         continue-on-error: true
         run: python3 src/roster_watch.py --season 2026 --min-points 0.75
 
+      # §22.2. roster_watch OVERWRITES its report on every run and keeps no
+      # history, so "questionable on Thursday, out on Saturday" leaves no trace
+      # of the Thursday. This appends each report to an immutable observation
+      # stream, which is the only thing that will ever make P(absent | status,
+      # source, timing) estimable. Nothing consumes it yet, deliberately.
+      - name: Record availability observations
+        if: ${{ env.HAS_CFBD == 'true' }}
+        continue-on-error: true
+        run: python3 src/availability.py --sport cfb --season 2026 --sync
+
+      # §23. One ESPN request per date, not per game. Allowed to fail and
+      # deliberately so: a weather source going down must degrade only the models
+      # that need weather, never the board.
+      - name: Snapshot the weather forecast
+        continue-on-error: true
+        run: python3 src/weather.py --sport cfb --days 3
+
       # Alerts get their OWN cache entry, deliberately not folded into the data cache
       # above. actions/cache versions an entry by its path list, so adding one file to
       # that list invalidates every existing entry -- which is exactly what happened:

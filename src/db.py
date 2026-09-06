@@ -479,6 +479,58 @@ CREATE TABLE IF NOT EXISTS v2_void_events (
     payload     TEXT
 );
 
+-- §22.2. Availability is a SEQUENCE OF OBSERVATIONS, never a mutable status
+-- column. "Questionable at T72, probable at T24, out at T2" is three rows, and
+-- rewriting the first two into the third destroys the only training data there
+-- will ever be for what a status at a given distance from kickoff is worth.
+CREATE TABLE IF NOT EXISTS availability_events (
+    event_id      TEXT PRIMARY KEY,
+    sport         TEXT NOT NULL,
+    season        INTEGER NOT NULL,
+    team          TEXT NOT NULL,
+    player        TEXT NOT NULL,
+    player_key    TEXT NOT NULL,
+    position      TEXT,
+    status        TEXT NOT NULL,
+    status_raw    TEXT,
+    detail        TEXT,
+    source        TEXT NOT NULL,
+    source_tier   INTEGER NOT NULL,
+    impact_points REAL,
+    observed_at   TEXT NOT NULL,
+    payload_hash  TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_availability_team
+    ON availability_events(sport, season, team, observed_at);
+CREATE INDEX IF NOT EXISTS idx_availability_player
+    ON availability_events(sport, season, player_key, observed_at);
+
+-- §23. One forecast, read at one instant, from one source. Append-only for the
+-- same reason quotes are: "what is the weather" is a question about a moment,
+-- and a row that gets updated as kickoff approaches destroys the record of what
+-- was knowable at T48 — which is the only thing a pregame model may use.
+CREATE TABLE IF NOT EXISTS weather_snapshots (
+    snapshot_id    TEXT PRIMARY KEY,
+    sport          TEXT NOT NULL,
+    game_id        TEXT NOT NULL,
+    horizon        TEXT,
+    observed_at    TEXT NOT NULL,
+    source         TEXT NOT NULL,
+    venue          TEXT,
+    indoor         INTEGER,
+    temperature_f  REAL,
+    condition      TEXT,
+    condition_id   TEXT,
+    wind_mph       REAL,
+    gust_mph       REAL,
+    payload_json   TEXT NOT NULL,
+    payload_hash   TEXT NOT NULL,
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_weather_game
+    ON weather_snapshots(game_id, observed_at);
+
 -- What the migration did, so the numbers in the report can be re-read later.
 CREATE TABLE IF NOT EXISTS v2_migrations (
     migration    TEXT PRIMARY KEY,

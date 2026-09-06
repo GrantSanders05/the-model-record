@@ -1262,6 +1262,34 @@ console.log("\n── model lab: the decision policy is on the page ──");
   }
 }
 
+console.log("\n── model lab: the shadow inputs say they adjust nothing ──");
+{
+  const V = JSON.parse(bundle).v2;
+  const av = $("#labavail").textContent || "";
+  ok("the availability layer is described", av.length > 40, av.slice(0, 60));
+  // The layer records a status stream and moves no model. A panel that showed
+  // counts without saying so would read as an input the model uses.
+  ok("...and says outright that it adjusts nothing", /adjusts nothing/i.test(av));
+  ok("...and names the tiers that could ever be eligible",
+     (V.availability?.auto_adjust_eligible_tiers || []).every(t => av.includes(String(t))));
+  if (!(V.availability?.observations)) {
+    // An empty stream and a broken feed look identical. The timestamp is the
+    // only thing that separates them, so the panel must not read as "all clear".
+    ok("an empty stream is explained, not presented as a clean bill of health",
+       /expected answer|broken feed/i.test(av), av.slice(0, 80));
+  }
+
+  const wx = $("#labwx").textContent || "";
+  ok("the weather layer is described", wx.length > 40, wx.slice(0, 60));
+  // §23 names wind as the variable that matters and this source has none.
+  // A panel showing a temperature without that sentence would overclaim.
+  ok("...and states the wind gap on the page, not only in a docstring",
+     /wind is missing/i.test(wx), wx.slice(0, 90));
+  ok("...and reports how many snapshots actually carry wind",
+     wx.includes(String(V.weather?.with_wind ?? 0)));
+  ok("...and claims no model adjustment", /adjusts a model|adjusts nothing/i.test(wx));
+}
+
 console.log("\n── model lab: the methodology transition is stated (§27.5) ──");
 {
   const V = JSON.parse(bundle).v2;

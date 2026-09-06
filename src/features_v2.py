@@ -138,6 +138,36 @@ def _scoring(conn, sport, season, as_of, team):
             "shrink_games": ts.shrink_games}
 
 
+def _availability(conn, sport, season, as_of, home_team, away_team):
+    """Both teams' as-of availability summaries, or None if the layer is absent."""
+    try:
+        import availability as _av
+    except Exception:                              # noqa: BLE001
+        return None
+    try:
+        home = _av.team_summary(conn, sport, season, home_team, as_of)
+        away = _av.team_summary(conn, sport, season, away_team, as_of)
+    except Exception as e:                         # noqa: BLE001
+        print("  availability unavailable for %s %s: %s" % (sport, season, e))
+        return None
+    if home is None and away is None:
+        return None
+    return {"home": home, "away": away, "adjusts_model": False}
+
+
+def _weather(conn, game_id, as_of):
+    """The as-of weather summary, or None if nothing was ever recorded."""
+    try:
+        import weather as _wx
+    except Exception:                              # noqa: BLE001
+        return None
+    try:
+        return _wx.summary_asof(conn, game_id, as_of)
+    except Exception as e:                         # noqa: BLE001
+        print("  weather unavailable for %s: %s" % (game_id, e))
+        return None
+
+
 def build_feature_snapshot(conn, *, sport, game_id, as_of, model_version,
                            market_policy_version=market_policy.CONSENSUS_V1,
                            champion_state=None, include_availability=False,
@@ -236,8 +266,20 @@ def build_feature_snapshot(conn, *, sport, game_id, as_of, model_version,
         # feature, for the same reason.
         "home_scoring": _scoring(conn, sport, season, as_of, g["home_team"]),
         "away_scoring": _scoring(conn, sport, season, as_of, g["away_team"]),
-        "availability": None if not include_availability else "not_implemented",
-        "weather": None if not include_weather else "not_implemented",
+        # §22 runs shadow. The summary is built only when a caller asks for it,
+        # and it adjusts nothing — there is no calibrated P(absent | status) yet,
+        # and §22.3 ends by forbidding the shortcut of treating Questionable as
+        # Out. The key existed carrying the string "not_implemented"; it is
+        # implemented now, and the honest value when nothing was observed is
+        # None, because "nobody is listed out" and "nobody looked" are different.
+        "availability": (_availability(conn, sport, season, as_of,
+                                       g["home_team"], g["away_team"])
+                         if include_availability else None),
+        # §23, also shadow. The source wired here publishes no wind — which is
+        # the variable §23 actually names — so the field carries what is real
+        # (a dome flag, a temperature, a condition) and nothing invented. Off by
+        # default; the key existed carrying the string "not_implemented".
+        "weather": (_weather(conn, game_id, as_of) if include_weather else None),
     }
     ph = provenance.payload_hash(payload)
     return {

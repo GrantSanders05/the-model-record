@@ -478,6 +478,81 @@ def health(conn, sport, season):
             "stale_locks": stale, "last_final_kickoff": last}
 
 
+def _availability_block(conn, sport, season):
+    """
+    §22 in shadow: what has been observed, and whether the market moved after.
+
+    Exported so the layer is VISIBLE. A table that is written every run and read
+    by nothing is the mirror image of the reader-with-no-writer defect, and just
+    as quiet — the observations would accumulate for a season and nobody would
+    notice they had stopped.
+    """
+    try:
+        import availability as _av
+    except Exception as e:                         # noqa: BLE001
+        return {"available": False, "why": "%s: %s" % (type(e).__name__, e)}
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) c FROM availability_events WHERE sport=? AND season=?",
+            (sport, season)).fetchone()["c"]
+        by_status = {r["status"]: r["c"] for r in conn.execute(
+            "SELECT status, COUNT(*) c FROM availability_events"
+            " WHERE sport=? AND season=? GROUP BY status", (sport, season))}
+        latest = conn.execute(
+            "SELECT MAX(observed_at) m FROM availability_events"
+            " WHERE sport=? AND season=?", (sport, season)).fetchone()["m"]
+        moves = _av.line_movement_after(conn, sport, season)
+    except Exception as e:                         # noqa: BLE001
+        return {"available": False, "why": "%s: %s" % (type(e).__name__, e)}
+    return {
+        "available": True,
+        "observations": total,
+        "by_status": by_status,
+        "latest_observed_at": latest,
+        "source_tiers": {str(k): v for k, v in _av.TIERS.items()},
+        "auto_adjust_eligible_tiers": list(_av.AUTO_ADJUST_ELIGIBLE),
+        "adjusts_model": False,
+        "why_not": "no calibrated P(absent | status, source, timing) exists yet; "
+                   "§22.3 forbids turning Questionable into Out, and wiring "
+                   "DEGRADED_AVAILABILITY into the decision rule is a strategy "
+                   "version change, not a data-module switch",
+        "line_movement": moves[:60],
+        "line_movement_n": len(moves),
+    }
+
+
+def _weather_block(conn, sport, season):
+    """§23 in shadow: what has been snapshotted, and the gap that remains."""
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) c FROM weather_snapshots w JOIN games g"
+            "   ON g.game_id = w.game_id"
+            " WHERE w.sport=? AND g.season=?", (sport, season)).fetchone()["c"]
+        latest = conn.execute(
+            "SELECT MAX(observed_at) m FROM weather_snapshots WHERE sport=?",
+            (sport,)).fetchone()["m"]
+        wind = conn.execute(
+            "SELECT COUNT(*) c FROM weather_snapshots"
+            " WHERE sport=? AND wind_mph IS NOT NULL", (sport,)).fetchone()["c"]
+        domes = conn.execute(
+            "SELECT COUNT(DISTINCT game_id) c FROM weather_snapshots"
+            " WHERE sport=? AND indoor=1", (sport,)).fetchone()["c"]
+    except Exception as e:                         # noqa: BLE001
+        return {"available": False, "why": "%s: %s" % (type(e).__name__, e)}
+    return {
+        "available": True,
+        "snapshots": n,
+        "latest_observed_at": latest,
+        "with_wind": wind,
+        "indoor_games": domes,
+        "source": "espn_scoreboard",
+        "adjusts_model": False,
+        "gap": "this source publishes no wind, which is the variable §23 names "
+               "as the one most likely to matter. The columns exist and stay "
+               "empty rather than holding a proxy.",
+    }
+
+
 def build_v2_block(conn, sport, season):
     """
     The V2 record: four scoreboards kept apart, and the challenger comparison.
@@ -536,6 +611,8 @@ def build_v2_block(conn, sport, season):
             strategy_version=_sig.STRATEGY_V0["strategy_version"], sport=sport),
         "strategies": strategies,
         "models": models,
+        "availability": _availability_block(conn, sport, season),
+        "weather": _weather_block(conn, sport, season),
         "note": "four scoreboards, deliberately not summed: forecast quality is "
                 "over every forecast, signal performance only over what the "
                 "strategy offered, the close is a diagnostic, and user bets are "
