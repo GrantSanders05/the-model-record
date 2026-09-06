@@ -32,6 +32,11 @@ import market_policy
 import provenance
 
 CHAMPION_FEATURES_V1 = "champion_features_v1"
+# V2 adds team form (E005's one feature) to the payload. Additive only: every key
+# v1 carried is still here and still means the same thing, so a model reading the
+# v1 keys is unaffected. Snapshots already recorded keep their own schema string —
+# a payload is content-addressed and an old one is not retro-fitted.
+CHAMPION_FEATURES_V2 = "champion_features_v2"
 
 
 def _parse(ts):
@@ -73,11 +78,49 @@ def rank_asof(conn, sport, season, team, when):
     return row["rank"] if row else None
 
 
+def _form(conn, sport, season, as_of):
+    """The as-of form state, or None if the challenger module is unavailable."""
+    try:
+        from models_v2 import form_quality
+    except Exception:                              # noqa: BLE001
+        # A challenger's module failing must not stop the Champion's snapshot.
+        # The field goes MISSING rather than zero: zero is a real form value
+        # meaning "exactly as expected", and it is not the same as "not known".
+        return None
+    try:
+        return form_quality.form_asof(conn, sport, season, as_of)
+    except Exception as e:                         # noqa: BLE001
+        print("  form unavailable for %s %s: %s" % (sport, season, e))
+        return None
+
+
+def _form_value(conn, sport, season, as_of, team):
+    tf = _form(conn, sport, season, as_of)
+    return None if tf is None else round(tf.value_for(team), 4)
+
+
+def _form_diff(conn, sport, season, as_of, home_team, away_team):
+    tf = _form(conn, sport, season, as_of)
+    return None if tf is None else round(tf.diff(home_team, away_team), 4)
+
+
+def _form_basis():
+    """What the form is a residual AGAINST — §21.1 requires this to be explicit."""
+    try:
+        from models_v2 import form_quality
+    except Exception:                              # noqa: BLE001
+        return None
+    return {"expected_from": form_quality.MARKET,
+            "market_timing_quality": form_quality.MARKET_TIMING,
+            "settle_hours": form_quality.SETTLE_HOURS,
+            "params": form_quality.TeamForm().state()}
+
+
 def build_feature_snapshot(conn, *, sport, game_id, as_of, model_version,
                            market_policy_version=market_policy.CONSENSUS_V1,
                            champion_state=None, include_availability=False,
                            include_weather=False,
-                           feature_schema=CHAMPION_FEATURES_V1):
+                           feature_schema=CHAMPION_FEATURES_V2):
     """
     Assemble and hash the decision-time facts for one game. -> dict
 
@@ -156,6 +199,16 @@ def build_feature_snapshot(conn, *, sport, game_id, as_of, model_version,
         # instant, supplied by the caller that owns the rater. Carried so the
         # rating can be reproduced without replaying the season.
         "champion_state": champion_state,
+        # E005's feature. Replayed from games that had certainly FINISHED by
+        # `as_of` — kickoff plus a settle margin, not kickoff — because a game
+        # that started two hours ago is still being played and its margin is a
+        # fact from the future. None when the season has produced no priced,
+        # finished game yet, which is the correct answer in week 1.
+        "home_form": _form_value(conn, sport, season, as_of, g["home_team"]),
+        "away_form": _form_value(conn, sport, season, as_of, g["away_team"]),
+        "form_diff": _form_diff(conn, sport, season, as_of,
+                                g["home_team"], g["away_team"]),
+        "form_basis": _form_basis(),
         "availability": None if not include_availability else "not_implemented",
         "weather": None if not include_weather else "not_implemented",
     }

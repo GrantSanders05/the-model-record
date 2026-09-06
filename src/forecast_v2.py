@@ -207,9 +207,7 @@ def load_challengers(conn):
     forecasting accumulates a record of the games it happened to be alive for.
     """
     import json as _json
-    import os as _os
     out = []
-    root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     try:
         import models_v2
     except Exception as e:                         # noqa: BLE001
@@ -217,9 +215,10 @@ def load_challengers(conn):
         return out
     classes = {"residual-grade": models_v2.ResidualGrade,
                "matchup-residual": models_v2.MatchupResidual,
+               "form-quality": models_v2.FormQuality,
                "market-baseline": models_v2.MarketBaseline}
     for r in conn.execute(
-            "SELECT model_version, model_id FROM model_registry"
+            "SELECT model_version, model_id, config_json FROM model_registry"
             # BASELINE TOO. C1 is not a challenger in the promotion sense and it
             # must still forecast every game, or there is nothing to compare a
             # challenger's error against at the same instant.
@@ -233,16 +232,28 @@ def load_challengers(conn):
         if r["model_id"] == "market-baseline":
             out.append((r["model_version"], cls()))
             continue
-        path = _os.path.join(root, "output", "models", r["model_version"] + ".json")
-        if not _os.path.exists(path):
-            print("  challenger %s: artifact missing at %s — skipped"
-                  % (r["model_version"], _os.path.relpath(path, root)))
-            continue
+        # THE REGISTRY IS THE ARTIFACT, not a pointer to one. `config_json` holds
+        # the fitted coefficients that `register_model` hashed to establish this
+        # version's identity, so rehydrating from it is the only way to be certain
+        # the model that forecasts is the model the version NAMES.
+        #
+        # It also fixes a silent production failure: the fitted artifacts were
+        # written to output/, output/ is in .gitignore, and the Actions cache
+        # carries data/ and not output/. Every scheduled run therefore found no
+        # artifact and skipped every challenger — the exact "accumulates a record
+        # of the games it happened to be alive for" failure this function's
+        # docstring warns about, happening on every run since they were fitted.
         try:
-            with open(path) as fh:
-                out.append((r["model_version"], cls(_json.load(fh))))
+            art = _json.loads(r["config_json"] or "{}")
         except ValueError as e:
-            print("  challenger %s: artifact unreadable — %s" % (r["model_version"], e))
+            print("  challenger %s: registry config unreadable — %s"
+                  % (r["model_version"], e))
+            continue
+        if not art.get("coefficients"):
+            print("  challenger %s: registry row carries no fitted coefficients "
+                  "— skipped" % r["model_version"])
+            continue
+        out.append((r["model_version"], cls(art)))
     return out
 
 

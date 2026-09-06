@@ -938,7 +938,8 @@ ok("...and says nothing when there is no market",
    MarketBaseline().predict({})["pred_home_margin"] is None)
 
 # Every model answers the same shape, and an unsupported field is None.
-for _m in (MarketBaseline(), _rg.ResidualGrade(), _mr.MatchupResidual()):
+from models_v2 import FormQuality as _FQ0                       # noqa: E402
+for _m in (MarketBaseline(), _rg.ResidualGrade(), _mr.MatchupResidual(), _FQ0()):
     _out = _m.predict({})
     ok("%s returns the normalized keys" % _m.model_id,
        set(_out) >= {"pred_home_margin", "pred_total", "home_win_prob",
@@ -1000,6 +1001,113 @@ except ValueError as e:
     _undeclared = str(e)
 ok("the information set must be declared", _undeclared is not None)
 ok("...and both readings exist deliberately", {MARKET, MODEL} == {"market", "model"})
+
+# ── E005 is now a fitted challenger, and its feature is exactly-as-of ────────
+#
+# The form feature is replayed from finished games rather than stored, and the
+# thing that makes it safe is the SETTLE rule: kickoff alone is not enough,
+# because a game that started two hours ago is still being played and its final
+# margin is a fact from the future. §32 calls this out by name.
+from models_v2 import form_quality as _fq                       # noqa: E402
+from models_v2 import FormQuality as _FQ                        # noqa: E402
+import features_v2 as _feat                                     # noqa: E402
+
+ok("a game still being played has not settled",
+   _fq.settled_before("2026-09-05T23:00:00+00:00", "2026-09-06T01:00:00+00:00") is False)
+ok("...and one that finished hours ago has",
+   _fq.settled_before("2026-09-05T23:00:00+00:00", "2026-09-06T06:00:00+00:00") is True)
+ok("CONTROL: kickoff alone would have let the unfinished game in",
+   "2026-09-05T23:00:00+00:00" < "2026-09-06T01:00:00+00:00")
+ok("an unparseable time settles nothing rather than defaulting to true",
+   _fq.settled_before("not a time", "2026-09-06T06:00:00+00:00") is False)
+ok("...and so does a missing one", _fq.settled_before(None, "2026-09-06T06:00:00+00:00") is False)
+
+# The as-of replay, on a database of its own so the assertion is about the rule
+# and not about whatever the live season happens to contain.
+_fdb = os.path.join(tempfile.mkdtemp(), "form.db")
+_fconn = _db.connect(_fdb)
+_fconn.executemany(
+    "INSERT INTO games (game_id, sport, season, week, home_team, away_team,"
+    " kickoff, home_score, away_score, neutral_site) VALUES (?,?,?,?,?,?,?,?,?,0)",
+    [("f1", "cfb", 2026, 1, "A", "B", "2026-09-01T16:00:00+00:00", 40, 10),
+     ("f2", "cfb", 2026, 2, "A", "C", "2026-09-08T16:00:00+00:00", 20, 10),
+     ("f3", "cfb", 2026, 2, "D", "E", "2026-09-08T16:00:00+00:00", 30, 0)])
+_fconn.executemany("INSERT INTO lines (game_id, provider, home_margin) VALUES (?,?,?)",
+                   [("f1", "consensus", 7.0), ("f2", "consensus", 3.0)])
+_fconn.commit()
+
+_fq.clear_cache()
+_early = _fq.form_asof(_fconn, "cfb", 2026, "2026-09-01T18:00:00+00:00")
+ok("a game two hours old has not entered anyone's form", _early.value_for("A") == 0.0)
+_fq.clear_cache()
+_after = _fq.form_asof(_fconn, "cfb", 2026, "2026-09-02T00:00:00+00:00")
+ok("...and once it has settled, it has",
+   _after.value_for("A") > 0 > _after.value_for("B"), _after.value_for("A"))
+_fq.clear_cache()
+_later = _fq.form_asof(_fconn, "cfb", 2026, "2026-09-09T06:00:00+00:00")
+ok("a game with NO line contributes nothing rather than its raw margin",
+   _later.value_for("D") == 0.0 and _later.value_for("E") == 0.0,
+   "%s / %s" % (_later.value_for("D"), _later.value_for("E")))
+# Zero form and no form are different states and the value alone cannot tell
+# them apart -- a team that performed exactly to the line also reads 0.0. The
+# game COUNT is what separates "observed, and unremarkable" from "never seen".
+ok("...and the unpriced game left both teams unobserved, not merely unmoved",
+   "D" not in _later.games and "E" not in _later.games)
+ok("...while the priced games did move both teams",
+   _later.value_for("C") < 0 < _later.value_for("A"),
+   "A %s / C %s" % (_later.value_for("A"), _later.value_for("C")))
+# The whole point of an as-of function: asking about an earlier instant after
+# later games exist must give the earlier answer.
+_fq.clear_cache()
+ok("CONTROL: asking about the earlier instant still gives the earlier answer",
+   abs(_fq.form_asof(_fconn, "cfb", 2026, "2026-09-02T00:00:00+00:00").value_for("A")
+       - _after.value_for("A")) < 1e-12)
+
+_e5 = _FQ({"coefficients": {"form_diff": 0.5}, "intercept": 0.0,
+                        "features": ["form_diff"], "means": {"form_diff": 0.0},
+                        "sds": {"form_diff": 1.0}})
+ok("E005 predicts from the market plus its one term",
+   _e5.predict({"consensus_spread": -7.0, "form_diff": 4.0})["pred_home_margin"] == -5.0)
+ok("no market number, no prediction — never a bare form number",
+   _e5.predict({"consensus_spread": None, "form_diff": 4.0})["pred_home_margin"] is None)
+# A payload recorded under the v1 schema has no form field at all. Reading that
+# as zero would silently turn "not known" into "exactly as expected".
+ok("a v1 payload has no form, and E005 declines rather than assuming zero",
+   _e5.predict({"consensus_spread": -7.0})["pred_home_margin"] is None)
+ok("...and an unfitted E005 predicts nothing at all",
+   _FQ().predict({"consensus_spread": -7.0, "form_diff": 4.0})
+   ["pred_home_margin"] is None)
+
+# The feature schema bump is ADDITIVE. A v1 reader must still find every key it
+# knew, or the bump silently retires models that read them.
+ok("champion_features_v2 is additive over v1",
+   _feat.CHAMPION_FEATURES_V2 != _feat.CHAMPION_FEATURES_V1)
+
+# ── the registry IS the artifact ─────────────────────────────────────────────
+#
+# The fitted coefficients were written to output/, output/ is in .gitignore, and
+# the Actions cache carries data/ and not output/. Every scheduled run therefore
+# found no artifact file and skipped every challenger, which is precisely the
+# "accumulates a record of the games it happened to be alive for" failure
+# load_challengers exists to prevent — happening on every run since they were
+# fitted, announced only in a log line nobody reads.
+_lc_conn = _db.connect(os.path.join(tempfile.mkdtemp(), "challengers.db"))
+_fv2.register_model(_lc_conn, model_version="E005-test", model_id="form-quality",
+                    role="challenger", config={"coefficients": {"form_diff": 0.5},
+                                               "intercept": 0.0,
+                                               "features": ["form_diff"],
+                                               "means": {"form_diff": 0.0},
+                                               "sds": {"form_diff": 1.0}})
+_loaded = dict(_fv2.load_challengers(_lc_conn))
+ok("a challenger rehydrates from the registry with no artifact file on disk",
+   "E005-test" in _loaded)
+ok("...and the rehydrated model actually predicts",
+   _loaded["E005-test"].predict({"consensus_spread": -7.0, "form_diff": 4.0})
+   ["pred_home_margin"] == -5.0)
+_fv2.register_model(_lc_conn, model_version="E098-empty", model_id="form-quality",
+                    role="challenger", config={"note": "registered but never fitted"})
+ok("CONTROL: a registry row with no coefficients is skipped, not run empty",
+   "E098-empty" not in dict(_fv2.load_challengers(_lc_conn)))
 
 # The point of the whole file: the Champion's rule is untouched.
 import engine as _eng                                           # noqa: E402

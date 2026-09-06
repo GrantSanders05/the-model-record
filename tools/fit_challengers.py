@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 import db                                    # noqa: E402
 import grade_snapshots                       # noqa: E402
 import provenance                            # noqa: E402
-from models_v2 import residual_grade, matchup_residual   # noqa: E402
+from models_v2 import residual_grade, matchup_residual, form_quality  # noqa: E402
 from models_v2.ridge import predict_ridge    # noqa: E402
 
 TIMING_UNKNOWN = "unknown_historical_current"
@@ -55,8 +55,24 @@ def development_rows(conn, sport, season):
         "   AND g.away_score IS NOT NULL AND l.home_margin IS NOT NULL"
         " ORDER BY g.kickoff", (sport, season)).fetchall()
 
+    # E005's form, walked forward exactly as production does it: a game enters a
+    # team's form only once it had CERTAINLY finished — kickoff plus the settle
+    # margin — so a noon game informs the evening slate and a game kicking off an
+    # hour earlier does not. Computed here in one pass rather than by replaying
+    # the season per row, which is the same arithmetic at 1/800th the cost.
+    tf = form_quality.TeamForm(expected_from=form_quality.MARKET)
+    tf.new_season(season)
+    pending = []                      # (kickoff, home, away, actual, expected)
+
     rows = []
     for g in games:
+        while pending and form_quality.settled_before(pending[0][0], g["kickoff"]):
+            _k, h, a, act, exp = pending.pop(0)
+            tf.observe(home_team=h, away_team=a, actual_home_margin=act,
+                       expected_home_margin=exp)
+        form_diff = tf.diff(g["home_team"], g["away_team"])
+        pending.append((g["kickoff"], g["home_team"], g["away_team"],
+                        g["home_score"] - g["away_score"], g["home_margin"]))
         payload = {
             "home_grade_vector": grade_snapshots.vector_of(
                 grade_snapshots.grade_asof(conn, sport, season, g["home_team"],
@@ -78,6 +94,7 @@ def development_rows(conn, sport, season):
             "game_id": g["game_id"], "week": g["week"], "kickoff": g["kickoff"],
             "actual_margin": actual,
             "residual": actual - g["home_margin"],
+            "form_diff": form_diff,
             "market_timing_quality": TIMING_UNKNOWN,
         })
         rows.append(row)
@@ -143,7 +160,9 @@ def main():
     for name, mod, cls in (("E003 residual grade", residual_grade,
                             residual_grade.ResidualGrade),
                            ("E004 matchup residual", matchup_residual,
-                            matchup_residual.MatchupResidual)):
+                            matchup_residual.MatchupResidual),
+                           ("E005 form quality", form_quality,
+                            form_quality.FormQuality)):
         print("\n── %s ──" % name)
         model = cls().fit(train, valid=valid)
         art = model.artifact()

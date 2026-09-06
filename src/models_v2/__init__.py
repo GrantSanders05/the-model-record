@@ -16,3 +16,4 @@ from .market_baseline import MarketBaseline     # noqa: F401
 from .ridge import Ridge, fit_ridge             # noqa: F401
 from .residual_grade import ResidualGrade       # noqa: F401
 from .matchup_residual import MatchupResidual   # noqa: F401
+from .form_quality import FormQuality, TeamForm  # noqa: F401
