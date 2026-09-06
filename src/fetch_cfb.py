@@ -93,7 +93,20 @@ def _spend(n=1, purpose=None, endpoint=None):
 
 
 def budget_status():
-    return _read_budget().get(_month_key(), 0), MONTHLY_CAP
+    """
+    (calls used this month, cap). -> (int, int)
+
+    DELEGATED, because there were two formats for one number. The original
+    ledger stored a bare integer per month; `api_budget.spend` stores a dict —
+    `{used, by_purpose, by_endpoint, last_updated}` — and this function still
+    read the entry as an int. `"%d" % {...}` is a TypeError, so the fetcher
+    crashed on the FIRST RUN AFTER A SPEND rewrote the month's entry, not on the
+    change that introduced it. A file holding both shapes at once (an int for
+    August, a dict for September) is exactly what production had.
+
+    `api_budget._entry` already normalises both. One reader, one authority.
+    """
+    return api_budget.status(path=BUDGET_FILE)["used"], MONTHLY_CAP
 
 
 # ── HTTP with cache ────────────────────────────────────────────────────────────

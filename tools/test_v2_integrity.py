@@ -1227,6 +1227,35 @@ ok("...and it is skipped once recorded, so it costs one lookup a run",
 ok("...and a failure to migrate is reported, never swallowed",
    "ERROR: the V2 migration did not apply" in _ru)
 
+# ── one number, one format ───────────────────────────────────────────────────
+#
+# The budget ledger stored a bare integer per month. `api_budget.spend` stores a
+# dict, and `fetch_cfb.budget_status` still read the entry as an int, so
+# `"%d" % {...}` raised. It did not fail on the change that introduced it: it
+# failed on the FIRST RUN AFTER A SPEND rewrote the month's entry, which is a
+# different run, a different job, and a stack trace that names neither.
+import datetime as _dt                                          # noqa: E402
+import json as _json                                            # noqa: E402
+import api_budget as _ab                                        # noqa: E402
+import fetch_cfb as _fc                                         # noqa: E402
+
+_bdir = tempfile.mkdtemp()
+_bpath = os.path.join(_bdir, "budget.json")
+_mk = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m")
+# BOTH SHAPES IN ONE FILE, which is what production actually had.
+with open(_bpath, "w") as _fh:
+    _json.dump({"2020-01": 101, _mk: {"used": 30, "by_purpose": {"critical": 3}}}, _fh)
+ok("the new dict shape reads as a number", _ab.status(path=_bpath)["used"] == 30)
+with open(_bpath, "w") as _fh:
+    _json.dump({_mk: 42}, _fh)
+ok("...and so does the original flat integer", _ab.status(path=_bpath)["used"] == 42)
+ok("the fetcher asks api_budget rather than parsing the file itself",
+   "api_budget.status(path=BUDGET_FILE)" in
+   open(os.path.join(ROOT, "src", "fetch_cfb.py")).read())
+# CONTROL: the shape that used to crash must now format.
+ok("CONTROL: a dict-shaped month formats with %d instead of raising",
+   ("%d" % _ab._entry({_mk: {"used": 7}}, _mk)["used"]) == "7")
+
 # ── the shadow challengers exist where the model actually runs ───────────────
 #
 # They were fitted and registered on a laptop, and the registry lives in the
