@@ -1010,6 +1010,69 @@ ok("...and the challenger is a separate module that changes none of it",
    "form_quality" not in open(os.path.join(ROOT, "src", "engine.py")).read())
 
 
+print("\n── the acceptance properties, on the live database ──")
+#
+# The §37 checklist, as assertions rather than a document. Two of these were
+# written wrong the first time and passed a wrong version of the question, which
+# is exactly why they are here rather than in a markdown table:
+#
+#   "a forecast exists independently of a signal" was first written as
+#   forecasts > signals, and failed — because ONE pick yields both a spread and
+#   a total signal, so signals legitimately exceed forecasts. The property is
+#   that a DECLINED forecast still has a row and produces nothing.
+#
+#   "no ROI without a price" was first written as "no profit_units without a
+#   price", and failed — because a losing spread bet costs one unit at ANY
+#   price, so its return is genuinely known. The property is that no unpriced
+#   WIN claims a profit, and that ROI is not averaged over a set of losses.
+
+_live_path = os.path.join(ROOT_DIR, "data", "model.db")
+if os.path.exists(_live_path):
+    import metrics_v2 as _m2                                    # noqa: E402
+    _lc = _db.connect(_live_path)
+
+    def _q(sql):
+        return _lc.execute(sql).fetchone()[0]
+
+    ok("no spread price was ever invented",
+       _q("SELECT COUNT(*) FROM market_quotes WHERE home_spread_price IS NOT NULL") == 0)
+    ok("every quote names a provider and a time",
+       _q("SELECT COUNT(*) FROM market_quotes WHERE provider IS NULL"
+          " OR observed_at IS NULL") == 0)
+    ok("every grade snapshot is timestamped",
+       _q("SELECT COUNT(*) FROM grade_snapshots WHERE effective_at IS NULL") == 0)
+    ok("a declined forecast keeps its row and produces nothing",
+       _q("""SELECT COUNT(*) FROM forecast_log f WHERE NOT EXISTS
+             (SELECT 1 FROM signal_log s WHERE s.forecast_id=f.forecast_id)""") > 0)
+    ok("...and the decline itself is recorded",
+       _q("SELECT COUNT(*) FROM strategy_evaluations WHERE eligible=0") > 0)
+    ok("no unpriced WIN claims a profit",
+       _q("""SELECT COUNT(*) FROM signal_log
+              WHERE locked_result='W' AND price IS NULL
+                AND profit_units IS NOT NULL""") == 0)
+    for _sv in ("S-legacy", sig.STRATEGY_V0["strategy_version"]):
+        _r = _m2.signal_performance(_lc, strategy_version=_sv)
+        ok("%s reports no ROI while no price is recorded" % _sv,
+           _r["roi"] is None or _r["priced_n"] > 0,
+           "priced %s, roi %s" % (_r["priced_n"], _r["roi"]))
+    ok("no challenger has ever signed an official signal",
+       _q("""SELECT COUNT(*) FROM signal_log s
+               JOIN forecast_log f USING(forecast_id)
+               JOIN model_registry m ON m.model_version=f.model_version
+              WHERE m.role IN ('challenger','baseline') AND s.is_official=1""") == 0)
+    ok("the champion carries a git sha, a config hash and a feature schema",
+       _q("""SELECT COUNT(*) FROM model_registry WHERE role='champion'
+              AND git_sha IS NOT NULL AND config_hash IS NOT NULL
+              AND feature_schema_version IS NOT NULL""") > 0)
+    ok("the legacy result column still holds its legacy values",
+       _q("SELECT COUNT(*) FROM picks_log WHERE ats_result IS NOT NULL") > 0)
+    ok("...beside the locked-line one",
+       _q("SELECT COUNT(*) FROM picks_log WHERE ats_result_at_pick IS NOT NULL") > 0)
+    ok("the schema enforces one official signal per game, market and strategy",
+       bool(_lc.execute("SELECT name FROM sqlite_master WHERE type='index'"
+                        " AND name='idx_one_official_signal'").fetchone()))
+
+
 print("\n── the moat covers what the tools actually write ──")
 #
 # migrate_v2 writes `data/model.pre-v2-<stamp>.db` before it applies: a
