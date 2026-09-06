@@ -57,6 +57,12 @@ const rows = sel => $$(`${sel} tbody tr`).length;
 // kept one row" when it actually kept none — and passes.
 const listRows = sel =>
   $$(`${sel} tbody tr`).filter(tr => !tr.querySelector(".empty")).length;
+// The rows themselves, not the count. An empty-state row holds ONE cell, so any
+// assertion that indexes a column throws a TypeError on it rather than failing —
+// and a thrown test takes the whole suite down with it, which is how a deploy
+// died on a bundle that simply had nothing to decline.
+const dataRows = sel =>
+  $$(`${sel} tbody tr`).filter(tr => !tr.querySelector(".empty"));
 const fire = (el, type = "input") => el.dispatchEvent(new window.Event(type, { bubbles: true }));
 
 // Resolve columns by their HEADER, never by a hard-coded index. Index-based reads
@@ -1171,7 +1177,7 @@ console.log("\n── model lab: four scoreboards, kept apart ──");
      `${listRows("#labstrats")} rows for ${strats.length} strategies`);
   if (strats.length) {
     const t = strats[0], g = t.signals;
-    const row = [...$$("#labstrats tbody tr")]
+    const row = dataRows("#labstrats")
       .find(tr => tr.textContent.includes(t.strategy_version));
     ok("the strategy row is present and named", !!row, t.strategy_version);
     ok("...and prints the locked record from the bundle, unrounded",
@@ -1206,7 +1212,7 @@ console.log("\n── model lab: challengers, not ranked by win rate ──");
   // happens to be in the right order for one bundle is not an ordering rule.
   {
     const rank = { Champion:0, Baseline:1, Shadow:2, Retired:3 };
-    const seen = $$("#labmodels tbody tr")
+    const seen = dataRows("#labmodels")
       .map(tr => tr.querySelectorAll("td")[2].textContent.trim())
       .map(r => rank[r]);
     ok("ordered by role — Champion, baseline, shadow, retired",
@@ -1219,7 +1225,7 @@ console.log("\n── model lab: challengers, not ranked by win rate ──");
   {
     const zero = models.filter(m => !(m.quality && m.quality.n));
     if (zero.length) {
-      const tr = [...$$("#labmodels tbody tr")]
+      const tr = dataRows("#labmodels")
         .find(x => x.textContent.includes(zero[0].model_version));
       ok("a model with no graded forecast shows 0, not a blank",
          tr.querySelectorAll("td")[3].textContent.trim() === "0",
@@ -1227,7 +1233,7 @@ console.log("\n── model lab: challengers, not ranked by win rate ──");
     }
   }
   ok("every challenger row says it is shadow only",
-     $$("#labmodels tbody tr")
+     dataRows("#labmodels")
        .filter(tr => tr.querySelectorAll("td")[2].textContent.trim() === "Shadow")
        .every(tr => /shadow only/i.test(tr.textContent)));
   ok("the note explains why CLV is not in this table",
@@ -1252,13 +1258,22 @@ console.log("\n── model lab: the decision policy is on the page ──");
   const dr = V.declined_reasons || {};
   ok("every decline reason has a row", listRows("#labdeclined") === Object.keys(dr).length,
      `${listRows("#labdeclined")} rows for ${Object.keys(dr).length} reasons`);
-  ok("...and every one is glossed in English, not left as a code",
-     $$("#labdeclined tbody tr").every(tr =>
-       (tr.querySelectorAll("td")[2].textContent || "").trim().length > 8));
-  for (const k of Object.keys(dr)) {
-    const tr = [...$$("#labdeclined tbody tr")].find(x => x.textContent.includes(k));
-    ok(`decline reason ${k} shows its count`,
-       tr && tr.querySelectorAll("td")[1].textContent.trim() === String(dr[k]));
+  if (Object.keys(dr).length) {
+    ok("...and every one is glossed in English, not left as a code",
+       dataRows("#labdeclined").every(tr =>
+         (tr.querySelectorAll("td")[2].textContent || "").trim().length > 8));
+    for (const k of Object.keys(dr)) {
+      const tr = dataRows("#labdeclined").find(x => x.textContent.includes(k));
+      ok(`decline reason ${k} shows its count`,
+         !!tr && tr.querySelectorAll("td")[1].textContent.trim() === String(dr[k]));
+    }
+  } else {
+    // Nothing declined is legitimate — a strategy that has evaluated nothing
+    // declines nothing. It must not read as a clean board, and it must not be
+    // indexed into: the empty row has one cell and [2] is undefined.
+    ok("an empty decline board explains itself rather than reading as all-clear",
+       /expected answer/i.test($("#labdeclined").textContent),
+       $("#labdeclined").textContent.trim().slice(0, 80));
   }
 }
 
@@ -1285,11 +1300,11 @@ console.log("\n── model lab: a probability scoreboard is not a licence to be
 
 console.log("\n── model lab: the interval is bootstrapped over weeks, and says so ──");
 {
-  const tr = [...$$("#labmodels tbody tr")].find(x =>
+  const tr = dataRows("#labmodels").find(x =>
     x.querySelectorAll("td")[2].textContent.trim() !== "Champion");
-  const title = tr.querySelectorAll("td")[7].getAttribute("title") || "";
+  const title = tr ? (tr.querySelectorAll("td")[7].getAttribute("title") || "") : "";
   ok("the vs-Champion figure carries its interval, not just a point estimate",
-     title.length > 40, title.slice(0, 70));
+     !!tr && title.length > 40, tr ? title.slice(0, 70) : "no non-Champion row");
   // With no prospective games finished the honest answer is "no interval yet"
   // plus the reason -- not a 95% label over three weekends.
   ok("...and where there is no interval yet it says why",
@@ -1297,6 +1312,70 @@ console.log("\n── model lab: the interval is bootstrapped over weeks, and sa
   ok("the note explains the week-blocking rather than assuming it is understood",
      /week/i.test($("#labmodelnote").textContent) &&
      /too narrow/i.test($("#labmodelnote").textContent));
+}
+
+/* CONTROL. The shape production actually had on the first deploy: no challenger
+   ever fitted there, nothing declined, no strategy that has published. Every
+   table falls to its empty state, and every empty state holds ONE cell — so the
+   first version of this suite threw a TypeError indexing column 2 and took the
+   whole run down with it, which reads as a broken page rather than a quiet one. */
+console.log("\n── model lab: CONTROL, a bundle with nothing in it yet ──");
+{
+  const bare = JSON.parse(bundle);
+  bare.v2 = {
+    available: true,
+    champion: "C0-only",
+    official_horizon: "T2",
+    strategy_version: "S0-x",
+    strategy_config: { spread_enabled: true, totals_enabled: false,
+                       moneyline_enabled: false },
+    strategy_hash: "0".repeat(64),
+    declined_reasons: {},
+    scoreboards: { forecast_quality: { n: 0 }, signal_performance: { n: 0 },
+                   closing_diagnostic: { n: 0 }, user_bets: {} },
+    strategies: [],
+    // `quality.probability` is attached before forecast_quality's early return,
+    // so a zero-row margin scoreboard still carries a probability one. The
+    // fixture matches what the export actually emits, not a shape it cannot.
+    models: [{ model_version: "C0-only", model_id: "champion-grade",
+               role: "champion", experiment_id: null,
+               quality: { n: 0, probability: { n: 0, clipped: 0,
+                          enables_moneyline: false,
+                          why: "no prospective calibration sample yet" } } }],
+    availability: { available: true, observations: 0, by_status: {},
+                    auto_adjust_eligible_tiers: [1, 2, 3],
+                    source_tiers: { "1": "official conference availability report" },
+                    why_not: "no calibrated probability exists yet",
+                    line_movement: [], line_movement_n: 0 },
+    weather: { available: true, snapshots: 0, with_wind: 0, indoor_games: 0,
+               source: "espn_scoreboard", gap: "no wind from this source" },
+  };
+  const d6 = new JSDOM(html, {
+    runScripts: "dangerously", virtualConsole: new VirtualConsole(),
+    url: "https://example.test/research/",
+    beforeParse(win) {
+      win.fetch = async () => ({ ok: true, json: async () => bare });
+      win.matchMedia = () => ({ matches:false, addEventListener(){}, removeEventListener(){} });
+    },
+  });
+  await wait(400);
+  const w6 = d6.window, q6 = sel => w6.document.querySelector(sel);
+  ok("CONTROL: the lab renders with nothing to show", !!q6("#labmodels"));
+  ok("CONTROL: no strategy has published, and the table says so",
+     /No strategy has published/i.test(q6("#labstrats").textContent),
+     q6("#labstrats").textContent.trim().slice(0, 60));
+  ok("CONTROL: nothing declined reads as an expected answer, not a clean board",
+     /expected answer/i.test(q6("#labdeclined").textContent),
+     q6("#labdeclined").textContent.trim().slice(0, 60));
+  ok("CONTROL: the Champion still leads the model table",
+     q6("#labmodels tbody tr").textContent.includes("C0-only"));
+  ok("CONTROL: the probability panel explains the calendar rather than blanking",
+     /No graded forecast/i.test(q6("#labprob").textContent),
+     q6("#labprob").textContent.trim().slice(0, 60));
+  ok("CONTROL: the empty scoreboard cards still name their four questions",
+     [...w6.document.querySelectorAll("#labboards .card .k")].length === 4);
+  ok("CONTROL: and the page threw nothing while doing it",
+     !/TypeError|undefined/.test(q6("#labmodels").textContent));
 }
 
 console.log("\n── model lab: the shadow inputs say they adjust nothing ──");
@@ -1396,7 +1475,8 @@ console.log("\n── model lab: a better-than-market model is not painted as a 
   });
   await wait(400);
   const w5 = d5.window;
-  const trs = [...w5.document.querySelectorAll("#labmodels tbody tr")];
+  const trs = [...w5.document.querySelectorAll("#labmodels tbody tr")]
+    .filter(t => !t.querySelector(".empty"));
   const champ = trs.find(t => t.textContent.includes("C0-x"));
   const chall = trs.find(t => t.textContent.includes("E009-x"));
   ok("a model closer than the market is marked good",
