@@ -538,9 +538,19 @@ def main():
     # every game it refers to. The browser grades bets against the exported schedule
     # now, so a bet on a game the rating filter would have dropped has to keep its
     # fixture or it renders as ungraded forever.
-    mybets = build_my_bets(conn, args.sport, season, labels)
+    mybets_full = build_my_bets(conn, args.sport, season, labels)
+    # The game ids are derived BEFORE the rows are dropped: keeping a bet's game
+    # on the schedule is the behaviour, and publishing the bet is not.
+    _bet_games = [b["game_id"] for b in (mybets_full.get("bets") or [])]
+    # STATUS ONLY, ALWAYS. build_my_bets reads the sheet's My Bets tab; it is
+    # empty today, and a bet logged there would otherwise publish with its stake,
+    # its book and its ROI into a bundle that has been served in the clear since
+    # 1 September. The grades in this bundle are public BY DECISION; a person's
+    # wagering is not, and unlike a grade it cannot be un-published.
+    import public_export
+    mybets = public_export.safe_my_bets(mybets_full)
     slate = schedule(conn, args.sport, season, priced, labels, rated=rated,
-                     keep=[b["game_id"] for b in mybets.get("bets", [])])
+                     keep=_bet_games)
     for b in bets:
         b["week"] = labels.get(b["game_id"], b["week"])
 
@@ -637,6 +647,20 @@ def main():
         "results": team_results(conn, args.sport, eff_season),
         "movement": line_movement(conn, args.sport, season),
     }
+
+    # THE LAST GATE, ON THE EXACT OBJECT THAT GETS WRITTEN. Not on the pieces, not
+    # on an earlier copy: on the bundle as assembled, so a field added anywhere
+    # between here and the top of this function is still checked. It refuses to
+    # write rather than writing and warning, because a bundle that has been served
+    # once has been fetched.
+    problems = public_export.audit(bundle)
+    if problems:
+        print("REFUSING TO WRITE the research bundle — it carries private data:")
+        for p in problems[:12]:
+            print("  %s" % p)
+        raise SystemExit(
+            "This bundle is served in the clear. Remove the fields above, or add "
+            "them to public_export.FORBIDDEN_KEYS if they are genuinely safe.")
 
     out = args.out if os.path.isabs(args.out) else os.path.join(ROOT, args.out)
     os.makedirs(os.path.dirname(out), exist_ok=True)

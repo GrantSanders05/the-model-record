@@ -18,6 +18,7 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT_DIR = ROOT                      # the repository root, used by the moat checks
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 import grading            # noqa: E402
@@ -787,6 +788,73 @@ ok("[control] a missing row makes reconciliation fail",
    any(not d["match"] for d in replay_state.reconcile(_rt_src, _rt_conn)))
 
 
+print("\n── nothing personal reaches the published bundle ──")
+#
+# CONTEXT THAT MATTERS: the film grades in this bundle are public BY DECISION.
+# Grant made that call on 1 September with the contents in front of him, removed
+# the passphrase gate, and the bundle has been served in the clear since. The
+# commit that did it names what was left behind: "anything genuinely private has
+# to be kept OUT of the bundle... The live wire to watch is `mybets` -- it is
+# empty today, but it reads the sheet's My Bets tab, so bets logged there would
+# publish with stakes, books and ROI."
+#
+# This is that guard. A grade can be re-published; somebody's wagering cannot be
+# un-published.
+
+import public_export as pex                                     # noqa: E402
+
+_BASE = {"teams": {"Oregon": {"grades": {"qb": 12.2}}},
+         "bets": [{"game_id": "g1", "stake": 1.5, "ml_ev": 4.0}],
+         "mybets": {"state": "ok", "n": 0}}
+ok("a clean bundle passes", not pex.audit(_BASE), pex.audit(_BASE))
+
+# THE FALSE POSITIVE THAT WOULD KILL THE GATE. `stake` on the model's own board
+# is the recommended Kelly fraction -- the model's output, published on purpose.
+# A rule that fires on it gets switched off, and then it protects nothing.
+ok("...including the model's own recommended stake",
+   not pex.audit({"bets": [{"stake": 2.0, "game_id": "g"}]}))
+
+for label, node, why in [
+        ("a logged bet with a stake and a book",
+         {"mybets": {"bets": [{"stake": 2.5, "book": "DraftKings"}]}}, "wager row"),
+        ("a bankroll three levels down",
+         {"record": {"curve": {"meta": {"bankroll": 5000}}}}, "never publishable"),
+        ("an access token inside a JSON string",
+         {"config": {"debug": '{"access_token":"abc"}'}}, "never publishable"),
+        ("dollar figures",
+         {"totals": {"dollars_won": 120.0}}, "never publishable"),
+        ("an account id", {"meta": {"account_id": "x"}}, "never publishable"),
+        ("a stake beside a placed_at, however it is nested",
+         {"a": {"b": [{"stake": 1.0, "placed_at": "2026-09-05"}]}}, "wager amount")]:
+    ok("%s is caught" % label, bool(pex.audit(node)), pex.audit(node))
+
+# A top-level-only scan passes the case that actually happens.
+_deep = {"x": {"y": {"z": {"mybets": {"bets": [{"stake": 1, "book": "b"}]}}}}}
+ok("a scan of the top level alone would miss it; this does not",
+   bool(pex.audit(_deep)))
+
+_safe = pex.safe_my_bets({"state": "ok", "problems": [], "fetched_utc": "t",
+                          "bets": [{"stake": 5, "book": "b"}],
+                          "totals": {"n": 1, "settled": 1, "open": 0,
+                                     "dollars_won": 90.0, "unit_size": 25}})
+ok("the status view keeps no rows", "bets" not in _safe)
+ok("...and no dollar figures",
+   not any(k in _safe for k in ("dollars_won", "unit_size", "totals")), _safe)
+ok("...but does keep whether the sheet was readable",
+   _safe["state"] == "ok" and _safe["n"] == 1)
+ok("...and audits clean", not pex.audit({"mybets": _safe}))
+
+# And the real thing, as written to disk.
+_bundle_path = os.path.join(ROOT_DIR, "output", "research", "data.json")
+if os.path.exists(_bundle_path):
+    with open(_bundle_path) as _fh:
+        _live = json.load(_fh)
+    ok("the bundle actually on disk audits clean", not pex.audit(_live),
+       pex.audit(_live)[:3])
+    ok("...and its mybets carries no rows",
+       "bets" not in (_live.get("mybets") or {}), _live.get("mybets"))
+
+
 print("\n── the moat covers what the tools actually write ──")
 #
 # migrate_v2 writes `data/model.pre-v2-<stamp>.db` before it applies: a
@@ -802,7 +870,6 @@ def _ignored(rel):
     r = subprocess.run(["git", "check-ignore", "-q", rel], cwd=ROOT_DIR)
     return r.returncode == 0
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _stamp = "20260906T050202Z"
 for name in ["data/model.db",
              "data/model.pre-v2-%s.db" % _stamp,      # migrate_v2.backup()
