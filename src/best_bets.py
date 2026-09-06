@@ -114,6 +114,34 @@ def dispersion_check(rows, max_abs_line=BLOWOUT_LINE):
             "max_abs_line": max_abs_line}
 
 
+def no_bet_reason(pick):
+    """
+    Why this game is not offered, or None if it is. -> str | None
+
+    ONE FUNCTION, so the rule and the test of the rule cannot drift. It used to
+    be an expression inline in `rank`, and the gate that checked it re-stated the
+    same expression in the test file — which meant the test could only ever agree
+    with itself.
+
+    Two ways a game is out of reach:
+
+      blowout  the line is wider than the grade sheet can express. Roughly 25
+               rating points end to end cannot produce a 45-point spread.
+      unrated  a team has no film grade, so Elo answered — and Elo holds every
+               non-FBS team at one constant rating, however the market prices
+               them. On the 5 September slate the market spread FCS opponents
+               across 24 points while the model held them equal, and six of the
+               top ten claimed edges were that constant talking. Those games went
+               4-6 in week 1 against 9-5 where both teams were graded.
+    """
+    if pick.get("unrated"):
+        return "unrated"
+    m = pick.get("market_margin")
+    if m is not None and abs(m) > BLOWOUT_LINE:
+        return "blowout"
+    return None
+
+
 def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
     picks = predict.generate(conn, sport, config, week=week, season=season)
     games = {g["game_id"]: g for g in backtest.load_games(conn, sport)}
@@ -178,13 +206,8 @@ def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
             # borrowed games were a coin flip at every scale tested. The film is
             # what this model sells; a game the film cannot see is one it has no
             # opinion on, exactly as ledger.missed_locks already says.
-            "no_bet": ((p["market_margin"] is not None
-                        and abs(p["market_margin"]) > BLOWOUT_LINE)
-                       or bool(p.get("unrated"))),
-            "no_bet_reason": ("unrated" if p.get("unrated")
-                              else ("blowout" if (p["market_margin"] is not None
-                                    and abs(p["market_margin"]) > BLOWOUT_LINE)
-                                    else None)),
+            "no_bet": no_bet_reason(p) is not None,
+            "no_bet_reason": no_bet_reason(p),
         }
 
         ph, pa = devig(implied_prob(home_ml), implied_prob(away_ml))

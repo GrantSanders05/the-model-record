@@ -241,7 +241,13 @@ def read_all(state_dir=None):
                     except ValueError as e:
                         raise ValueError("%s line %d is not JSON: %s"
                                          % (os.path.join(root, fn), n, e))
-    out.sort(key=lambda e: (e.get("occurred_at") or "", e.get("event_id") or ""))
+    # (occurred_at, recorded_at, event_id). The middle key is what makes a
+    # correction land AFTER the event it corrects: a signal's occurred_at is when
+    # it was created and does not move when the result is filled in, so ordering
+    # by occurred_at alone would leave the winner decided by a hash.
+    out.sort(key=lambda e: (e.get("occurred_at") or "",
+                            e.get("recorded_at") or "",
+                            e.get("event_id") or ""))
     return out
 
 
@@ -299,12 +305,26 @@ def export_from_db(conn, *, since=None, source_run=None):
             args.append(since)
         for r in conn.execute(q + " ORDER BY %s, %s" % (time_col, key), args):
             payload = dict(r)
+            # THE ID INCLUDES THE PAYLOAD, so a row that has CHANGED produces a
+            # new event rather than being skipped as a duplicate.
+            #
+            # Keying on the row id alone was wrong and the failure was silent: a
+            # signal is created ungraded and its result is filled in later, so
+            # every re-export re-derived the same id, the append was treated as a
+            # duplicate, and the graded result never reached the journal. The
+            # database and its record drifted apart while both looked healthy.
+            #
+            # An unchanged row still dedups, because an unchanged payload hashes
+            # the same. A changed one is a CORRECTION, appended beside the
+            # original — which is what append-only means. Nothing is overwritten;
+            # the replay applies them in order and the later one wins.
             out.append(make_event(
                 event_type, payload,
                 occurred_at=payload.get(time_col),
                 source_run=source_run,
                 event_id=provenance.stable_id("event", {
-                    "t": event_type, "k": payload.get(key)})))
+                    "t": event_type, "k": payload.get(key),
+                    "h": provenance.payload_hash(payload)})))
     return out
 
 

@@ -298,9 +298,27 @@ def grade_signals(conn, *, sport="cfb", now=None, commit=True):
             at_close = grading.grade_total_pick(
                 side=r["side"], total_line=close_line, actual_total=actual_total)
             clv = grading.total_clv(side=r["side"], locked=r["line"], closing=close_line)
+        # NEVER OVERWRITE A CLOSE WE CANNOT COMPUTE WITH A NULL.
+        #
+        # close_policy_v1 needs quotes observed BEFORE kickoff, and for games
+        # played before V2 existed there are none — CFBD returns a retrospective
+        # line and it is stamped with the fetch time, correctly, so the policy
+        # refuses it. migrate_v2 had already filled close_line from the legacy
+        # stored line, which is a real closing number. Recomputing and writing
+        # the result unconditionally replaced those with NULL and destroyed them:
+        # 163 signals lost their close, and the only reason it was noticed is
+        # that the journal replay stopped reconciling.
+        #
+        # COALESCE in SQL, not a Python default, so a value already in the row
+        # survives even if this code is called again with nothing to say.
         conn.execute(
-            "UPDATE signal_log SET locked_result=?, close_result=?, close_line=?,"
-            " line_clv=?, profit_units=?, graded_at=? WHERE signal_id=?",
+            "UPDATE signal_log SET"
+            "  locked_result = COALESCE(?, locked_result),"
+            "  close_result  = COALESCE(?, close_result),"
+            "  close_line    = COALESCE(?, close_line),"
+            "  line_clv      = COALESCE(?, line_clv),"
+            "  profit_units  = COALESCE(?, profit_units),"
+            "  graded_at=? WHERE signal_id=?",
             (locked, at_close, close_line, clv,
              grading.american_profit_units(locked, r["price"]), now, r["signal_id"]))
         n += 1

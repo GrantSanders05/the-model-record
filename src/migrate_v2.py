@@ -438,6 +438,7 @@ def apply_migration(conn, rows, rep, src_hash=None):
     for t in order:
         _insert(conn, t, rows.get(t, []))
     rep["pick_rows_backfilled"] = backfill_pick_columns(conn, rows)
+    rep["signals_repaired"] = repair_signals(conn, rows, commit=False)
     # Historical grade vectors, reconstructed from the weekly `grades` table so
     # `grade_asof` can answer questions about past forecasts. Labelled `backfill`
     # and effective at the first kickoff of the week they were stamped for; a
@@ -452,6 +453,47 @@ def apply_migration(conn, rows, rep, src_hash=None):
         " VALUES (?,?,?,?)",
         (MIGRATION_ID, _now().isoformat(), src_hash, provenance.canonical_json(rep)))
     conn.commit()
+
+
+def repair_signals(conn, rows, *, commit=True):
+    """
+    Restore derived columns on migrated signals that were later nulled. -> count
+
+    NOT A REWRITE OF HISTORY. close_line and line_clv are DERIVED from columns
+    that have not changed — the pick's own at-pick line, and the closing line
+    already stored on the pick or in `lines`. The planner recomputes them from
+    exactly those inputs, so this puts back a value that was destroyed rather
+    than deciding a new one. The side, the line taken and the result are not
+    touched.
+
+    WHY IT WAS NEEDED. `signals.grade_signals` recomputed the close with
+    close_policy_v1, which requires quotes observed BEFORE kickoff. Historical
+    games have none, so the policy correctly returned "missing" — and the UPDATE
+    wrote that missing value over a real closing number that the migration had
+    already recorded. 122 signals lost their close, and nothing failed: the only
+    symptom was the journal replay ceasing to reconcile.
+    """
+    fixed = 0
+    for sg in rows.get("signal_log", []):
+        if sg.get("close_line") is None and sg.get("line_clv") is None:
+            continue
+        cur = conn.execute(
+            "SELECT close_line, line_clv FROM signal_log WHERE signal_id=?",
+            (sg["signal_id"],)).fetchone()
+        if cur is None:
+            continue
+        if cur["close_line"] is not None and cur["line_clv"] is not None:
+            continue
+        conn.execute(
+            "UPDATE signal_log SET close_line = COALESCE(close_line, ?),"
+            "  line_clv = COALESCE(line_clv, ?),"
+            "  close_result = COALESCE(close_result, ?)"
+            " WHERE signal_id=?",
+            (sg["close_line"], sg["line_clv"], sg["close_result"], sg["signal_id"]))
+        fixed += 1
+    if commit and fixed:
+        conn.commit()
+    return fixed
 
 
 def backup(path):
@@ -487,6 +529,9 @@ def print_report(rep, counts_before, counts_after=None):
               % (rep["grade_snapshots_backfilled"], rep["grade_team_weeks_seen"],
                  rep["grade_team_weeks_without_a_kickoff"]))
         print("                                       scheduled game to date them by)")
+    if rep.get("signals_repaired"):
+        print("    derived columns restored on   : %d signal(s)"
+              % rep["signals_repaired"])
     if "pick_rows_backfilled" in rep:
         print("    picks_log rows given V2 columns : %d  (new columns only; the"
               % rep["pick_rows_backfilled"])

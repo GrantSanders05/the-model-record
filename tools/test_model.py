@@ -177,10 +177,30 @@ else:
     # The film is what this model sells. A game where a team has no grade is
     # answered by Elo, which holds every non-FBS team at one constant rating, so
     # the "edge" it reports there is the constant talking. See best_bets.rank.
+    # THE RULE, NOT THE FIXTURE. An earlier version required at least one real
+    # unrated game on the board and passed for a week before failing on a day
+    # when the FCS fixtures simply had no lines posted yet — nothing was wrong,
+    # the slate had moved. A gate whose truth depends on the calendar teaches
+    # people to re-run it until it goes green.
     _unrated = [r for r in _board if r["no_bet_reason"] == "unrated"]
-    ok("...and games the film grades could not answer are declined too",
-       all(r["no_bet"] for r in _unrated) and len(_unrated) > 0,
+    ok("...and every unrated game on the board is declined",
+       all(r["no_bet"] for r in _unrated),
        "%d of %d unrated" % (len(_unrated), len(_board)))
+    # ...which is vacuous when there are none, so the rule itself is exercised
+    # against constructed picks. best_bets.no_bet_reason is the SAME function the
+    # board calls — restating the expression here would only prove the test
+    # agrees with itself.
+    ok("...and a game the film could not answer is declined by the rule itself",
+       best_bets.no_bet_reason(
+           {"unrated": True, "market_margin": 3.0}) == "unrated")
+    ok("...a line wider than the model's domain is declined",
+       best_bets.no_bet_reason(
+           {"unrated": False,
+            "market_margin": best_bets.BLOWOUT_LINE + 0.5}) == "blowout")
+    ok("...and an ordinary game is offered",
+       best_bets.no_bet_reason({"unrated": False, "market_margin": 3.0}) is None)
+    ok("...a game with no line yet is not declined for its line",
+       best_bets.no_bet_reason({"unrated": False, "market_margin": None}) is None)
 
     print("\n── proving these can fail ──")
     before = F
