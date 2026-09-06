@@ -50,3 +50,28 @@ Everything else — win rate, a good Saturday, a large raw model edge, a backtes
 ## Current recommendation in one sentence
 
 Keep the hand-grade model as the unique-information core, but rebuild the research system around **time-stamped market residual prediction, matchup interactions, probability calibration, exact line/price snapshots, official availability data, durable event storage, and prospective champion/challenger validation**.
+
+---
+
+## Implementation status (2026-09-06)
+
+| phase | | |
+|---|---|---|
+| 0A | grading semantics | **done** |
+| 0B | provenance, V2 schema, migration | **done** |
+| 0C | provider-level market quotes | **done** |
+| 0D | timestamped grade snapshots | **done** |
+| 1A | forecast / evaluation / signal separation | **done** |
+| 1B | append-only state journal + replay | **done** |
+| 1C | official cutover | **done** |
+| 2A | multi-horizon collection | **done** |
+| 2B | C1 baseline, C2 residual ridge | **done, both failed on development data** |
+| 2C | C3 matchup residual | **done, failed on development data** |
+| 3 | availability, weather, totals, probability | **not started, deliberately** |
+
+Phase 3 is gated in the build document on a clean prospective pipeline existing.
+It now does; the work has not been begun rather than half-begun.
+
+New reading order: [METHODOLOGY](METHODOLOGY.md) for what the numbers mean,
+[DATA-DICTIONARY](DATA-DICTIONARY.md) for the tables,
+[OPERATIONS](OPERATIONS.md) for the commands and the failure modes.

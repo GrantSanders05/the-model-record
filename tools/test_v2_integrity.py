@@ -964,6 +964,52 @@ ok("...and re-registering the SAME config is a no-op",
                        role="challenger", config={"scale": 1.0})["model_version"] == "X1")
 
 
+print("\n── the form challenger cannot run away, and does not touch the Champion ──")
+
+from models_v2.form_quality import TeamForm, MARKET, MODEL                # noqa: E402
+
+_tf = TeamForm()
+_tf.new_season(2026)
+ok("a team with no games has no form", _tf.value_for("Oregon") == 0.0)
+_tf.observe(home_team="Oregon", away_team="Boise", actual_home_margin=30,
+            expected_home_margin=10)
+ok("beating expectation raises one side and lowers the other",
+   _tf.value_for("Oregon") > 0 > _tf.value_for("Boise"))
+ok("...and one game is shrunk hard, because two games is not a form",
+   _tf.value_for("Oregon") < 0.35 * 20, _tf.value_for("Oregon"))
+
+_a, _b = TeamForm(), TeamForm()
+_a.new_season(2026); _b.new_season(2026)
+_a.observe(home_team="A", away_team="B", actual_home_margin=99, expected_home_margin=0)
+_b.observe(home_team="A", away_team="B", actual_home_margin=21, expected_home_margin=0)
+ok("a 99-point win says the same as a 21-point win",
+   abs(_a.value_for("A") - _b.value_for("A")) < 1e-9,
+   "winsorization did not cap the residual")
+
+_a.new_season(2027)
+ok("a new season clears form, because the roster turned over",
+   _a.value_for("A") == 0.0)
+_a.observe(home_team="A", away_team="B", actual_home_margin=None,
+           expected_home_margin=3.0)
+ok("an unfinished game does not update anything", _a.value_for("A") == 0.0)
+
+_undeclared = None
+try:
+    TeamForm(expected_from="vibes")
+except ValueError as e:
+    _undeclared = str(e)
+ok("the information set must be declared", _undeclared is not None)
+ok("...and both readings exist deliberately", {MARKET, MODEL} == {"market", "model"})
+
+# The point of the whole file: the Champion's rule is untouched.
+import engine as _eng                                           # noqa: E402
+ok("the Champion still awards its threshold quality points",
+   _eng.win_points({"wq_top5": 5.0, "wq_top10": 4.0, "wq_top25": 3.0,
+                    "wq_other": 0.0}, 3) == 5.0)
+ok("...and the challenger is a separate module that changes none of it",
+   "form_quality" not in open(os.path.join(ROOT, "src", "engine.py")).read())
+
+
 print("\n── the moat covers what the tools actually write ──")
 #
 # migrate_v2 writes `data/model.pre-v2-<stamp>.db` before it applies: a

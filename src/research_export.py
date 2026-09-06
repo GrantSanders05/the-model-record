@@ -478,6 +478,71 @@ def health(conn, sport, season):
             "stale_locks": stale, "last_final_kickoff": last}
 
 
+def build_v2_block(conn, sport, season):
+    """
+    The V2 record: four scoreboards kept apart, and the challenger comparison.
+
+    Returns a dict with `scoreboards`, `strategies` and `models`. Nothing here is
+    summed into a headline — a challenger sorted to the top of a table by ATS
+    percentage is exactly the presentation §19.6 warns about, so the table is
+    ordered by version and carries the PAIRED comparison instead.
+    """
+    try:
+        import forecast_v2
+        import metrics_v2
+        import signals as _sig
+        import horizons as _hz
+    except Exception as e:                         # noqa: BLE001 - never block a build
+        return {"available": False, "why": "%s: %s" % (type(e).__name__, e)}
+
+    champ = conn.execute(
+        "SELECT model_version FROM model_registry WHERE role='champion'"
+        " ORDER BY created_at DESC LIMIT 1").fetchone()
+    champ_v = champ["model_version"] if champ else None
+
+    strategies = []
+    for r in conn.execute(
+            "SELECT DISTINCT strategy_version FROM signal_log WHERE is_official=1"
+            " ORDER BY strategy_version"):
+        sv = r["strategy_version"]
+        perf = metrics_v2.signal_performance(conn, strategy_version=sv, sport=sport)
+        diag = metrics_v2.closing_diagnostic(conn, strategy_version=sv, sport=sport)
+        strategies.append({"strategy_version": sv, "signals": perf, "close": diag})
+
+    models = []
+    for r in conn.execute(
+            "SELECT model_version, model_id, role, experiment_id, config_hash,"
+            "       git_sha, feature_schema_version, created_at, notes"
+            "  FROM model_registry ORDER BY role, model_version"):
+        m = dict(r)
+        m["quality"] = metrics_v2.forecast_quality(
+            conn, model_version=m["model_version"], sport=sport, season=season)
+        if champ_v and m["model_version"] != champ_v:
+            m["vs_champion"] = metrics_v2.paired_comparison(
+                conn, champion_version=champ_v,
+                challenger_version=m["model_version"], sport=sport)
+        models.append(m)
+
+    return {
+        "available": True,
+        "champion": champ_v,
+        "official_horizon": _hz.OFFICIAL_HORIZON,
+        "strategy_version": _sig.STRATEGY_V0["strategy_version"],
+        "strategy_config": _sig.STRATEGY_V0,
+        "strategy_hash": _sig.strategy_hash(),
+        "declined_reasons": _sig.reason_counts(conn),
+        "scoreboards": metrics_v2.all_scoreboards(
+            conn, model_version=champ_v,
+            strategy_version=_sig.STRATEGY_V0["strategy_version"], sport=sport),
+        "strategies": strategies,
+        "models": models,
+        "note": "four scoreboards, deliberately not summed: forecast quality is "
+                "over every forecast, signal performance only over what the "
+                "strategy offered, the close is a diagnostic, and user bets are "
+                "not modelled here at all.",
+    }
+
+
 def build_my_bets(conn, sport, season, labels):
     """
     The sheet-sourced half of his bet log, or a description of why there isn't one.
@@ -622,6 +687,11 @@ def main():
             "loss_sign": config.get("sheet_loss_sign", -1.0),
             "raw_wl": config.get("sheet_raw_wl", 0.0),
         },
+        # ── V2: the four scoreboards, and the challenger table ───────────────
+        #
+        # Separate keys, never one "record". A reader who wants a single number
+        # has to choose which question they are asking, which is the point.
+        "v2": build_v2_block(conn, args.sport, season),
         "dispersion": disp,
         "preseason": preseason,
         "alerts": load_alerts(),

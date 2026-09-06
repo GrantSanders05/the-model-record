@@ -181,6 +181,71 @@ class ChampionAdapter:
         }
 
 
+class _ModelAdapter:
+    """Wraps a models_v2 model in the interface make_forecast expects."""
+
+    def __init__(self, model):
+        self.model = model
+
+    def state_for(self, game):
+        return None                    # challengers read the payload, not a rater
+
+    def forecast(self, game):
+        return self.model.predict(self._payload)
+
+    def with_payload(self, payload):
+        self._payload = payload
+        return self
+
+
+def load_challengers(conn):
+    """
+    Every registered challenger, rehydrated from its artifact. -> [(version, model)]
+
+    A challenger whose artifact is missing or unreadable is SKIPPED WITH A
+    MESSAGE rather than silently omitted: a shadow model that quietly stops
+    forecasting accumulates a record of the games it happened to be alive for.
+    """
+    import json as _json
+    import os as _os
+    out = []
+    root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    try:
+        import models_v2
+    except Exception as e:                         # noqa: BLE001
+        print("  challengers unavailable: %s" % e)
+        return out
+    classes = {"residual-grade": models_v2.ResidualGrade,
+               "matchup-residual": models_v2.MatchupResidual,
+               "market-baseline": models_v2.MarketBaseline}
+    for r in conn.execute(
+            "SELECT model_version, model_id FROM model_registry"
+            # BASELINE TOO. C1 is not a challenger in the promotion sense and it
+            # must still forecast every game, or there is nothing to compare a
+            # challenger's error against at the same instant.
+            " WHERE role IN ('challenger','baseline') AND retired_at IS NULL"
+            " ORDER BY model_version"):
+        cls = classes.get(r["model_id"])
+        if cls is None:
+            print("  challenger %s: no class for model_id %r — skipped"
+                  % (r["model_version"], r["model_id"]))
+            continue
+        if r["model_id"] == "market-baseline":
+            out.append((r["model_version"], cls()))
+            continue
+        path = _os.path.join(root, "output", "models", r["model_version"] + ".json")
+        if not _os.path.exists(path):
+            print("  challenger %s: artifact missing at %s — skipped"
+                  % (r["model_version"], _os.path.relpath(path, root)))
+            continue
+        try:
+            with open(path) as fh:
+                out.append((r["model_version"], cls(_json.load(fh))))
+        except ValueError as e:
+            print("  challenger %s: artifact unreadable — %s" % (r["model_version"], e))
+    return out
+
+
 def make_forecast(conn, *, sport, game, adapter, model_version, horizon,
                   generated_at, feature_snapshot=None, run_id=None,
                   provenance_quality=provenance.COMPLETE, commit=True):
@@ -204,6 +269,10 @@ def make_forecast(conn, *, sport, game, adapter, model_version, horizon,
 
     cls = horizons.classify(kickoff=game["kickoff"], generated_at=generated_at,
                             horizon=horizon)
+    # A challenger reads the feature payload; the Champion adapter reads its own
+    # walked-forward rater. `with_payload` exists so both satisfy one call.
+    if hasattr(adapter, "with_payload"):
+        adapter = adapter.with_payload(fs["payload"])
     out = adapter.forecast(game)
     fid = provenance.stable_id("forecast", {
         "g": game["game_id"], "m": model_version, "h": horizon,
@@ -284,6 +353,15 @@ def run_snapshots(conn, *, sport="cfb", config, now=None, horizons_wanted=None,
                    notes="the shipped grade model, frozen as the V2 Champion")
 
     adapter = ChampionAdapter(config, grades, stats)
+
+    # EVERY REGISTERED CHALLENGER FORECASTS THE SAME GAMES, at the same instant,
+    # from the same feature payload. That is what makes a later comparison PAIRED
+    # rather than a comparison of two game sets.
+    #
+    # They are shadow without exception: `emit_signal` is only ever called for
+    # the Champion below. A challenger accumulates a prospective record and is
+    # promoted, if ever, by the checklist in §30 — never by a threshold.
+    challengers = load_challengers(conn)
     rep = {"now": now, "model_version": model_version,
            "strategy_version": strategy["strategy_version"],
            "official": bool(official), "games_considered": 0, "forecasts": 0,
@@ -316,6 +394,15 @@ def run_snapshots(conn, *, sport="cfb", config, now=None, horizons_wanted=None,
                         continue
                     rep["forecasts"] += 1
                     rep["by_horizon"][h] = rep["by_horizon"].get(h, 0) + 1
+
+                    for ch_version, ch_model in challengers:
+                        ch_row = make_forecast(
+                            conn, sport=sport, game=g, adapter=_ModelAdapter(ch_model),
+                            model_version=ch_version, horizon=h, generated_at=now,
+                            feature_snapshot=fs, run_id=run_id, commit=False)
+                        if ch_row is not None:
+                            rep["challenger_forecasts"] = \
+                                rep.get("challenger_forecasts", 0) + 1
                     if h != strategy["official_horizon"]:
                         continue
                     evals = sig.evaluate(conn, forecast=row, payload=fs["payload"],

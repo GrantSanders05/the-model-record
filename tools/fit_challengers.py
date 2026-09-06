@@ -168,6 +168,24 @@ def main():
         return
 
     import forecast_v2
+
+    # C1 FIRST, AND ALWAYS. The market baseline has nothing to fit and is
+    # registered unconditionally, because every challenger's improvement is
+    # reported against it as well as against the Champion — "better than the
+    # Champion" and "better than the line" are different claims and only the
+    # second means anything to anyone else. Registering it on the same run means
+    # it forecasts the same games from the same payload, so the comparison is
+    # paired rather than a comparison of two game sets.
+    from models_v2 import MarketBaseline
+    _mb = MarketBaseline()
+    forecast_v2.register_model(
+        conn, model_version="C1-market-baseline",
+        model_id=_mb.model_id, role=forecast_v2.ROLE_BASELINE,
+        config=_mb.artifact(), experiment_id="E000",
+        notes="the market consensus at each forecast's own decision time; the "
+              "number every other model has to beat")
+    print("  registered C1-market-baseline (%s)" % _mb.model_id)
+
     for name, res in out.items():
         art = res["artifact"]
         art["artifact_hash"] = provenance.payload_hash(

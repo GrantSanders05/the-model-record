@@ -541,3 +541,102 @@ Use this section for project-wide decisions that should not be forgotten.
 | 2026-09-05 | No Kelly until probability calibration is validated | Current probability layer is not sufficiently proven | E010 success |
 | 2026-09-05 | Preserve failed experiments | Control researcher degrees of freedom | Never |
 | 2026-09-05 | Prefer market-residual modeling for private-grade challengers | Directly tests incremental information beyond available price | If evidence favors raw-margin architecture |
+
+
+---
+
+# Results recorded 2026-09-06
+
+Implementation of the V2 build document. Every number below is from
+`tools/fit_challengers.py --season 2025`, with lambda chosen on a held-out
+late-season split.
+
+## E001 — record-definition repair — **DONE**
+
+`grading.py` grades the side that was published, at the line it was locked at,
+and separately at the close. Both are stored; the legacy close-based column is
+preserved untouched.
+
+Found in the live record: **3 of 17 graded results disagreed**, including one
+win recorded as a loss (Virginia, laying 3, won by 26 — the old grader derived
+the side as `3.7 − 4.0 < 0` and graded NC State).
+
+Record under each definition, after week 1:
+
+```
+legacy   (close, side recomputed)   see picks_log.ats_result
+locked   (published side, locked)   62-77-0   44.6%   n=139
+close    (published side, close)     7- 9-1   43.8%   n=16
+```
+
+The close `n` is small because `close_policy_v1` requires quotes observed before
+kickoff, and historical games have none.
+
+## E002 — forecast vs signal separation — **DONE**
+
+`forecast_log`, `strategy_evaluations` and `signal_log` are separate tables. A
+decline is a recorded row with reason codes. Strategy `S0-2026.09.06` is a hashed
+data object; `is_official` and a partial unique index prevent double publication.
+
+## E003 — market residual ridge — **FAILED on development data, running shadow**
+
+Target `actual − market at the forecast's own time`. Twelve features: eight
+position differences, their total, the market spread and neutral site. Ridge,
+intercept unpenalized, standardized on training rows only.
+
+```
+        RMSE     market RMSE   improvement
+train   14.898   15.086        +0.188
+valid   15.146   14.891        −0.255
+```
+
+**Lambda 100 — the top of the grid.** The fit shrinks as hard as it is allowed
+to, which is the fitter saying these features add nothing to the market number
+that survives a split.
+
+Registered as a shadow challenger anyway. A negative recorded is worth more than
+one quietly dropped, and 2025 is development data: it cannot promote or demote
+anything on its own.
+
+## E004 — matchup interaction residual — **FAILED on development data, running shadow**
+
+Six pre-registered matchup formulas (OL vs DL both ways, pass game vs coverage
+both ways, run game vs box both ways) plus coach/ST, on top of E003's frame.
+
+```
+        RMSE     market RMSE   improvement
+train   14.998   15.086        +0.088
+valid   15.035   14.891        −0.144
+```
+
+Also lambda 100. The interactions do not rescue it.
+
+**The formulas were written before fitting.** With eight positions there are
+dozens of plausible interactions and 800 games will happily rank one best;
+choosing after looking is how a model acquires a beautiful backtest and no
+future.
+
+## E005 — continuous team form — **BUILT, not yet fitted**
+
+`models_v2/form_quality.py`. Exponentially decayed, winsorized performance
+residual, shrunk hard early in a season, cleared between seasons.
+
+`expected_from` is declared and not defaulted: form measured against the MARKET's
+pregame number is explicitly market-informed and must be labelled as such;
+against the MODEL's own number it is self-contained and noisier. They answer
+different questions.
+
+**The Champion's threshold rule is untouched**, and a test asserts `engine.py`
+does not import this module.
+
+## What the failures mean
+
+Two challengers built on the film grades do not beat the closing line on
+development data. That is not the same as "the grades are worthless" — the
+Champion uses them differently, and the development market number is one
+preferred provider at an unrecorded time rather than a T2 consensus, which is a
+different data regime from the one the models will forecast in.
+
+It does mean **nothing here is ready to promote**, and that the honest next step
+is prospective 2026 data from forecasts filed before kickoff, which the
+infrastructure now collects.
