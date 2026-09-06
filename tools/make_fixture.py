@@ -136,7 +136,29 @@ def main():
     fake.executemany(
         "INSERT OR REPLACE INTO picks_log (%s) VALUES (%s)"
         % (", ".join(rows[0]), ", ".join(":" + k for k in rows[0])), rows)
+
+    # THE GAMES AND LINES THOSE PICKS SIT ON, and then the V2 migration over the
+    # top. The public page leads with the LOCKED-LINE record, which is read from
+    # signal_log; a fixture holding only picks_log renders the legacy fallback
+    # instead, so the branch that actually ships would never be exercised — which
+    # is the exact failure this file exists to prevent, one layer up.
+    gids = [r["game_id"] for r in rows]
+    marks = ",".join("?" * len(gids))
+    gcols = [c["name"] for c in real.execute("PRAGMA table_info(games)")]
+    grows = [tuple(r) for r in real.execute(
+        "SELECT %s FROM games WHERE game_id IN (%s)" % (",".join(gcols), marks), gids)]
+    fake.executemany("INSERT OR REPLACE INTO games (%s) VALUES (%s)"
+                     % (",".join(gcols), ",".join("?" * len(gcols))), grows)
+    lcols = [c["name"] for c in real.execute("PRAGMA table_info(lines)")]
+    lrows = [tuple(r) for r in real.execute(
+        "SELECT %s FROM lines WHERE game_id IN (%s)" % (",".join(lcols), marks), gids)]
+    fake.executemany("INSERT OR REPLACE INTO lines (%s) VALUES (%s)"
+                     % (",".join(lcols), ",".join("?" * len(lcols))), lrows)
     fake.commit()
+
+    import migrate_v2
+    _plan, _rep = migrate_v2.plan(fake, "cfb")
+    migrate_v2.apply_migration(fake, _plan, _rep)
 
     labels = research_export.display_weeks(real, "cfb", SEASON)
     summary = tracking.summary(fake, "cfb", week_labels=labels)
