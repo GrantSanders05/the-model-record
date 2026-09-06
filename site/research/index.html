@@ -327,6 +327,7 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
     <button role="tab" data-v="move"   aria-selected="false">Line movement</button>
     <button role="tab" data-v="whatif" aria-selected="false">What-if</button>
     <button role="tab" data-v="alerts" aria-selected="false">Roster news</button>
+    <button role="tab" data-v="lab"    aria-selected="false">Model lab</button>
   </nav>
 </header>
 
@@ -597,6 +598,42 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
   <div class="panel scroll"><table id="watchtbl"></table></div>
 </section>
 
+
+<!-- ── MODEL LAB (§27.4) ───────────────────────────────────────────── -->
+<section class="view" id="v-lab">
+  <h2>Four scoreboards, deliberately not added up</h2>
+  <p class="sub">A model's accuracy, a strategy's record, the same picks scored at the
+     close, and money actually risked are four different questions. Summing them into
+     one number is how a good model and a bad staking plan cancel each other out and
+     nobody notices for a season.</p>
+  <div class="cards" id="labboards"></div>
+  <div class="panel scroll"><table id="labstrats"></table></div>
+  <footer class="note" id="labboardnote"></footer>
+
+  <h2>Champion vs challengers</h2>
+  <p class="sub">Ordered by role, then by version — never by win rate. A challenger
+     sorted to the top of a table by ATS percentage over forty games is the presentation
+     that makes noise look like a discovery. What is compared here is absolute error on
+     <em>the same games</em>, against the Champion and against the market.</p>
+  <div class="panel scroll"><table id="labmodels"></table></div>
+  <footer class="note" id="labmodelnote"></footer>
+
+  <h2>The decision policy</h2>
+  <p class="sub">The prediction and the decision to publish are separate objects. This is
+     the rule that turns one into the other, hashed, so a change to it is visible rather
+     than remembered.</p>
+  <div class="panel" id="labstrategy"></div>
+
+  <h2>Why games were left off the board</h2>
+  <p class="sub">Every game the strategy looked at is recorded, including the ones it
+     declined. A board with three games on it and no reasons is indistinguishable from a
+     pipeline that failed on the other sixty.</p>
+  <div class="panel scroll"><table id="labdeclined"></table></div>
+
+  <h2>How this record is defined</h2>
+  <div class="panel" id="labmethod"></div>
+</section>
+
 </div><!-- /#app -->
 </div><!-- /.wrap -->
 
@@ -861,7 +898,7 @@ function boot(){
   });
 
   drawRank();drawSched();drawBets();drawResults();drawMyBets();
-  drawTeam();drawMove();drawWhatIf();drawAlerts();
+  drawTeam();drawMove();drawWhatIf();drawAlerts();drawLab();
 }
 
 function banners(){
@@ -2415,6 +2452,183 @@ function drawAlerts(){
          <td class="muted">${esc(r.pos)}</td><td class="num">${r.ovr}</td>
          <td class="num strong">${num(r.points,2)}</td></tr>`).join("")}</tbody>`
     : `<tbody><tr><td><div class="empty">No watchlist in this bundle.</div></td></tr></tbody>`;
+}
+
+/* ── model lab (§27.4) ────────────────────────────────────────────────
+   Four scoreboards kept apart and a challenger table that is NOT ordered by
+   win rate. Everything here is prospective by construction: a challenger's row
+   counts only forecasts filed before kickoff by a version that never saw the
+   outcome, which for a model registered this week is legitimately zero. An
+   honest zero is the point -- the alternative is a backtest wearing a
+   prospective label. */
+function drawLab(){
+  const V=D.v2;
+  if(!V||!V.available){
+    $("#labboards").innerHTML="";
+    $("#labstrats").innerHTML="";
+    $("#labmodels").innerHTML=`<tbody><tr><td><div class="empty">The V2 record is not in `+
+      `this bundle${V&&V.why?` — ${esc(V.why)}`:""}.</div></td></tr></tbody>`;
+    $("#labboardnote").textContent="This is not the same as “no challengers ran”. It "+
+      "means the export could not read the V2 tables, and nothing below should be trusted.";
+    $("#labdeclined").innerHTML="";
+    $("#labstrategy").innerHTML="";
+    $("#labmethod").innerHTML="";
+    return;
+  }
+  const S=V.scoreboards||{}, fq=S.forecast_quality||{}, sp=S.signal_performance||{},
+        cd=S.closing_diagnostic||{};
+  const rec=o=>o&&o.n?`${o.locked_w!=null?o.locked_w:o.w}–${o.locked_l!=null?o.locked_l:o.l}`+
+                      `${(o.locked_p||o.p)?"–"+(o.locked_p!=null?o.locked_p:o.p):""}`:"—";
+  const pct=v=>v==null?"—":(+v).toFixed(1)+"%";
+
+  /* Four cards, four questions. A card with n=0 says so in its own subtitle
+     rather than printing a dash and leaving the reader to guess whether the
+     number is missing or the pipeline is. */
+  $("#labboards").innerHTML=[
+    {k:"Forecast quality", v:fq.mae!=null?num(fq.mae,2):"—",
+     s:fq.n?`MAE, ${fq.n} graded at ${esc(fq.horizon||V.official_horizon)}`
+           :"no forecast graded yet at "+esc(V.official_horizon)},
+    {k:"Signals · locked line", v:sp.n?rec(sp):"—",
+     s:sp.n?`${pct(sp.locked_pct)} · ${sp.n} signals · ${esc(V.strategy_version)}`
+           :`${esc(V.strategy_version)} has published nothing yet`},
+    {k:"Close diagnostic", v:cd.n?rec(cd):"—",
+     s:cd.n?`${pct(cd.pct)} · not a wager`:"a diagnostic, not a record"},
+    {k:"Your bets", v:"separate",
+     s:"never mixed into the model's record"},
+  ].map(c=>`<div class="card"><div class="k">${esc(c.k)}</div>`+
+           `<div class="v">${esc(c.v)}</div><div class="s">${esc(c.s)}</div></div>`).join("");
+
+  /* Every strategy version that has ever published, including the reconstructed
+     legacy one. Two rows here are two methodologies, and adding them would be
+     the exact mistake §27.5 exists to prevent. */
+  const strats=V.strategies||[];
+  $("#labstrats").innerHTML = strats.length
+    ? `<thead><tr><th>Strategy</th><th class="num">Signals</th>
+        <th class="num">Locked line</th><th class="num">%</th><th class="num">95% CI</th>
+        <th class="num">At the close</th><th class="num">CLV</th><th>ROI</th></tr></thead><tbody>${
+       strats.map(t=>{
+         const g=t.signals||{}, c=t.close||{};
+         return `<tr><td class="team">${esc(t.strategy_version)}</td>
+           <td class="num">${g.n||0}</td>
+           <td class="num strong">${rec(g)}</td>
+           <td class="num">${pct(g.locked_pct)}</td>
+           <td class="num muted">${g.locked_ci95&&g.locked_ci95[0]!=null
+                ?`${num(g.locked_ci95[0],1)}–${num(g.locked_ci95[1],1)}`:"—"}</td>
+           <td class="num">${c.n?`${rec(c)} · ${pct(c.pct)}`:"—"}</td>
+           <td class="num ${cls(g.clv_mean)}">${g.clv_n?sgn(g.clv_mean,2):"—"}</td>
+           <td class="muted">${esc(g.roi!=null?g.roi:(g.roi_basis||"—"))}</td></tr>`;
+       }).join("")}</tbody>`
+    : `<tbody><tr><td><div class="empty">No strategy has published an official `+
+      `signal yet.</div></td></tr></tbody>`;
+
+  $("#labboardnote").textContent=
+    "Break-even at −110 is 52.38%. A confidence interval that contains it means the "+
+    "season has not yet distinguished this strategy from a coin, whichever side of it "+
+    "the point estimate sits on. ROI is blank wherever no price was recorded — "+
+    "−110 is not a default.";
+
+  /* THE CHALLENGER TABLE. Ordered by role then version. `paired_delta` is the
+     model's absolute error minus the market's, so NEGATIVE means the model was
+     closer -- the opposite of the usual sign convention on this page, which is
+     why it is coloured by meaning rather than by sign. */
+  const ROLE={champion:["Champion","strong"],baseline:["Baseline","muted"],
+              challenger:["Shadow","muted"],retired:["Retired","muted"]};
+  const PROMO={champion:"official — produces the published signal",
+               baseline:"the number to beat; never promoted",
+               challenger:"shadow only — promotion is a decision, not a threshold",
+               retired:"superseded; kept so its forecasts stay readable"};
+  const ms=(V.models||[]).slice().sort((a,b)=>{
+    const ord={champion:0,baseline:1,challenger:2,retired:3};
+    return (ord[a.role]??9)-(ord[b.role]??9) ||
+           String(a.model_version).localeCompare(String(b.model_version));
+  });
+  const good=v=>v==null?"muted":(+v<0?"pos":(+v>0?"neg":"muted"));   // closer = better
+  $("#labmodels").innerHTML = ms.length
+    ? `<thead><tr><th>Version</th><th>Experiment</th><th>Status</th>
+        <th class="num">Prospective n</th><th class="num">MAE</th>
+        <th class="num">vs market</th><th class="num">bias</th>
+        <th class="num">vs Champion</th><th>Promotion</th></tr></thead><tbody>${
+       ms.map(m=>{
+         const q=m.quality||{}, vc=m.vs_champion, r=ROLE[m.role]||[m.role,"muted"];
+         return `<tr><td class="team">${esc(m.model_version)}</td>
+           <td class="muted">${esc(m.experiment_id||"—")}</td>
+           <td class="${r[1]}">${esc(r[0])}</td>
+           <td class="num">${q.n||0}</td>
+           <td class="num">${q.mae!=null?num(q.mae,2):"—"}</td>
+           <td class="num ${good(q.paired_delta)}" title="model MAE minus market MAE on the same games; negative means the model was closer">${
+              q.paired_delta!=null?`${sgn(q.paired_delta,2)} (${q.paired_n})`:"—"}</td>
+           <td class="num ${cls(q.bias)}">${q.bias!=null?sgn(q.bias,2):"—"}</td>
+           <td class="num ${vc&&vc.mean_improvement!=null?(vc.mean_improvement>0?"pos":"neg"):"muted"}" title="mean improvement in absolute error over the Champion, on the games both forecast">${
+              vc&&vc.mean_improvement!=null?`${sgn(vc.mean_improvement,2)} (${vc.paired_n})`:"—"}</td>
+           <td class="muted">${esc(PROMO[m.role]||"—")}</td></tr>`;
+       }).join("")}</tbody>`
+    : `<tbody><tr><td><div class="empty">No model is registered.</div></td></tr></tbody>`;
+
+  $("#labmodelnote").textContent=
+    "“vs market” is the model's mean absolute error minus the market's on the same "+
+    "games, so a negative number is the model doing better. “vs Champion” is the "+
+    "paired improvement over the Champion, positive when the challenger is closer; "+
+    "the count beside it is how many games both models actually forecast. CLV is not "+
+    "in this table on purpose: it is a property of a signal that was published at a "+
+    "line, not of a shadow forecast nobody acted on, so it lives with the strategies "+
+    "above. A model registered this week has a prospective n of 0, and that is the "+
+    "honest number — anything else would be a backtest wearing a prospective label.";
+
+  /* The strategy that turns a prediction into a published pick, hashed. */
+  const cfgRow=(k,v)=>`<tr><td class="team">${esc(k)}</td><td class="num">${
+     esc(typeof v==="boolean"?(v?"yes":"no"):v)}</td></tr>`;
+  const cfg=V.strategy_config||{};
+  $("#labstrategy").innerHTML=
+    `<table><thead><tr><th>Rule</th><th class="num">Setting</th></tr></thead><tbody>`+
+    Object.keys(cfg).sort().map(k=>cfgRow(k,cfg[k])).join("")+
+    cfgRow("config hash",(V.strategy_hash||"").slice(0,16)+"…")+
+    `</tbody></table>`;
+
+  const WHY={
+    UNRATED_TEAM:"a team the grade sheet does not cover",
+    BORROWED_RATER:"the number came from Elo, not the film — and Elo holds every non-FBS team at one constant",
+    MISSING_MARKET:"no line was on the screen",
+    MISSING_PRICE:"a line but no price, so no honest ROI",
+    BLOWOUT_OUT_OF_DOMAIN:"a spread wider than a grade sheet can express",
+    OUTSIDE_HORIZON:"looked at outside the official window",
+    POST_KICKOFF:"the game had started",
+    STALE_MARKET:"the quote was older than the staleness limit",
+    DEGRADED_AVAILABILITY:"roster information was missing or stale",
+    UNVALIDATED_PROBABILITY:"the market needs a calibrated probability and there is not one yet",
+    EDGE_BELOW_THRESHOLD:"the model and the market agreed",
+    MARKET_DISABLED:"totals and moneylines are off until each is validated on its own",
+    INCOMPLETE_GRADE:"one of the eight position grades was missing",
+    NO_MODEL_NUMBER:"the model produced no number for this game",
+  };
+  const dr=V.declined_reasons||{};
+  const keys=Object.keys(dr).sort((a,b)=>dr[b]-dr[a]);
+  $("#labdeclined").innerHTML = keys.length
+    ? `<thead><tr><th>Reason</th><th class="num">Games</th><th>What it means</th></tr></thead><tbody>${
+       keys.map(k=>`<tr><td class="team">${esc(k)}</td><td class="num strong">${dr[k]}</td>
+         <td class="muted">${esc(WHY[k]||"—")}</td></tr>`).join("")}</tbody>`
+    : `<tbody><tr><td><div class="empty">Nothing has been declined yet — which for a `+
+      `strategy that has evaluated nothing is the expected answer, not a clean board.`+
+      `</div></td></tr></tbody>`;
+
+  /* §27.5 — the transition, stated on the page rather than in a commit message. */
+  $("#labmethod").innerHTML=`<div style="padding:14px 15px;font-size:12.5px;line-height:1.62">
+    <p style="margin:0 0 10px"><b>Until 6 September 2026 a pick was graded against the
+    closing line, and the side was re-derived at grading time</b> from the difference
+    between the model's number and the close. When the market moved across the model's
+    own number, that flipped the side: a published pick on one team could be recorded as
+    a loss on the other. Three of the season's graded results disagreed with the side
+    that was actually published.</p>
+    <p style="margin:0 0 10px">The record now grades <b>the side that was published, at
+    the line it was locked at</b>. The published side is immutable and is never
+    recomputed. Scoring the same picks at the close is kept as a separate diagnostic
+    because it answers a different question — whether the timing was good — and nothing
+    was ever wagered at that number.</p>
+    <p style="margin:0 0 10px">The legacy column is preserved untouched for audit. It is
+    not the headline, and the two are never added together.</p>
+    <p style="margin:0"><b>Champion ${esc(V.champion||"—")}</b> · official horizon
+    ${esc(V.official_horizon||"—")} · strategy ${esc(V.strategy_version||"—")}
+    · every challenger runs shadow and is promoted by a decision, never by a threshold.</p>
+  </div>`;
 }
 
 /* ── chart ───────────────────────────────────────────────────────────
