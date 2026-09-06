@@ -245,7 +245,37 @@ ADDED_COLUMNS = [
     # themselves stay so the withdrawal is auditable and reversible.
     ("picks_log", "voided_at", "TEXT"),
     ("picks_log", "void_reason", "TEXT"),
+
+    # V2 grading semantics. The existing `ats_result` / `ou_result` columns are
+    # NOT repurposed: they hold the legacy close-based, side-recomputed answer and
+    # they keep holding it, because a historical value that is silently
+    # reinterpreted is worse than a wrong one that is labelled. These are the new
+    # facts, recorded beside them.
+    #
+    #   _at_pick   graded at the number actually locked, using the side actually
+    #              published. This is the official record.
+    #   _at_close  the SAME side, graded at the closing number. A diagnostic:
+    #              "was the side also right about the final market?"
+    #
+    # Prices are stored per market and are usually NULL for spreads and totals,
+    # because CFBD supplies moneylines and not juice. NULL means unknown and must
+    # stay unknown -- see grading.american_profit_units.
+    ("picks_log", "ats_result_at_pick", "TEXT"),
+    ("picks_log", "ats_result_at_close", "TEXT"),
+    ("picks_log", "ou_result_at_pick", "TEXT"),
+    ("picks_log", "ou_result_at_close", "TEXT"),
+    ("picks_log", "ats_price_at_pick", "INTEGER"),
+    ("picks_log", "ou_price_at_pick", "INTEGER"),
+    ("picks_log", "ats_closing_price", "INTEGER"),
+    ("picks_log", "ou_closing_price", "INTEGER"),
+    # Which grading rules produced the columns above, so a row graded under one
+    # set of semantics can never be mistaken for a row graded under another.
+    ("picks_log", "grading_version", "TEXT"),
 ]
+
+# Bumped whenever the meaning of a graded column changes. Stamped on every row
+# `ledger.grade` writes.
+GRADING_VERSION = "v2-locked-line-2026.09.06"
 
 # Appended to any query that computes the published record.
 NOT_VOIDED = "voided_at IS NULL"
