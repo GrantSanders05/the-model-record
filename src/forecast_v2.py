@@ -216,6 +216,7 @@ def load_challengers(conn):
     classes = {"residual-grade": models_v2.ResidualGrade,
                "matchup-residual": models_v2.MatchupResidual,
                "form-quality": models_v2.FormQuality,
+               "totals-scoring": models_v2.TotalsScoring,
                "market-baseline": models_v2.MarketBaseline}
     for r in conn.execute(
             "SELECT model_version, model_id, config_json FROM model_registry"
@@ -249,8 +250,8 @@ def load_challengers(conn):
             print("  challenger %s: registry config unreadable — %s"
                   % (r["model_version"], e))
             continue
-        if not art.get("coefficients"):
-            print("  challenger %s: registry row carries no fitted coefficients "
+        if not cls.is_fitted(art):
+            print("  challenger %s: registry row carries no fitted parameters "
                   "— skipped" % r["model_version"])
             continue
         out.append((r["model_version"], cls(art)))

@@ -37,6 +37,10 @@ CHAMPION_FEATURES_V1 = "champion_features_v1"
 # v1 keys is unaffected. Snapshots already recorded keep their own schema string —
 # a payload is content-addressed and an old one is not retro-fitted.
 CHAMPION_FEATURES_V2 = "champion_features_v2"
+# V3 adds season-to-date scoring rates, which is C6's whole input. A NEW string
+# rather than a redefinition of v2: a schema version that means two different
+# payload shapes is exactly what §9.3 exists to prevent, and versions are cheap.
+CHAMPION_FEATURES_V3 = "champion_features_v3"
 
 
 def _parse(ts):
@@ -116,11 +120,29 @@ def _form_basis():
             "params": form_quality.TeamForm().state()}
 
 
+def _scoring(conn, sport, season, as_of, team):
+    """Season-to-date scoring rates for one team, or None if unavailable."""
+    try:
+        from models_v2 import totals as _totals
+    except Exception:                              # noqa: BLE001
+        return None
+    try:
+        ts = _totals.scoring_asof(conn, sport, season, as_of)
+    except Exception as e:                         # noqa: BLE001
+        print("  scoring rates unavailable for %s %s: %s" % (sport, season, e))
+        return None
+    return {"off_pg": round(ts.offence(team), 4),
+            "def_pg": round(ts.defence(team), 4),
+            "games": ts.games(team),
+            "league_mean": round(ts.league_mean(), 4),
+            "shrink_games": ts.shrink_games}
+
+
 def build_feature_snapshot(conn, *, sport, game_id, as_of, model_version,
                            market_policy_version=market_policy.CONSENSUS_V1,
                            champion_state=None, include_availability=False,
                            include_weather=False,
-                           feature_schema=CHAMPION_FEATURES_V2):
+                           feature_schema=CHAMPION_FEATURES_V3):
     """
     Assemble and hash the decision-time facts for one game. -> dict
 
@@ -209,6 +231,11 @@ def build_feature_snapshot(conn, *, sport, game_id, as_of, model_version,
         "form_diff": _form_diff(conn, sport, season, as_of,
                                 g["home_team"], g["away_team"]),
         "form_basis": _form_basis(),
+        # C6's input: points scored and allowed per game to date, shrunk toward
+        # the league mean over the same games. Same settle rule as the form
+        # feature, for the same reason.
+        "home_scoring": _scoring(conn, sport, season, as_of, g["home_team"]),
+        "away_scoring": _scoring(conn, sport, season, as_of, g["away_team"]),
         "availability": None if not include_availability else "not_implemented",
         "weather": None if not include_weather else "not_implemented",
     }

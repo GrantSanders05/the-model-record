@@ -26,6 +26,10 @@ class MarketBaseline(ForecastModel):
     def fit(self, rows):
         return self                       # nothing to fit; that is the point
 
+    @classmethod
+    def is_fitted(cls, artifact):
+        return True                       # always ready; there is nothing to load
+
     def predict(self, payload):
         out = self.empty()
         out["pred_home_margin"] = payload.get("consensus_spread")

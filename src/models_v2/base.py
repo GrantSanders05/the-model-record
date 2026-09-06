@@ -29,6 +29,18 @@ class ForecastModel:
         """Serializable fitted parameters and metadata, for the registry."""
         return {}
 
+    @classmethod
+    def is_fitted(cls, artifact):
+        """
+        Does this artifact carry everything the model needs to predict? -> bool
+
+        Asked of the CLASS rather than guessed by the loader. A loader that looks
+        for one well-known key silently drops every model shaped differently —
+        C6 keeps two sub-artifacts and no top-level coefficients, and would have
+        been skipped on every run with nothing but a log line to say so.
+        """
+        return bool((artifact or {}).get("coefficients"))
+
     @staticmethod
     def empty():
         return {"pred_home_margin": None, "pred_total": None,

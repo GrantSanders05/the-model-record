@@ -1083,6 +1083,72 @@ ok("...and an unfitted E005 predicts nothing at all",
 ok("champion_features_v2 is additive over v1",
    _feat.CHAMPION_FEATURES_V2 != _feat.CHAMPION_FEATURES_V1)
 
+# ── C6: a total is not a spread, and this one knows it ───────────────────────
+from models_v2 import totals as _tot                            # noqa: E402
+
+_ts = _tot.TeamScoring()
+ok("with nothing observed, a team scores the league mean and not zero",
+   _ts.offence("A") == _ts.league_mean() == 24.0)
+_ts.observe(home_team="A", away_team="B", home_score=45, away_score=3)
+ok("one 45-point game does not make a 45-point offence",
+   _ts.offence("A") < 45.0, _ts.offence("A"))
+ok("...and it moved the right way", _ts.offence("A") > _ts.league_mean())
+_gap1 = 45.0 - _ts.offence("A")
+for _ in range(40):
+    _ts.observe(home_team="A", away_team="C", home_score=45, away_score=3)
+_gap41 = 45.0 - _ts.offence("A")
+# The property, not a tolerance: the estimate lies strictly between the league
+# mean and what actually happened, and n moves it toward what happened. A
+# threshold here would be a statement about this fixture rather than the rule.
+ok("...while forty of them move it most of the way",
+   _ts.league_mean() < _ts.offence("A") < 45.0 and _gap41 < _gap1 / 10,
+   "gap after 1: %.2f, after 41: %.2f" % (_gap1, _gap41))
+
+_tot.clear_cache()
+_sc_early = _tot.scoring_asof(_fconn, "cfb", 2026, "2026-09-01T18:00:00+00:00")
+ok("scoring rates use the same settle rule as form",
+   _sc_early.games("A") == 0)
+_tot.clear_cache()
+_sc_late = _tot.scoring_asof(_fconn, "cfb", 2026, "2026-09-09T06:00:00+00:00")
+ok("...and an unpriced game still counts toward SCORING, unlike form",
+   _sc_late.games("D") == 1 and "D" not in _later.games,
+   "scoring saw %d, form saw %r" % (_sc_late.games("D"), _later.games.get("D")))
+
+_c6 = _tot.TotalsScoring({
+    "home": {"coefficients": {"off_pg": 1.0, "opp_def_pg": 1.0, "neutral": 0.0},
+             "intercept": 0.0, "features": ["off_pg", "opp_def_pg", "neutral"],
+             "means": {"off_pg": 0.0, "opp_def_pg": 0.0, "neutral": 0.0},
+             "sds": {"off_pg": 1.0, "opp_def_pg": 1.0, "neutral": 1.0}},
+    "away": {"coefficients": {"off_pg": 1.0, "opp_def_pg": 1.0, "neutral": 0.0},
+             "intercept": 0.0, "features": ["off_pg", "opp_def_pg", "neutral"],
+             "means": {"off_pg": 0.0, "opp_def_pg": 0.0, "neutral": 0.0},
+             "sds": {"off_pg": 1.0, "opp_def_pg": 1.0, "neutral": 1.0}}})
+_pl = {"home_scoring": {"off_pg": 30.0, "def_pg": 20.0},
+       "away_scoring": {"off_pg": 24.0, "def_pg": 26.0}, "neutral_site": 0}
+_o6 = _c6.predict(_pl)
+ok("C6 predicts a total from both sides separately",
+   _o6["pred_total"] == (30.0 + 26.0) + (24.0 + 20.0), _o6["pred_total"])
+# §20.8: do not reuse spread logic. A model with no opinion about who wins must
+# not emit one -- the difference of two shrunk scoring rates has a plausible
+# shape and no thought behind it.
+ok("...and has NO opinion about the spread", _o6["pred_home_margin"] is None)
+ok("no scoring rates, no total — never the league mean standing in for a team",
+   _c6.predict({"neutral_site": 0})["pred_total"] is None)
+
+ok("a model with two fitted sides is fitted", _tot.TotalsScoring.is_fitted(_c6.artifact()))
+ok("CONTROL: one side fitted is not fitted",
+   not _tot.TotalsScoring.is_fitted({"home": _c6.artifact()["home"]}))
+# The loader used to look for a top-level `coefficients` key. C6 has none, and
+# would have been dropped on every run with a log line for a symptom.
+ok("CONTROL: the old top-level-coefficients guard would have dropped C6",
+   not _c6.artifact().get("coefficients"))
+ok("the market baseline needs no artifact at all",
+   MarketBaseline.is_fitted({}) and MarketBaseline.is_fitted(None))
+
+ok("champion_features_v3 is its own string, not a redefinition of v2",
+   len({_feat.CHAMPION_FEATURES_V1, _feat.CHAMPION_FEATURES_V2,
+        _feat.CHAMPION_FEATURES_V3}) == 3)
+
 # ── the registry IS the artifact ─────────────────────────────────────────────
 #
 # The fitted coefficients were written to output/, output/ is in .gitignore, and

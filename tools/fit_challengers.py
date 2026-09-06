@@ -35,6 +35,7 @@ import db                                    # noqa: E402
 import grade_snapshots                       # noqa: E402
 import provenance                            # noqa: E402
 from models_v2 import residual_grade, matchup_residual, form_quality  # noqa: E402
+from models_v2 import totals as totals_model             # noqa: E402
 from models_v2.ridge import predict_ridge    # noqa: E402
 
 TIMING_UNKNOWN = "unknown_historical_current"
@@ -49,7 +50,7 @@ def development_rows(conn, sport, season):
     """
     games = conn.execute(
         "SELECT g.game_id, g.season, g.week, g.home_team, g.away_team, g.kickoff,"
-        "       g.neutral_site, g.home_score, g.away_score, l.home_margin"
+        "       g.neutral_site, g.home_score, g.away_score, l.home_margin, l.total"
         "  FROM games g JOIN lines l ON l.game_id = g.game_id"
         " WHERE g.sport=? AND g.season=? AND g.home_score IS NOT NULL"
         "   AND g.away_score IS NOT NULL AND l.home_margin IS NOT NULL"
@@ -62,17 +63,36 @@ def development_rows(conn, sport, season):
     # the season per row, which is the same arithmetic at 1/800th the cost.
     tf = form_quality.TeamForm(expected_from=form_quality.MARKET)
     tf.new_season(season)
+    ts = totals_model.TeamScoring()
     pending = []                      # (kickoff, home, away, actual, expected)
 
     rows = []
     for g in games:
         while pending and form_quality.settled_before(pending[0][0], g["kickoff"]):
-            _k, h, a, act, exp = pending.pop(0)
+            _k, h, a, act, exp, hs, as_ = pending.pop(0)
             tf.observe(home_team=h, away_team=a, actual_home_margin=act,
                        expected_home_margin=exp)
+            # Scoring rates take EVERY finished game, priced or not: a game with
+            # no line still happened and still put points on a board. Form is the
+            # one that needs an expectation, and skips what it cannot compare.
+            ts.observe(home_team=h, away_team=a, home_score=hs, away_score=as_)
         form_diff = tf.diff(g["home_team"], g["away_team"])
+        scoring = {
+            "off_pg_home": ts.offence(g["home_team"]),
+            "opp_def_pg_home": ts.defence(g["away_team"]),
+            "off_pg_away": ts.offence(g["away_team"]),
+            "opp_def_pg_away": ts.defence(g["home_team"]),
+            "neutral_home": float(g["neutral_site"] or 0),
+            "neutral_away": float(g["neutral_site"] or 0),
+            "home_points": g["home_score"],
+            "away_points": g["away_score"],
+            "scored_games_home": ts.games(g["home_team"]),
+            "actual_total": g["home_score"] + g["away_score"],
+            "market_total": g["total"],
+        }
         pending.append((g["kickoff"], g["home_team"], g["away_team"],
-                        g["home_score"] - g["away_score"], g["home_margin"]))
+                        g["home_score"] - g["away_score"], g["home_margin"],
+                        g["home_score"], g["away_score"]))
         payload = {
             "home_grade_vector": grade_snapshots.vector_of(
                 grade_snapshots.grade_asof(conn, sport, season, g["home_team"],
@@ -97,6 +117,7 @@ def development_rows(conn, sport, season):
             "form_diff": form_diff,
             "market_timing_quality": TIMING_UNKNOWN,
         })
+        row.update(scoring)
         rows.append(row)
     return rows
 
@@ -134,6 +155,44 @@ def evaluate(artifact, rows):
         "improvement": round(math.sqrt(sum(base) / len(base))
                              - math.sqrt(sum(errs) / len(errs)), 3),
     }
+
+
+def evaluate_totals(model, rows):
+    """
+    Totals MAE against the market's, PAIRED on the games that have both.
+
+    Compared to the market TOTAL, not to zero. A totals model is not predicting a
+    residual, so 'the market alone predicts 0' — the right baseline for the
+    spread challengers — is meaningless here.
+    """
+    import math
+    both, own, mkt = [], [], []
+    for r in rows:
+        if r.get("actual_total") is None:
+            continue
+        pred = model.predict({
+            "home_scoring": {"off_pg": r.get("off_pg_home"),
+                             "def_pg": r.get("opp_def_pg_away")},
+            "away_scoring": {"off_pg": r.get("off_pg_away"),
+                             "def_pg": r.get("opp_def_pg_home")},
+            "neutral_site": r.get("neutral_home")})["pred_total"]
+        if pred is None:
+            continue
+        own.append(abs(pred - r["actual_total"]))
+        if r.get("market_total") is not None:
+            both.append((abs(pred - r["actual_total"]),
+                         abs(r["market_total"] - r["actual_total"])))
+            mkt.append(abs(r["market_total"] - r["actual_total"]))
+    if not own:
+        return None
+    out = {"n": len(own), "mae": round(sum(own) / len(own), 3),
+           "rmse": round(math.sqrt(sum(e * e for e in own) / len(own)), 3),
+           "paired_n": len(both)}
+    if both:
+        out["market_mae"] = round(sum(m for _, m in both) / len(both), 3)
+        out["improvement"] = round(out["market_mae"]
+                                   - sum(o for o, _ in both) / len(both), 3)
+    return out
 
 
 def main():
@@ -182,6 +241,42 @@ def main():
               % ", ".join("%s %+.3f" % (k, v) for k, v in top))
         out[name] = {"artifact": art, "train": ev_t, "valid": ev_v}
 
+    # ── C6 totals, fitted and evaluated on its OWN terms ────────────────────
+    #
+    # Not in the loop above, and deliberately: those three predict the market's
+    # spread residual and are scored against "the market predicts zero". A total
+    # is a different quantity with a different baseline — the market's own total —
+    # and running it through the same evaluator would have produced a number that
+    # looked comparable and meant nothing.
+    print("\n── E006 totals (two side models, summed) ──")
+    c6 = None
+    try:
+        c6 = totals_model.TotalsScoring().fit(train, valid=valid)
+    except ValueError as e:
+        print("  not fitted: %s" % e)
+    if c6 is not None:
+        for side in ("home", "away"):
+            sub = c6.artifact()[side]
+            print("  %s side: lambda %g   %s" % (
+                side, sub["lambda"],
+                ", ".join("%s %+.3f" % (k, v) for k, v in
+                          sorted(sub["coefficients"].items(), key=lambda kv: -abs(kv[1])))))
+        for label, rs in (("train", train), ("valid", valid)):
+            ev = evaluate_totals(c6, rs)
+            if ev is None:
+                print("  %s : no scorable row" % label)
+                continue
+            print("  %s : mae %.3f over %d%s" % (
+                label, ev["mae"], ev["n"],
+                ("   vs market total %.3f  (%+.3f) on %d paired"
+                 % (ev["market_mae"], ev["improvement"], ev["paired_n"]))
+                if "market_mae" in ev else "   (no market total to compare)"))
+        ev_v = evaluate_totals(c6, valid)
+        if ev_v and ev_v.get("improvement", 0) <= 0:
+            print("  -> NO IMPROVEMENT on the market total. Shadow, and the")
+            print("     strategy keeps totals_enabled=False — which is the whole")
+            print("     reason that switch exists rather than a threshold.")
+
     if not args.apply:
         print("\nDRY RUN. Re-run with --apply to register these as shadow challengers.")
         return
@@ -204,6 +299,24 @@ def main():
         notes="the market consensus at each forecast's own decision time; the "
               "number every other model has to beat")
     print("  registered C1-market-baseline (%s)" % _mb.model_id)
+
+    if c6 is not None:
+        art = c6.artifact()
+        art["artifact_hash"] = provenance.payload_hash(
+            {k: v for k, v in art.items() if k not in ("home", "away")})
+        version = "%s-%s.%s" % (art["experiment_id"],
+                                dt.datetime.now(dt.timezone.utc).strftime("%Y.%m.%d"),
+                                art["artifact_hash"][:8])
+        forecast_v2.register_model(
+            conn, model_version=version, model_id=art["model_id"],
+            role=forecast_v2.ROLE_CHALLENGER, config=art,
+            feature_schema_version=art["feature_schema"],
+            experiment_id=art["experiment_id"],
+            notes="totals from season-to-date scoring rates, two side models "
+                  "summed; no pace, efficiency, weather or availability term. "
+                  "SHADOW ONLY — the strategy keeps totals off until a totals "
+                  "model is validated on its own evidence")
+        print("  registered %s (%s)" % (version, art["model_id"]))
 
     for name, res in out.items():
         art = res["artifact"]
