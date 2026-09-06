@@ -46,6 +46,8 @@ APPLY = {
     "game_result": ("game_results_v2", "game_id"),
     "snapshot_miss": ("snapshot_misses", "miss_id"),
     "void": ("v2_void_events", "void_id"),
+    "availability": ("availability_events", "event_id"),
+    "weather": ("weather_snapshots", "snapshot_id"),
 }
 
 RECONCILED_TABLES = [t for t, _k in APPLY.values()]

@@ -137,6 +137,14 @@ Deduplicated on **meaning**, not on time: an unchanged status observed hourly is
 the same claim restated, and 700 identical rows a week would bury the four that
 are transitions.
 
+**Journalled, and redacted on the way out.** Both new tables go into the state
+journal because both are non-regenerable — nobody can ask ESPN who was out last
+Thursday, and the temperature at T24 is unknowable once T24 has passed. Weather
+publishes whole. Availability publishes with `impact_points` stripped: who is out
+is a public fact anyone can read, but how far the line moves without him is
+computed by removing him and re-rating all 138 teams from the film grades, which
+makes it a grade number in different units.
+
 **It adjusts no model.** There is no calibrated `P(absent | status, source,
 timing)` and §22.3 ends by forbidding the shortcut of treating Questionable as
 Out. Only tiers 1–3 would ever be eligible. Wiring `DEGRADED_AVAILABILITY` into

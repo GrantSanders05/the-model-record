@@ -732,7 +732,42 @@ ok("...and says what it removed", "qb" in _r["redacted"])
 ok("...and re-hashes what is left, so verification still passes",
    _r["payload_hash"] == pv.payload_hash(_r["payload"]))
 
-# The audit, against the three shapes a leak actually takes.
+# The availability stream is PUBLISHABLE and still redacted, which is a third
+# state and the one most easily got wrong. Who is out is a public fact anyone
+# can read on ESPN. How far the line moves without him is computed by removing
+# him and re-rating all 138 teams from the film grades — a grade number wearing
+# different units, and it does not leave the machine.
+_ae = sev.make_event("availability", {
+    "event_id": "av_1", "team": "Oregon", "player": "A Back",
+    "player_key": "a back", "status": "OUT", "source_tier": 3,
+    "observed_at": "2026-09-03T12:00:00+00:00", "impact_points": 3.2})
+_ar = sev.redact(_ae)
+# The flag means "may this leave unredacted", and availability may not — one
+# field of it is a grade number in different units.
+ok("availability may not leave the machine unredacted",
+   not sev.publishable("availability"))
+ok("...and the modelled point impact is what gets removed",
+   "impact_points" not in _ar["payload"], _ar["payload"])
+ok("...while the status, the player and the timing survive",
+   {"player", "status", "observed_at", "source_tier"} <= set(_ar["payload"]))
+ok("CONTROL: the unredacted event did carry the number",
+   _ae["payload"]["impact_points"] == 3.2)
+ok("weather is published whole — none of it is anyone's private input",
+   sev.publishable("weather")
+   and "wind_mph" in sev.redact(sev.make_event(
+       "weather", {"snapshot_id": "wx_1", "game_id": "g",
+                   "observed_at": "2026-09-03T12:00:00+00:00",
+                   "wind_mph": None, "temperature_f": 71.0}))["payload"])
+
+# Both new streams are non-regenerable, which is the test §14.1 sets for what
+# belongs in durable state at all. A cache loss must not be able to destroy them.
+for _st, _tbl in (("availability", "availability_events"),
+                  ("weather", "weather_snapshots")):
+    ok("%s is exported to the journal" % _st,
+       any(e[0] == _st and e[1] == _tbl for e in sev.EXPORTS))
+    ok("...and replayed back out of it", replay_state.APPLY[_st][0] == _tbl)
+
+# The audit, against the three shapes a leak actually takes.# The audit, against the three shapes a leak actually takes.
 _leak = tempfile.mkdtemp()
 sev.append([_g], _leak, known=set())
 ok("an unredacted grade snapshot is caught", bool(sev.audit_publishable(_leak)))

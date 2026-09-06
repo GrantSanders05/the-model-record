@@ -66,6 +66,19 @@ STREAMS = {
     "snapshot_miss":       ("state/misses",       "day",   True),
     "void":                ("state/voids",        "month", True),
     "model_registry":      ("state/model-registry", "flat", True),
+    # NON-REGENERABLE, both of them, which is the test §14.1 sets. ESPN's answer
+    # to "who is out" is a statement about NOW; nobody can ask it again about
+    # last Thursday, and a lost cache would destroy the transitions permanently.
+    # Same for a forecast: the temperature at T24 is unknowable once T24 is past.
+    #
+    # Availability is FALSE here and that is not "withheld". The flag means "may
+    # this leave the machine UNREDACTED", and availability may not: who is out is
+    # a public fact anyone can read on ESPN, but `impact_points` is computed by
+    # removing the player and re-rating all 138 teams from the film grades. It is
+    # a grade number wearing different units. So the stream publishes with that
+    # one field stripped, exactly the path grade_snapshot takes.
+    "availability":        ("state/availability", "month", False),
+    "weather":             ("state/weather",      "month", True),
 }
 
 # Fields removed from a grade_snapshot before it may leave this machine. What
@@ -80,6 +93,10 @@ STREAMS = {
 REDACTED_FIELDS = {
     "grade_snapshot": ["qb", "rb", "wr", "ol", "dl", "lb", "db", "coach_st",
                        "extra_json"],
+    # How far the line moves without this player is computed by removing him and
+    # re-rating all 138 teams from the film grades. It is a grade number in
+    # different units, and it does not leave the machine.
+    "availability": ["impact_points"],
 }
 
 
@@ -286,6 +303,8 @@ EXPORTS = [
     ("game_result", "game_results_v2", "game_id", "finalized_at"),
     ("snapshot_miss", "snapshot_misses", "miss_id", "detected_at"),
     ("void", "v2_void_events", "void_id", "voided_at"),
+    ("availability", "availability_events", "event_id", "observed_at"),
+    ("weather", "weather_snapshots", "snapshot_id", "observed_at"),
 ]
 
 

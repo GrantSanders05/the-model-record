@@ -170,7 +170,7 @@ because the number itself would still have been correct.
 ## Gates
 
 ```
-158  tracking          58  model            346  V2 integrity
+158  tracking          58  model            355  V2 integrity
  19  migration          9  replay            58  public DOM
 285  research DOM     292  fixture research  58  fixture public
 ```

@@ -55,7 +55,8 @@ jobs:
           want = {"market_quotes", "market_snapshots", "grade_snapshots",
                   "feature_snapshots", "model_registry", "forecast_log",
                   "strategy_evaluations", "signal_log", "game_results_v2",
-                  "snapshot_misses", "v2_void_events", "v2_migrations"}
+                  "snapshot_misses", "v2_void_events", "v2_migrations",
+                  "availability_events", "weather_snapshots"}
           missing = sorted(want - have)
           assert not missing, "missing from a fresh database: %s" % missing
           cols = {c["name"] for c in conn.execute("PRAGMA table_info(picks_log)")}
@@ -63,6 +64,27 @@ jobs:
           assert need <= cols, "picks_log is missing %s" % sorted(need - cols)
           print("fresh database: %d tables, picks_log has the V2 columns" % len(have))
           PY
+
+      # THE PAGE SUITES ARE NOT HERE, and the reason is data rather than
+      # permissions. `tools/make_fixture.py` reads the real `data/model.db` and
+      # the last `output/research/data.json` to build its bundle; a fresh
+      # checkout has neither, and inventing a bundle would test the invention.
+      # They run in `update.yml`, where the cache is restored. If they ever need
+      # to gate a pull request, the fixture has to become self-contained first —
+      # that is the change, not moving the step.
+
+      # The page JS still gets a syntax check here, because a broken script tag
+      # renders an empty page that every server-side test passes right through.
+      - name: The research page parses
+        run: |
+          node -e "
+          const fs=require('fs');
+          const html=fs.readFileSync('site/research/index.html','utf8');
+          const m=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+          if(!m.length) throw new Error('no inline script found in the research page');
+          for(const s of m) new Function(s[1]);
+          console.log('research page: '+m.length+' inline script block(s) parse');
+          "
 
       - name: Every module imports
         run: |
