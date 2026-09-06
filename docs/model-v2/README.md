@@ -10,7 +10,7 @@
 2. [`ROADMAP.md`](./ROADMAP.md) — target V2 model architecture, validation framework, feature plan, champion/challenger design, and prioritized implementation phases.
 3. [`AUTOMATION-DATA-PLAN.md`](./AUTOMATION-DATA-PLAN.md) — exact data, snapshot, scheduling, persistence, availability, weather, and market-line automation plan.
 4. [`EXPERIMENT-REGISTER.md`](./EXPERIMENT-REGISTER.md) — pre-registration log for every model change. This is the anti-overfitting memory of the project.
-5. [`CLAUDE-OPUS-HANDOFF.md`](./CLAUDE-OPUS-HANDOFF.md) — repository-side coding-agent handoff. Use it together with the full generated `Model_Record_V2_Master_Implementation_Build_Doc.md` when implementation begins.
+5. [`CLAUDE-OPUS-HANDOFF.md`](./CLAUDE-OPUS-HANDOFF.md) — repository-side coding-agent handoff. Use it together with the full generated `Model_Record_V2_Master_Implementation_Build_Doc.md` when implementation begins. The handoff records the expected SHA-256 of that generated master file.
 
 ## The operating rule from this point forward
 
