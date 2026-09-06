@@ -261,6 +261,120 @@ ok("a side naming neither team is left ungraded, not booked as a loss",
    row3["ats_result_at_pick"] is None, row3["ats_result_at_pick"])
 
 
+# ══ 25.2 PROVENANCE ═══════════════════════════════════════════════════════════
+
+print("\n── a forecast can prove what produced it ──")
+
+import provenance as pv                                         # noqa: E402
+import engine                                                   # noqa: E402
+
+# Python dict order, float repr and unicode escaping all vary. If any of them
+# reach the hash, "has the config changed?" has two answers and neither is usable.
+a = {"b": 1, "a": {"y": 2, "x": 1}, "z": [3, 1, 2]}
+b = {"z": [3, 1, 2], "a": {"x": 1, "y": 2}, "b": 1}
+ok("key order does not change the hash", pv.payload_hash(a) == pv.payload_hash(b))
+ok("...nor the id built from it",
+   pv.stable_id("forecast", a) == pv.stable_id("forecast", b))
+ok("list ORDER does change it, because a list is ordered data",
+   pv.payload_hash({"z": [1, 2, 3]}) != pv.payload_hash({"z": [3, 2, 1]}))
+ok("an id says what kind of thing it identifies",
+   pv.stable_id("signal", a).startswith("sg_") and pv.stable_id("market_quote", a).startswith("mq_"))
+unknown = None
+try:
+    pv.stable_id("nonsense", a)
+except ValueError as e:
+    unknown = str(e)
+ok("an unknown id kind raises rather than inventing a prefix", unknown is not None)
+
+# THE FULLY MERGED CONFIG IS THE IDENTITY. Hashing the sparse file makes a
+# forecast irreproducible the moment a default moves: same file, same hash,
+# different model.
+sparse = {"scale": 1.311}
+h_default = pv.config_hash(sparse)
+moved_defaults = dict(engine.DEFAULT_CONFIG, hfa=99.0)
+h_moved = pv.config_hash(sparse, defaults=moved_defaults)
+ok("a config's hash covers the defaults it inherits", h_default != h_moved,
+   "a moved default must change the hash of an unchanged file")
+ok("...and an explicit value overrides the default it replaces",
+   pv.config_hash(dict(sparse, hfa=99.0)) == pv.config_hash(sparse, defaults=moved_defaults))
+ok("runtime payloads are not part of identity",
+   pv.config_hash(sparse) == pv.config_hash(dict(sparse, _grades={"x": 1})),
+   "an injected _grades blob must not change the model version")
+ok("the merged config is complete", set(engine.DEFAULT_CONFIG) <= set(pv.merged_config(sparse)))
+
+sha, dirty = pv.git_sha()
+ok("the running code can name itself", bool(sha), sha)
+ok("...and knows whether the tree is dirty", dirty in (True, False), dirty)
+okay, why = pv.official_ready("abc123", False)
+ok("clean, identified code may sign an official record", okay)
+okay2, why2 = pv.official_ready("abc123", True)
+ok("a dirty tree may not", not okay2 and "dirty" in why2, why2)
+okay3, why3 = pv.official_ready(None, False)
+ok("...nor may code that cannot say what it is", not okay3, why3)
+
+print("\n── the V2 schema reaches an existing database, not only a fresh one ──")
+_fresh = _db.connect(os.path.join(tempfile.mkdtemp(), "fresh.db"))
+_v2_tables = ["market_quotes", "market_snapshots", "grade_snapshots",
+              "feature_snapshots", "model_registry", "forecast_log",
+              "strategy_evaluations", "signal_log", "game_results_v2",
+              "snapshot_misses", "v2_void_events", "v2_migrations"]
+_have = {r[0] for r in _fresh.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+ok("a fresh database has every V2 table", set(_v2_tables) <= _have,
+   sorted(set(_v2_tables) - _have))
+# The one that actually matters: a database created before V2 existed. A
+# migration that only works on a fresh database is broken (build doc §26).
+# Built from the pre-V2 schema exactly -- db.SCHEMA with no SCHEMA_V2 and no
+# _migrate -- which is what every database restored from the Actions cache is.
+_legacy_path = os.path.join(tempfile.mkdtemp(), "old.db")
+_old = sqlite3.connect(_legacy_path)
+_old.executescript(_db.SCHEMA)
+_old.execute("INSERT INTO games (game_id, sport, season, week, home_team, away_team)"
+             " VALUES ('old1','cfb',2025,1,'H','A')")
+_old.execute("INSERT INTO picks_log (game_id, sport, season, week, home_team,"
+             " away_team, published_at, config_label, ats_result)"
+             " VALUES ('old1','cfb',2025,1,'H','A','2025-09-01','old','L')")
+_old.commit()
+_old.close()
+_upgraded = _db.connect(_legacy_path)
+_have2 = {r[0] for r in _upgraded.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+ok("a pre-V2 database gets them too", set(_v2_tables) <= _have2,
+   sorted(set(_v2_tables) - _have2))
+_cols = {r["name"] for r in _upgraded.execute("PRAGMA table_info(picks_log)")}
+ok("...and an existing picks_log gains the V2 result columns",
+   {"ats_result_at_pick", "ats_result_at_close", "grading_version"} <= _cols,
+   sorted({"ats_result_at_pick", "ats_result_at_close", "grading_version"} - _cols))
+ok("...without losing the column it already had", "ats_result" in _cols)
+ok("...and without losing the row that was in it",
+   dict(_upgraded.execute("SELECT * FROM picks_log WHERE game_id='old1'").fetchone()
+        )["ats_result"] == "L")
+
+
+print("\n── the moat covers what the tools actually write ──")
+#
+# migrate_v2 writes `data/model.pre-v2-<stamp>.db` before it applies: a
+# byte-for-byte copy of the grade database. `.gitignore` listed `data/model.db`
+# by exact name, which does not match it, so two 20 MB copies of the moat sat
+# untracked and unignored, one `git add -A` from a public repository.
+#
+# The rule is checked against the FILENAMES THE CODE PRODUCES, not against a
+# remembered list, because the pattern only has to fall behind the code once.
+import subprocess                                               # noqa: E402
+
+def _ignored(rel):
+    r = subprocess.run(["git", "check-ignore", "-q", rel], cwd=ROOT_DIR)
+    return r.returncode == 0
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_stamp = "20260906T050202Z"
+for name in ["data/model.db",
+             "data/model.pre-v2-%s.db" % _stamp,      # migrate_v2.backup()
+             "data/model.db-wal", "data/model.db-shm",
+             "output/research/data.json", "output/v2_migration_report.json"]:
+    ok("the moat ignores %s" % name, _ignored(name))
+ok("...and does not ignore the source it is protecting",
+   not _ignored("src/migrate_v2.py"))
+
+
 # ── proving this section can fail ────────────────────────────────────────────
 print("\n── proving these can fail ──")
 _before = F
