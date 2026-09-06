@@ -616,7 +616,7 @@ dozens of plausible interactions and 800 games will happily rank one best;
 choosing after looking is how a model acquires a beautiful backtest and no
 future.
 
-## E005 — continuous team form — **BUILT, not yet fitted**
+## E005 — continuous team form — **FITTED, shadow**
 
 `models_v2/form_quality.py`. Exponentially decayed, winsorized performance
 residual, shrunk hard early in a season, cleared between seasons.
@@ -629,10 +629,80 @@ different questions.
 **The Champion's threshold rule is untouched**, and a test asserts `engine.py`
 does not import this module.
 
+Fitted 2026-09-06 on 2025 development data, one term, lambda chosen on the same
+held-out late-season split as E003 and E004:
+
+```
+        RMSE     market RMSE   improvement
+train   15.042   15.086        +0.043
+valid   14.929   14.891        −0.038
+```
+
+Standardized coefficient `form_diff +0.075`, and lambda 100 — the top of the
+grid again. It is the least bad of the three on held-out data, and the reason is
+that it is the most heavily shrunk toward doing nothing. That is not a finding
+about form; it is the fitter declining to commit.
+
+**The feature is replayed, not stored.** A game enters a team's form only once it
+had certainly finished — kickoff plus six hours, not kickoff — and a game with no
+line contributes nothing rather than its raw margin, which would have made form
+mean "how much did you win by" for exactly the games the market did not price.
+
+## E006 — totals from scoring rates — **FITTED, shadow**
+
+`models_v2/totals.py`. §20.8 opens with *do not reuse spread logic*, so this does
+not predict the market's residual. It predicts **both team scores separately**
+from season-to-date points scored and allowed, each shrunk toward the league mean
+over the same games, and adds them. Two fits, because a home offence facing a
+road defence is not the mirror of the reverse.
+
+```
+        MAE      market total MAE   improvement
+train   13.082   12.673             −0.383
+valid   12.993   12.257             −0.736
+```
+
+**It chose the BOTTOM of the lambda grid**, 0.01, where the three spread models
+all chose the top. The scoring rates carry real signal about totals; there is
+simply less of it than the market already has. That is a different result from
+"shrink it to nothing" and is recorded as one.
+
+It emits no spread. The difference of two shrunk scoring rates has a plausible
+shape and no thought behind it, and a test asserts `pred_home_margin` is None.
+
+The strategy keeps `totals_enabled: False`. That switch is a switch rather than a
+threshold precisely so that a model losing by 0.74 points cannot promote itself.
+
+## C5 line movement — **NOT FITTED, and the reason is a data fact**
+
+§20.7 asks whether grade changes and model residuals predict the later market,
+targeting `closing_consensus_spread − current_consensus_spread`. The obvious
+source is the `lines` table, which holds `home_margin_open` and `home_margin` for
+816 completed 2025 games with 645 non-zero moves.
+
+**It cannot be used, because `home_margin_open` has no observation timestamp.**
+The columns are `game_id, provider, home_margin, home_margin_open, total,
+total_open, home_ml, away_ml` — there is no time on the opener, so no feature can
+be honestly dated to it. Grades published between the open and the close would
+sit in the feature set and predict the move trivially, and the model would look
+excellent for the worst possible reason. That is §13's *do not ingest a
+retrospective rating and pretend it was available in that exact form
+historically*, arrived at from the other direction.
+
+The leak-free source is `market_quotes`, which is append-only and timestamped and
+which V2 started collecting this month. C5 is blocked on sample, not on design,
+and the thing that unblocks it is already running.
+
+## C4 preseason/public priors — not started
+
+§20.6 says "later phase" and assigns it to none. Returning production, transfer
+movement and talent composites would improve early-season priors; nothing here
+touches them.
+
 ## What the failures mean
 
-Two challengers built on the film grades do not beat the closing line on
-development data. That is not the same as "the grades are worthless" — the
+Three challengers built on the film grades do not beat the closing line on
+development data, and a fourth does not beat the market total. That is not the same as "the grades are worthless" — the
 Champion uses them differently, and the development market number is one
 preferred provider at an unrecorded time rather than a T2 consensus, which is a
 different data regime from the one the models will forecast in.

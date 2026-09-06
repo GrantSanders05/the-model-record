@@ -31,13 +31,14 @@ Totals had the identical shape via `model_total − closing_total`.
 **New:** `src/grading.py` · `provenance.py` · `market.py` · `market_policy.py` ·
 `grade_snapshots.py` · `features_v2.py` · `forecast_v2.py` · `horizons.py` ·
 `signals.py` · `metrics_v2.py` · `state_events.py` · `replay_state.py` ·
-`migrate_v2.py` · `api_budget.py` · `public_export.py` ·
-`models_v2/{base,market_baseline,ridge,residual_grade,matchup_residual,form_quality}.py` ·
+`migrate_v2.py` · `api_budget.py` · `public_export.py` · `availability.py` ·
+`weather.py` ·
+`models_v2/{base,market_baseline,ridge,residual_grade,matchup_residual,form_quality,totals}.py` ·
 `tools/{test_v2_integrity.py,compare_champion.py,fit_challengers.py,state_commit.sh}` ·
 `.github/workflows/{ci,v2-forecast-snapshots,v2-state-commit}.yml` ·
 `docs/model-v2/{METHODOLOGY,DATA-DICTIONARY,OPERATIONS}.md`
 
-**Changed:** `db.py` (12 V2 tables, 9 columns, no removals) · `ledger.py` ·
+**Changed:** `db.py` (14 V2 tables, 9 columns, no removals) · `ledger.py` ·
 `fetch_cfb.py` · `sync_grades.py` · `predict.py` · `best_bets.py` ·
 `research_export.py` · `publish.py` · `run_update.py` · `metrics.py` (one rename
 with a deprecated alias) · `tools/{test_model,make_fixture,health_check}.py` ·
@@ -88,19 +89,41 @@ thinks.
 
 ---
 
-## Challengers — both fitted ones failed
+## Challengers — every fitted one lost, and every loss is recorded
 
 ```
-E003 residual ridge     valid RMSE 15.146 vs market 14.891   (−0.255)
-E004 matchup residual   valid RMSE 15.035 vs market 14.891   (−0.144)
+E003 residual ridge     valid RMSE 15.146 vs market 14.891   (−0.255)  lambda 100
+E004 matchup residual   valid RMSE 15.035 vs market 14.891   (−0.144)  lambda 100
+E005 form quality       valid RMSE 14.929 vs market 14.891   (−0.038)  lambda 100
+E006 totals scoring     valid  MAE 12.993 vs market 12.257   (−0.736)  lambda 0.01
 ```
 
-Both chose lambda 100, the top of the grid — the fitter shrinking as hard as it
-is allowed to. Registered as shadow anyway; a negative recorded is worth more
-than one quietly dropped. C1 market-baseline and E005 form are built and running
-shadow; E005 is not yet fitted.
+The three spread models all chose lambda 100, the top of the grid — the fitter
+shrinking as hard as it is allowed to. E005 is the least bad of them precisely
+because it is shrunk hardest toward doing nothing, which is the fitter declining
+to commit rather than a finding about form.
+
+**E006 is the one that is different.** It chose the *bottom* of the grid: season
+scoring rates carry real signal about totals, there is simply less of it than the
+market already has. C1 market-baseline runs beside all of them so every
+comparison is against the line as well as against the Champion.
+
+Nothing is promoted. `totals_enabled` and `moneyline_enabled` stay false.
 
 ---
+
+## The model lab
+
+§27.4 and §27.5 are on the research page now: four scoreboards as four cards that
+are never summed, a challenger table **ordered by role and never by win rate**,
+the hashed strategy config, the decline reasons in English, the probability
+scoreboard, the shadow layers, and the legacy→locked methodology note stated on
+the page rather than in a commit message.
+
+`vs market` inverts the page's sign convention — negative is the model doing
+better — and is coloured by meaning, with a control asserting a better-than-market
+model is not painted red. That mistake would have been invisible for a season,
+because the number itself would still have been correct.
 
 ## Five things found while building
 
@@ -123,14 +146,33 @@ shadow; E005 is not yet fitted.
    `data/model.pre-v2-<stamp>.db` — two 20 MB copies of the grade database were
    untracked and unignored.
 
+## Three more, found finishing it
+
+6. **No challenger had ever forecast in production.** Fitted artifacts were
+   written to `output/`, `output/` is in `.gitignore`, and the Actions cache
+   carries `data/` and not `output/`. Every scheduled run found no artifact file
+   and skipped every challenger — precisely the "accumulates a record of the
+   games it happened to be alive for" failure `load_challengers`' own docstring
+   warns about, announced only in a log line nobody reads. Challengers rehydrate
+   from `model_registry.config_json` now, which is the row `register_model`
+   hashed to establish the version's identity.
+
+7. **The loader's fitted-check would have dropped C6 the same way.** It looked
+   for a top-level `coefficients` key; C6 keeps two sub-artifacts and has none.
+   `is_fitted()` is asked of the class now.
+
+8. **The weather matcher used ESPN's `displayName`**, which carries the mascot —
+   "Washington Huskies" against this database's "Washington". Four events
+   fetched, four unmatched, zero stored, and the run reported a successful fetch.
+
 ---
 
 ## Gates
 
 ```
-158  tracking          58  model            244  V2 integrity
+158  tracking          58  model            346  V2 integrity
  19  migration          9  replay            58  public DOM
-226  research DOM     233  fixture research  58  fixture public
+285  research DOM     292  fixture research  58  fixture public
 ```
 
 `ci.yml` runs the secretless subset on every branch. `update.yml` declared
@@ -152,11 +194,39 @@ headline automatically when `signal_log` holds no official signals.
 
 ---
 
+## Phase 3, built as shadow
+
+**§22 availability.** `roster_watch` already fetched ESPN and priced each absence
+in points of spread, then overwrote its report every run. `availability_events` is
+append-only, deduplicated on meaning rather than time, tiered by source, with an
+as-of reader and §22.4's line-movement evaluation against the quote history. It
+adjusts nothing: no calibrated `P(absent | status)` exists, and §22.3 forbids
+turning Questionable into Out.
+
+**§23 weather.** Built, and the variable §23 names is not in it. ESPN's scoreboard
+publishes temperature, a condition and a dome flag and **no wind**. The columns
+exist and stay NULL rather than holding a proxy, and the gap is stated in the
+module, the bundle and on the page. `indoor` is a verified fact and the largest
+weather effect there is.
+
+**§20.8 totals.** E006, above. Predicts both team scores separately from scoring
+rates and sums them — §20.8 opens with *do not reuse spread logic*.
+
+**§19 probability.** Brier, log loss and five-band calibration against the
+de-vigged market probability from the same snapshot, with the base-rate model's
+score beside it. `enables_moneyline` is false with a reason.
+
+**§19.4 week-block bootstrap.** Paired comparisons now carry an interval
+resampled over whole weeks, not games.
+
 ## Not built
 
-**Phase 3 — availability, weather, totals, moneyline probability.** Gated in the
-build document on a clean prospective pipeline existing first. It now does. Not
-started, rather than half-started.
+**C4 preseason priors (§20.6)** — the document says "later phase".
+
+**C5 line movement (§20.7)** — blocked on data, not design.
+`lines.home_margin_open` has no observation timestamp, so nothing can be honestly
+dated to the open and any fit would leak. `market_quotes` is the leak-free source
+and started this month.
 
 **Three of the four Phase 2A workflows.** `v2-forecast-snapshots.yml` was built
 because a horizon window is 20–60 minutes wide and nothing else runs on that
@@ -165,10 +235,4 @@ clock; it refreshes the market itself before forecasting, which is what
 `update.yml`'s cadence, and a second job writing the same database cache is how a
 half-populated database becomes the base every later run restores from.
 
-**The research page's Champion-vs-Challenger UI.** The data is exported in the
-bundle's `v2` block — four scoreboards, every model with its paired comparison,
-the strategy config and hash, and the decline reasons — and no section renders it
-yet.
-
-**E005 is unfitted.** The module, its guardrails and its tests exist; no
-coefficients have been estimated.
+**Wind.** No free source wired here carries it.

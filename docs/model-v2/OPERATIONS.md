@@ -76,12 +76,40 @@ cannot be recovered and a season of PPA can.
 `<=`. Check `effective_at`: a snapshot effective one minute after the forecast is
 invisible to it, by design.
 
+## The shadow layers, and what "shadow" means here
+
+Availability, weather, totals and win probability are all **recorded, measured
+and consumed by nothing**. That is a deliberate state, not an unfinished one, and
+each has its own reason:
+
+| Layer | Recorded by | Why it adjusts nothing |
+|---|---|---|
+| Availability §22 | `availability.py --sync`, after `roster_watch` | no calibrated `P(absent \| status, source, timing)`; §22.3 forbids turning Questionable into Out |
+| Weather §23 | `weather.py --days 3` | the wired source publishes no wind, which is the variable §23 names |
+| Totals §20.8 | `E006`, every forecast round | loses to the market total by 0.74 points on held-out data |
+| Win probability §19 | `metrics_v2.probability_quality` | no prospective calibration sample a human has read |
+
+Turning any of them on is a **strategy version change** — the config is hashed and
+the version identifies the record, so flipping `totals_enabled` or adding an
+availability rule starts a new prospective record rather than continuing this one.
+That is the intended cost.
+
+```bash
+# the shadow layers, run by the scheduler and runnable by hand
+python3 src/availability.py --sport cfb --season 2026 --sync
+python3 src/availability.py --sport cfb --season 2026 --movement   # §22.4
+python3 src/weather.py --sport cfb --days 3
+```
+
 ## What is deliberately not built
 
-- **Availability (§22)** and **weather (§23)**. Both are Phase 3 in the build
-  document, gated on a clean prospective pipeline existing first. It now does;
-  they have not been started.
-- **Totals (§20.8)** and **moneyline probability (§19)**. Disabled in the
-  strategy rather than half-built.
+- **C4 preseason/public priors (§20.6).** The build document says "later phase"
+  and assigns it to none.
+- **C5 line movement (§20.7).** Blocked on data, not on design:
+  `lines.home_margin_open` carries no observation timestamp, so no feature can be
+  honestly dated to it and any fit would leak. The leak-free source is
+  `market_quotes`, which is timestamped and started this month.
+- **Wind.** The columns exist and stay NULL until a source that carries it is
+  added. A proxy would be worse than the gap.
 - **Kelly staking** on official signals. The build document is explicit: keep
   Kelly out until probability calibration is demonstrated prospectively.

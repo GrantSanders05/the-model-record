@@ -118,6 +118,50 @@ The reconciliation report, stored, so its numbers can be re-read later.
 
 ---
 
+## `availability_events` — who is not playing, as a sequence
+
+Append-only, and that is the whole design. §22.2 wants "Questionable at T72,
+Probable at T24, Out at T2" to be three rows, because a single mutable status
+column answers "what do we believe now" and destroys the only training data
+there will ever be for what a status at a given distance from kickoff is worth.
+
+| Column | Meaning |
+|---|---|
+| `status` | one of `OUT`, `SUSPENDED`, `DOUBTFUL`, `QUESTIONABLE`, `PROBABLE`, `ACTIVE`, `UNKNOWN` |
+| `status_raw` | the source's own wording, kept so a mapping change is re-derivable |
+| `source_tier` | 1 conference report · 2 school announcement · 3 verified feed · 4 beat reporter · 5 aggregator · 6 rumour |
+| `impact_points` | how far this team's line moves if he does not play, on the model's own scale |
+| `observed_at` | when the claim was read, not when it was made |
+
+Deduplicated on **meaning**, not on time: an unchanged status observed hourly is
+the same claim restated, and 700 identical rows a week would bury the four that
+are transitions.
+
+**It adjusts no model.** There is no calibrated `P(absent | status, source,
+timing)` and §22.3 ends by forbidding the shortcut of treating Questionable as
+Out. Only tiers 1–3 would ever be eligible. Wiring `DEGRADED_AVAILABILITY` into
+the decision rule is a **strategy version change**, not a switch inside a data
+module.
+
+## `weather_snapshots` — what the forecast said, when it said it
+
+Append-only for the same reason quotes are: "what is the weather" is a question
+about a moment, and a row updated as kickoff approaches destroys the record of
+what was knowable at T48.
+
+| Column | Meaning |
+|---|---|
+| `indoor` | a **fact**, not a forecast, and the largest weather effect there is |
+| `temperature_f`, `condition`, `condition_id` | as published, at `observed_at` |
+| `wind_mph`, `gust_mph` | **always NULL today** — see below |
+| `horizon` | the nearest standardized horizon, a label and not a punctuality claim |
+
+**The variable §23 names is wind, and the source does not carry it.** ESPN's
+scoreboard — free, no key, one request per date, already wired here for rosters —
+publishes temperature, a condition string and a dome flag and no wind at all. The
+columns exist and stay empty rather than holding a proxy. A still day and an
+unmeasured day are not the same day, and zero would read as the former.
+
 ## The state journal
 
 `state/<stream>/<partition>.jsonl`, one event per line.

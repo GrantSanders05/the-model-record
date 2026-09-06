@@ -204,6 +204,47 @@ outcomes. When a version changes, the old one keeps its record and the new one
 starts a new bucket. A new model's backfilled history is a diagnostic, not
 evidence.
 
+## Win probability
+
+Scored with Brier and log loss against the **de-vigged market probability from
+the same feature snapshot** — the same-time baseline §19.2 requires. Scoring a
+T2 model probability against a closing price would flatter the model for being
+late rather than for being right.
+
+A Brier score means nothing on its own, so the score a model that always
+predicted the base rate would have achieved is reported beside it, and
+calibration is reported in five bands rather than as one number.
+
+A probability at exactly 0 or 1 is a claim of certainty about a football game.
+Those are clipped, and the count of clipped rows is published — a model doing it
+often is telling you something about itself.
+
+**Measuring a probability does not authorise betting one.** `moneyline_enabled`
+stays `false` in the strategy until a prospective calibration sample exists that
+a human has read, per §12.5.
+
+## Intervals
+
+ATS records carry Wilson intervals with the −110 break-even (52.38%) printed
+beside them, and the page says "not yet separated from break-even" rather than
+using significance language.
+
+Paired Champion-vs-challenger comparisons carry a **week-block bootstrap**
+interval, fixed seed. Games inside one weekend share the market, the news cycle
+and the weather; resampling games treats forty correlated observations as forty
+independent ones and reports an interval too narrow to be true — flattering, and
+wrong in the direction that promotes a challenger. Below four weeks it returns a
+reason instead of an interval, because three weekends labelled 95% is fake
+precision.
+
+## Shadow layers
+
+Availability (§22) and weather (§23) are recorded and evaluated, and **adjust
+nothing**. Their reasons differ and both are stated on the page: availability has
+no calibrated probability of absence, and weather has no wind from the one source
+wired. A layer that says "shadow" in a docstring and shows numbers on a dashboard
+is read as an input the model uses.
+
 ## Durability
 
 The Actions cache is an accelerator. The record is an append-only JSONL journal

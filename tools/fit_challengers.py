@@ -93,13 +93,13 @@ def development_rows(conn, sport, season):
         pending.append((g["kickoff"], g["home_team"], g["away_team"],
                         g["home_score"] - g["away_score"], g["home_margin"],
                         g["home_score"], g["away_score"]))
+        home_snap = grade_snapshots.grade_asof(conn, sport, season,
+                                              g["home_team"], g["kickoff"])
+        away_snap = grade_snapshots.grade_asof(conn, sport, season,
+                                              g["away_team"], g["kickoff"])
         payload = {
-            "home_grade_vector": grade_snapshots.vector_of(
-                grade_snapshots.grade_asof(conn, sport, season, g["home_team"],
-                                           g["kickoff"])),
-            "away_grade_vector": grade_snapshots.vector_of(
-                grade_snapshots.grade_asof(conn, sport, season, g["away_team"],
-                                           g["kickoff"])),
+            "home_grade_vector": grade_snapshots.vector_of(home_snap),
+            "away_grade_vector": grade_snapshots.vector_of(away_snap),
             "consensus_spread": g["home_margin"],
             "neutral_site": g["neutral_site"],
         }
@@ -115,7 +115,24 @@ def development_rows(conn, sport, season):
             "actual_margin": actual,
             "residual": actual - g["home_margin"],
             "form_diff": form_diff,
+            # §31, the research dataset contract. Every row says what kind of
+            # information it is made of, so a development row and an exact
+            # prospective one cannot be mixed by accident later — which is the
+            # one thing §31 says must not happen silently.
+            "season": g["season"],
+            "forecast_time": None,
+            "horizon": None,
             "market_timing_quality": TIMING_UNKNOWN,
+            "market_snapshot_id": None,
+            "grade_home_snapshot_id": (home_snap["grade_snapshot_id"]
+                                       if home_snap else None),
+            "grade_away_snapshot_id": (away_snap["grade_snapshot_id"]
+                                       if away_snap else None),
+            "grade_timing_quality": "asof_kickoff",
+            "feature_schema": "development_rows_v1",
+            "market_margin_same_time": None,
+            "closing_margin": g["home_margin"],
+            "eligible_prospective": 0,
         })
         row.update(scoring)
         rows.append(row)

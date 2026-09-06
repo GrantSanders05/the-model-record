@@ -1175,6 +1175,24 @@ _fv2.register_model(_lc_conn, model_version="E098-empty", model_id="form-quality
 ok("CONTROL: a registry row with no coefficients is skipped, not run empty",
    "E098-empty" not in dict(_fv2.load_challengers(_lc_conn)))
 
+# ── §31 the research dataset contract ────────────────────────────────────────
+#
+# The one thing §31 says must not happen: development rows mixed silently with
+# exact prospective ones. Every row therefore names its own information quality.
+_CONTRACT = ("game_id", "season", "week", "kickoff", "forecast_time", "horizon",
+             "market_timing_quality", "market_snapshot_id",
+             "grade_home_snapshot_id", "grade_away_snapshot_id",
+             "grade_timing_quality", "feature_schema", "actual_margin",
+             "market_margin_same_time", "closing_margin", "eligible_prospective")
+_fit_src = open(os.path.join(ROOT, "tools", "fit_challengers.py")).read()
+for _f in _CONTRACT:
+    ok("a development row carries %s" % _f, '"%s"' % _f in _fit_src)
+ok("...and a development row is NOT flagged as prospective evidence",
+   '"eligible_prospective": 0' in _fit_src,
+   "2025 has been used to choose terms by a human who saw the results")
+ok("...and says its market number is not an exact-horizon snapshot",
+   'TIMING_UNKNOWN = "unknown_historical_current"' in _fit_src)
+
 # ── §19.4 the block bootstrap, and why it is blocked by week ─────────────────
 import metrics_v2 as _m19                                       # noqa: E402
 import random as _rnd                                           # noqa: E402
