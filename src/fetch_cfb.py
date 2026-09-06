@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import datetime as dt
 import json
 import os
 import sys
@@ -179,9 +180,58 @@ def _pick_line(lines):
     return None, None
 
 
+def all_line_rows(raw, observed_at=None):
+    """
+    EVERY provider quote, normalized. -> [market.build_quote(...)]
+
+    `lines_rows` below keeps one preferred provider per game, chosen at ingest,
+    and throws the rest away. That is fine for a display table and destroys the
+    research: consensus, dispersion, best price, and whether a disagreement is
+    with the market or with one slow book all live in the quotes it discards.
+
+    This keeps them. Same sign normalization, same one place -- CFBD's `spread`
+    is negative when the HOME team is favoured, house convention is positive, so
+    home_spread = -spread.
+
+    `observed_at` is when THIS SYSTEM saw the quote, which is the only timestamp
+    available: the feed does not say when a book posted a number. It is recorded
+    as an observation time and never as a claim about when the market moved.
+    """
+    import market
+    if observed_at is None:
+        observed_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    out = []
+    for g in raw:
+        gid = "cfb-%s" % g["id"]
+        for line in (g.get("lines") or []):
+            spread = line.get("spread")
+            q = market.build_quote(
+                sport="cfb", game_id=gid, provider=line.get("provider"),
+                observed_at=observed_at,
+                home_spread=(-float(spread) if spread is not None else None),
+                total=line.get("overUnder"),
+                home_ml=line.get("homeMoneyline"), away_ml=line.get("awayMoneyline"),
+                # CFBD carries no spread or total juice. NULL, not -110: see
+                # grading.american_profit_units for why that matters.
+                home_spread_price=None, away_spread_price=None,
+                over_price=None, under_price=None,
+                # The raw name, kept beside the canonical one. "Draft Kings"
+                # and "DraftKings" both become DraftKings for consensus, and
+                # this is how you can still tell which row was which.
+                source="cfbd/lines:%s" % (line.get("provider") or "?"))
+            if q is not None:
+                out.append(q)
+    return out
+
+
 def lines_rows(raw):
     """
-    Normalize CFBD spreads to the house convention.
+    Normalize CFBD spreads to the house convention, ONE provider per game.
+
+    Kept for the legacy `lines` table, which the display path and every existing
+    reader still use. `all_line_rows` above is the research truth; this is the
+    materialized convenience view of it, and provider selection moves entirely
+    into market_policy once the V2 readers are in place.
 
     CFBD `spread` is negative when the HOME team is favored
     ("Auburn -2" with Auburn at home  ->  spread = -2).
@@ -250,6 +300,26 @@ def fetch_season(conn, season, key, refresh=False, postseason=True):
         db.upsert_lines(conn, lrows)
         # Capture the movement history too -- upsert_lines overwrites, this appends.
         db.snapshot_lines(conn, lrows)
+
+    # AND THE V2 TRUTH: every provider, appended, nothing chosen. The legacy
+    # table above keeps one preferred quote per game because the display path and
+    # every existing reader still want exactly that; this keeps the rest, so a
+    # consensus can be taken later under a named policy instead of a priority
+    # list applied before anyone asked a question.
+    import market
+    quotes = [q for q in all_line_rows(raw) if q["game_id"] in known]
+    if quotes:
+        n_new = market.insert_quotes(conn, quotes)
+        provs = sorted({q["provider"] for q in quotes})
+        print("  market_quotes: %d new from %d providers (%s)"
+              % (n_new, len(provs), ", ".join(provs[:6])
+                 + ("..." if len(provs) > 6 else "")))
+        suspect = [q for q in quotes if q["quality_status"] != market.VALID]
+        if suspect:
+            print("  %d quote(s) flagged suspect and stored anyway:" % len(suspect))
+            for q in suspect[:3]:
+                print("    %s %s — %s" % (q["game_id"], q["provider"],
+                                          "; ".join(q["_problems"])))
 
     raw, hit = api_get("/rankings", {"year": season}, key, refresh)
     cached_all &= hit

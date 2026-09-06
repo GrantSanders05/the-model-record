@@ -166,6 +166,7 @@ ok("no close, no CLV", grading.line_clv(side="home", locked=2.5, closing=None) i
 
 print("\n── ledger.grade writes both results, from the published side ──")
 
+import json                                                     # noqa: E402
 import sqlite3                                                  # noqa: E402
 import tempfile                                                 # noqa: E402
 import db as _db                                                # noqa: E402
@@ -347,6 +348,117 @@ ok("...without losing the column it already had", "ats_result" in _cols)
 ok("...and without losing the row that was in it",
    dict(_upgraded.execute("SELECT * FROM picks_log WHERE game_id='old1'").fetchone()
         )["ats_result"] == "L")
+
+
+# ══ 25.4 MARKET ═══════════════════════════════════════════════════════════════
+
+print("\n── every provider is kept, and policy decides later ──")
+
+import market                                                   # noqa: E402
+import market_policy as mkp                                     # noqa: E402
+
+_mconn = _db.connect(os.path.join(tempfile.mkdtemp(), "market.db"))
+_mconn.execute("INSERT INTO games (game_id, sport, season, week, home_team, away_team,"
+               " kickoff, neutral_site) VALUES ('q1','cfb',2026,1,'H','A',"
+               " '2026-09-05T18:00:00+00:00',0)")
+_mconn.commit()
+
+
+def _q(prov, spread, total, at, **kw):
+    return market.build_quote(sport="cfb", game_id="q1", provider=prov,
+                              observed_at=at, home_spread=spread, total=total, **kw)
+
+
+_T0 = "2026-09-05T12:00:00+00:00"
+_T1 = "2026-09-05T15:00:00+00:00"
+_quotes = [_q("DraftKings", -3.5, 52.5, _T1, home_ml=-160, away_ml=140),
+           _q("Caesars", -3.0, 53.0, _T1, home_ml=-155, away_ml=135),
+           _q("Bovada", -4.0, 52.0, _T1, home_ml=-170, away_ml=145),
+           _q("DraftKings", -2.5, 51.5, _T0)]
+market.insert_quotes(_mconn, _quotes)
+ok("two providers are preserved, not collapsed to one",
+   market.quote_count(_mconn, "q1") == 4, market.quote_count(_mconn, "q1"))
+ok("a provider rename is one provider, not market movement",
+   market.canonical_provider("Draft Kings") == market.canonical_provider("DraftKings")
+   == "DraftKings")
+ok("...and an unknown book still passes through under its own name",
+   market.canonical_provider("Some New Book") == "Some New Book")
+
+_asof = market.quotes_asof(_mconn, "q1", _T1)
+ok("as-of returns one row per provider", len(_asof) == 3, sorted(_asof))
+ok("...the latest one at or before the time",
+   _asof["DraftKings"]["home_spread"] == -3.5, _asof["DraftKings"]["home_spread"])
+_early = market.quotes_asof(_mconn, "q1", _T0)
+ok("...and an earlier as-of sees the earlier number",
+   _early["DraftKings"]["home_spread"] == -2.5 and len(_early) == 1, sorted(_early))
+
+# THE LEAKAGE GUARD. A quote observed after the forecast cannot be returned to it.
+ok("a quote observed later cannot be seen by an earlier as-of",
+   "Caesars" not in _early)
+
+_snap = mkp.build_market_snapshot(_asof, at_time=_T1, game_id="q1")
+ok("consensus is the median, not one chosen book",
+   _snap["consensus_spread"] == -3.5, _snap["consensus_spread"])
+ok("...and the median total", _snap["consensus_total"] == 52.5, _snap["consensus_total"])
+ok("the spread of opinion is reported", (_snap["spread_min"], _snap["spread_max"]) == (-4.0, -3.0))
+ok("the constituent quotes are named", len(json.loads(_snap["quote_ids_json"])) == 3)
+ok("a three-provider snapshot is a consensus", _snap["status"] == mkp.VALID_CONSENSUS)
+ok("probabilities are de-vigged per book before they are combined",
+   0.55 < _snap["consensus_home_prob"] < 0.68, _snap["consensus_home_prob"])
+
+# One slow book must not drag the number, and must be excluded by age, not by
+# a judgement about whether we like its price.
+_stale = dict(_asof)
+_stale["Ancient"] = _q("Ancient", -12.0, 70.0, "2026-09-01T00:00:00+00:00")
+_snap2 = mkp.build_market_snapshot(_stale, at_time=_T1, game_id="q1")
+ok("a stale provider is excluded from consensus",
+   _snap2["consensus_spread"] == -3.5 and "Ancient" not in _snap2["providers"],
+   _snap2["providers"])
+_only_stale = mkp.build_market_snapshot(
+    {"Ancient": _stale["Ancient"]}, at_time=_T1, game_id="q1")
+ok("...but a snapshot built only from stale quotes says so rather than pretending",
+   _only_stale["status"] == mkp.STALE_FALLBACK, _only_stale["status"])
+ok("one provider is a quote, not a consensus",
+   mkp.build_market_snapshot({"DraftKings": _asof["DraftKings"]}, at_time=_T1,
+                             game_id="q1")["status"] == mkp.SINGLE_PROVIDER)
+ok("no market at all is a recorded fact, not a None",
+   mkp.build_market_snapshot({}, at_time=_T1, game_id="q1")["status"] == mkp.MISSING)
+
+# THE CLOSE. Nothing observed after kickoff may take part, for any reason.
+market.insert_quotes(_mconn, [_q("DraftKings", -21.0, 40.0, "2026-09-05T23:00:00+00:00")])
+_close = mkp.build_close(_mconn, "q1", "2026-09-05T18:00:00+00:00")
+ok("the close uses the last quote before kickoff",
+   _close["consensus_spread"] == -3.5, _close["consensus_spread"])
+ok("...and a post-kickoff quote cannot become the close",
+   _close["spread_min"] != -21.0 and _close["spread_max"] != -21.0,
+   (_close["spread_min"], _close["spread_max"]))
+ok("the close records which policy produced it",
+   _close["policy_version"] == mkp.CLOSE_V1)
+
+# Missing prices stay missing.
+_np = _q("NoPrice", -3.0, 52.0, _T1)
+ok("a quote with no spread price stores NULL, not -110",
+   _np["home_spread_price"] is None and _np["away_spread_price"] is None)
+
+# A book quoting itself two different ways at one instant is real -- CFBD sends
+# "DraftKings" and "Draft Kings" in the same response -- and the choice between
+# them must be stable rather than whatever order the database returned.
+market.insert_quotes(_mconn, [
+    market.build_quote(sport="cfb", game_id="q1", provider="Draft Kings",
+                       observed_at=_T1, home_spread=-9.5, total=52.5,
+                       source="cfbd/lines:Draft Kings")])
+_conf = market.provider_conflicts(_mconn, "q1", _T1)
+ok("a book disagreeing with itself is surfaced, not silently resolved",
+   any(c["provider"] == "DraftKings" for c in _conf), _conf)
+_a = market.quotes_asof(_mconn, "q1", _T1)["DraftKings"]["quote_id"]
+_b = market.quotes_asof(_mconn, "q1", _T1)["DraftKings"]["quote_id"]
+ok("...and the quote a consensus uses is the same one every time", _a == _b)
+
+_sid = mkp.store_snapshot(_mconn, _snap)
+ok("a snapshot can be stored", _sid == _snap["market_snapshot_id"])
+mkp.store_snapshot(_mconn, _snap)
+ok("...and storing it twice does not duplicate it",
+   _mconn.execute("SELECT COUNT(*) c FROM market_snapshots").fetchone()["c"] == 1)
 
 
 print("\n── the moat covers what the tools actually write ──")

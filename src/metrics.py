@@ -167,12 +167,25 @@ def evaluate(preds, edge_threshold=0.0):
         out["roi"] = None
         out["ats_significant"] = False
 
-    # ── closing line value ──
-    # How often does the model land on the correct SIDE of the closing number?
-    # CLV is the leading indicator: models with real edge beat the close even
-    # in weeks the results go against them.
-    out["clv_mean"] = (sum(abs(p["pred_margin"] - p["market_margin"]) for p in withline)
-                       / len(withline)) if withline else None
+    # ── how far the model sits from the market ──
+    #
+    # THIS IS NOT CLOSING LINE VALUE, and it was called `clv_mean` with a comment
+    # above it describing CLV. It is the mean ABSOLUTE gap between the model and
+    # the market at prediction time: a measure of how much the model disagrees,
+    # with no direction and no second observation in it.
+    #
+    # Real CLV needs two market observations -- one at the wager and one at the
+    # close -- and a side, so that "we got the better number" has a sign. That
+    # lives in grading.line_clv and, for actual wagers, in bet_log. A number that
+    # rises whenever the model shouts louder is not a leading indicator of edge;
+    # under-dispersion would make it fall while the model got better.
+    out["mean_abs_market_disagreement"] = (
+        sum(abs(p["pred_margin"] - p["market_margin"]) for p in withline)
+        / len(withline)) if withline else None
+    # DEPRECATED alias, kept so nothing reading the old key breaks mid-transition.
+    # Nothing in the export or publish path reads it; remove it once the backtest
+    # JSON consumers have moved.
+    out["clv_mean"] = out["mean_abs_market_disagreement"]
 
     # ── totals (only if supplied) ──
     tot = [p for p in graded
