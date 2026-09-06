@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import datetime as dt
 import json
 import os
 import sys
@@ -28,6 +29,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
+import api_budget
 import db
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,7 +38,11 @@ BUDGET_FILE = os.path.join(ROOT, "data", "api_budget.json")
 ENV_FILE = "/Users/haileyclark/Downloads/S2-Media/_s2-media/config/cfbd.env"
 
 BASE = "https://api.collegefootballdata.com"
-MONTHLY_CAP = 900          # leave 100 in reserve for live in-season updates
+# ONE AUTHORITY. This module used to carry its own cap of 900 while api_budget
+# used 1000, so the two disagreed about how much was left and the printed figure
+# was neither the limit that would fire nor the limit in the policy. The reserve
+# is now expressed as a BAND in api_budget rather than by shaving the cap.
+MONTHLY_CAP = api_budget.MONTHLY_CAP
 # One definition, shared with the duplicate repair in db.py: the writer and the
 # repair must agree about which of two rows for a game is the one to keep.
 PROVIDER_PRIORITY = db.LINE_PROVIDER_PRIORITY
@@ -70,21 +76,20 @@ def _read_budget():
     return {}
 
 
-def _spend(n=1):
-    b = _read_budget()
-    mk = _month_key()
-    used = b.get(mk, 0)
-    if used + n > MONTHLY_CAP:
-        sys.exit(
-            "CFBD monthly budget exhausted: %d/%d used for %s.\n"
-            "Cached data still works — only new pulls are blocked."
-            % (used, MONTHLY_CAP, mk)
-        )
-    b[mk] = used + n
-    os.makedirs(os.path.dirname(BUDGET_FILE), exist_ok=True)
-    with open(BUDGET_FILE, "w") as fh:
-        json.dump(b, fh, indent=2)
-    return b[mk]
+def _spend(n=1, purpose=None, endpoint=None):
+    """
+    Record a call through the budget POLICY, not just the counter.
+
+    The counter refused at the cap, which is one call too late: whichever
+    requests happen to come last are the ones blocked, and on a Saturday those
+    are the market observations that decide what gets bet. api_budget bands the
+    month so research is paused first and the unrepeatable calls keep running.
+    """
+    try:
+        return api_budget.spend(n, purpose=purpose or api_budget.STANDARD,
+                                endpoint=endpoint, path=BUDGET_FILE)
+    except RuntimeError as e:
+        sys.exit("CFBD budget: %s" % e)
 
 
 def budget_status():
@@ -93,8 +98,16 @@ def budget_status():
 
 # ── HTTP with cache ────────────────────────────────────────────────────────────
 
-def api_get(path, params, key, refresh=False):
-    """GET an endpoint, serving from disk cache unless refresh=True."""
+def api_get(path, params, key, refresh=False, purpose=None):
+    """
+    GET an endpoint, serving from disk cache unless refresh=True.
+
+    `purpose` decides what gets skipped when the month runs short. It is declared
+    by the CALLER because only the caller knows whether the data can be fetched
+    again: a line observed at 4:58pm cannot, and a season of advanced stats can.
+    Defaults to STANDARD so an un-annotated call is neither privileged nor the
+    first thing dropped.
+    """
     qs = "&".join("%s=%s" % (k, v) for k, v in sorted(params.items()))
     slug = ("%s_%s" % (path.strip("/").replace("/", "-"), qs)).replace("&", "_").replace("=", "-")
     cache_path = os.path.join(CACHE_DIR, slug + ".json")
@@ -108,7 +121,7 @@ def api_get(path, params, key, refresh=False):
         "Authorization": "Bearer " + key,
         "Accept": "application/json",
     })
-    used = _spend(1)
+    used = _spend(1, purpose=purpose, endpoint=path)
     for attempt in range(4):
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
@@ -179,9 +192,58 @@ def _pick_line(lines):
     return None, None
 
 
+def all_line_rows(raw, observed_at=None):
+    """
+    EVERY provider quote, normalized. -> [market.build_quote(...)]
+
+    `lines_rows` below keeps one preferred provider per game, chosen at ingest,
+    and throws the rest away. That is fine for a display table and destroys the
+    research: consensus, dispersion, best price, and whether a disagreement is
+    with the market or with one slow book all live in the quotes it discards.
+
+    This keeps them. Same sign normalization, same one place -- CFBD's `spread`
+    is negative when the HOME team is favoured, house convention is positive, so
+    home_spread = -spread.
+
+    `observed_at` is when THIS SYSTEM saw the quote, which is the only timestamp
+    available: the feed does not say when a book posted a number. It is recorded
+    as an observation time and never as a claim about when the market moved.
+    """
+    import market
+    if observed_at is None:
+        observed_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    out = []
+    for g in raw:
+        gid = "cfb-%s" % g["id"]
+        for line in (g.get("lines") or []):
+            spread = line.get("spread")
+            q = market.build_quote(
+                sport="cfb", game_id=gid, provider=line.get("provider"),
+                observed_at=observed_at,
+                home_spread=(-float(spread) if spread is not None else None),
+                total=line.get("overUnder"),
+                home_ml=line.get("homeMoneyline"), away_ml=line.get("awayMoneyline"),
+                # CFBD carries no spread or total juice. NULL, not -110: see
+                # grading.american_profit_units for why that matters.
+                home_spread_price=None, away_spread_price=None,
+                over_price=None, under_price=None,
+                # The raw name, kept beside the canonical one. "Draft Kings"
+                # and "DraftKings" both become DraftKings for consensus, and
+                # this is how you can still tell which row was which.
+                source="cfbd/lines:%s" % (line.get("provider") or "?"))
+            if q is not None:
+                out.append(q)
+    return out
+
+
 def lines_rows(raw):
     """
-    Normalize CFBD spreads to the house convention.
+    Normalize CFBD spreads to the house convention, ONE provider per game.
+
+    Kept for the legacy `lines` table, which the display path and every existing
+    reader still use. `all_line_rows` above is the research truth; this is the
+    materialized convenience view of it, and provider selection moves entirely
+    into market_policy once the V2 readers are in place.
 
     CFBD `spread` is negative when the HOME team is favored
     ("Auburn -2" with Auburn at home  ->  spread = -2).
@@ -233,13 +295,17 @@ def fetch_season(conn, season, key, refresh=False, postseason=True):
     cached_all = True
 
     for st in (["regular", "postseason"] if postseason else ["regular"]):
-        raw, hit = api_get("/games", {"year": season, "seasonType": st}, key, refresh)
+        # CRITICAL: results are what everything else is graded against.
+        raw, hit = api_get("/games", {"year": season, "seasonType": st}, key,
+                           refresh, purpose=api_budget.CRITICAL)
         cached_all &= hit
         rows = games_rows(raw, season, st)
         if rows:
             db.upsert_games(conn, rows)
 
-    raw, hit = api_get("/lines", {"year": season}, key, refresh)
+    # CRITICAL: a quote is only observable while it is on the screen.
+    raw, hit = api_get("/lines", {"year": season}, key, refresh,
+                       purpose=api_budget.CRITICAL)
     cached_all &= hit
     lrows = lines_rows(raw)
     # Only keep lines whose game we actually have, or the FK will reject them.
@@ -251,7 +317,28 @@ def fetch_season(conn, season, key, refresh=False, postseason=True):
         # Capture the movement history too -- upsert_lines overwrites, this appends.
         db.snapshot_lines(conn, lrows)
 
-    raw, hit = api_get("/rankings", {"year": season}, key, refresh)
+    # AND THE V2 TRUTH: every provider, appended, nothing chosen. The legacy
+    # table above keeps one preferred quote per game because the display path and
+    # every existing reader still want exactly that; this keeps the rest, so a
+    # consensus can be taken later under a named policy instead of a priority
+    # list applied before anyone asked a question.
+    import market
+    quotes = [q for q in all_line_rows(raw) if q["game_id"] in known]
+    if quotes:
+        n_new = market.insert_quotes(conn, quotes)
+        provs = sorted({q["provider"] for q in quotes})
+        print("  market_quotes: %d new from %d providers (%s)"
+              % (n_new, len(provs), ", ".join(provs[:6])
+                 + ("..." if len(provs) > 6 else "")))
+        suspect = [q for q in quotes if q["quality_status"] != market.VALID]
+        if suspect:
+            print("  %d quote(s) flagged suspect and stored anyway:" % len(suspect))
+            for q in suspect[:3]:
+                print("    %s %s — %s" % (q["game_id"], q["provider"],
+                                          "; ".join(q["_problems"])))
+
+    raw, hit = api_get("/rankings", {"year": season}, key, refresh,
+                       purpose=api_budget.STANDARD)
     cached_all &= hit
     rrows = rankings_rows(raw, season)
     if rrows:
@@ -350,7 +437,9 @@ def ppa_rows(raw, season):
 
 
 def fetch_ppa(conn, season, key, refresh=False):
-    raw, hit = api_get("/ppa/games", {"year": season}, key, refresh)
+    # RESEARCH: PPA feeds analysis, and can be pulled again next week.
+    raw, hit = api_get("/ppa/games", {"year": season}, key, refresh,
+                       purpose=api_budget.RESEARCH)
     rows = ppa_rows(raw, season)
     if rows:
         conn.executemany(

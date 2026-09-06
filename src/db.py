@@ -229,6 +229,318 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
 """
 
 
+# ── V2 schema ─────────────────────────────────────────────────────────────────
+#
+# ADDED BESIDE the tables above, never replacing them. The V2 architecture splits
+# five facts that the original schema mixed into one `picks_log` row:
+#
+#   a FORECAST   is what a model believed at a time
+#   an EVALUATION is what a strategy decided about that forecast, INCLUDING no
+#   a SIGNAL     is what the strategy chose, at a side and a price
+#   a BET        is what a person actually wagered
+#   a RESULT     is what happened, and a CLOSE is a later market fact
+#
+# Those must never overwrite each other. Once they are separate, "the model went
+# X-Y" stops being ambiguous between every forecast, every lined game, every game
+# inside the +/-28 band, every fully graded game, and the actual strategy.
+#
+# Everything here is append-only. A superseding fact is a new row; a withdrawal is
+# a void event; nothing is edited into what we wish it had been.
+SCHEMA_V2 = """
+-- One provider, one game, one observation time. The old `lines` table keeps ONE
+-- preferred quote per game, chosen at ingest -- which discards consensus,
+-- dispersion, provider disagreement and best available price, and cannot say
+-- whether the model is only beating a stale book.
+CREATE TABLE IF NOT EXISTS market_quotes (
+    quote_id            TEXT PRIMARY KEY,
+    sport               TEXT NOT NULL,
+    game_id             TEXT NOT NULL,
+    provider            TEXT NOT NULL,
+    observed_at         TEXT NOT NULL,
+    home_spread         REAL,
+    home_spread_price   INTEGER,
+    away_spread_price   INTEGER,
+    total               REAL,
+    over_price          INTEGER,
+    under_price         INTEGER,
+    home_ml             INTEGER,
+    away_ml             INTEGER,
+    source              TEXT,
+    raw_hash            TEXT,
+    quality_status      TEXT NOT NULL DEFAULT 'valid',
+    created_at          TEXT NOT NULL,
+    UNIQUE(game_id, provider, observed_at, raw_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_market_quotes_game_time
+    ON market_quotes(game_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_market_quotes_provider_time
+    ON market_quotes(provider, observed_at);
+
+-- The market state a forecast actually saw: a consensus across providers, under
+-- a named policy, at one instant. A forecast cannot reference a single quote
+-- when it used several.
+CREATE TABLE IF NOT EXISTS market_snapshots (
+    market_snapshot_id   TEXT PRIMARY KEY,
+    sport                TEXT NOT NULL,
+    game_id              TEXT NOT NULL,
+    snapshot_at          TEXT NOT NULL,
+    policy_version       TEXT NOT NULL,
+    consensus_spread     REAL,
+    consensus_total      REAL,
+    consensus_home_prob  REAL,
+    provider_count       INTEGER NOT NULL DEFAULT 0,
+    spread_min           REAL,
+    spread_max           REAL,
+    quote_ids_json       TEXT NOT NULL,
+    payload_hash         TEXT NOT NULL,
+    created_at           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_market_snapshots_game
+    ON market_snapshots(game_id, snapshot_at);
+
+-- A team's full grade vector as of an instant. `grades` is keyed by week, which
+-- cannot express "Grant edited the sheet on Friday afternoon": the change would
+-- either be invisible until next week or be backdated to Monday. Both are wrong.
+--
+--   observed_at   when this system saw it
+--   effective_at  when it is allowed to influence a forecast
+--
+-- Equal for a live edit. Never stamped earlier than observed_at without a human
+-- recording why.
+CREATE TABLE IF NOT EXISTS grade_snapshots (
+    grade_snapshot_id TEXT PRIMARY KEY,
+    sport             TEXT NOT NULL,
+    season            INTEGER NOT NULL,
+    team              TEXT NOT NULL,
+    observed_at       TEXT NOT NULL,
+    effective_at      TEXT NOT NULL,
+    source_type       TEXT NOT NULL,
+    source_name       TEXT,
+    source_hash       TEXT NOT NULL,
+    qb                REAL,
+    rb                REAL,
+    wr                REAL,
+    ol                REAL,
+    dl                REAL,
+    lb                REAL,
+    db                REAL,
+    coach_st          REAL,
+    extra_json        TEXT,
+    created_at        TEXT NOT NULL,
+    UNIQUE(sport, season, team, effective_at, source_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_grade_snapshot_asof
+    ON grade_snapshots(sport, season, team, effective_at);
+
+-- Exactly what was handed to a model. Hashed, so "what did it know" has an answer
+-- that does not depend on re-running anything.
+CREATE TABLE IF NOT EXISTS feature_snapshots (
+    feature_snapshot_id    TEXT PRIMARY KEY,
+    game_id                TEXT NOT NULL,
+    created_at             TEXT NOT NULL,
+    feature_schema_version TEXT NOT NULL,
+    payload_json           TEXT NOT NULL,
+    payload_hash           TEXT NOT NULL
+);
+
+-- Code + config + feature schema, frozen under a version string. A config edit
+-- that changes the effective hash requires a NEW version; it may not redefine an
+-- existing one, or every forecast already filed under it becomes a claim about
+-- something that no longer exists.
+CREATE TABLE IF NOT EXISTS model_registry (
+    model_version          TEXT PRIMARY KEY,
+    model_id               TEXT NOT NULL,
+    role                   TEXT NOT NULL,
+    experiment_id          TEXT,
+    git_sha                TEXT NOT NULL,
+    config_json            TEXT NOT NULL,
+    config_hash            TEXT NOT NULL,
+    feature_schema_version TEXT NOT NULL,
+    created_at             TEXT NOT NULL,
+    retired_at             TEXT,
+    notes                  TEXT
+);
+
+-- A model opinion. Not a bet. Never deleted because a strategy later declined it.
+CREATE TABLE IF NOT EXISTS forecast_log (
+    forecast_id            TEXT PRIMARY KEY,
+    sport                  TEXT NOT NULL,
+    game_id                TEXT NOT NULL,
+    model_version          TEXT NOT NULL,
+    feature_snapshot_id    TEXT NOT NULL,
+    market_snapshot_id     TEXT,
+    horizon                TEXT NOT NULL,
+    horizon_target_at      TEXT,
+    generated_at           TEXT NOT NULL,
+    horizon_delta_seconds  INTEGER,
+    snapshot_status        TEXT NOT NULL,
+    pred_home_margin       REAL,
+    pred_total             REAL,
+    home_win_prob          REAL,
+    home_cover_prob        REAL,
+    over_prob              REAL,
+    margin_uncertainty     REAL,
+    total_uncertainty      REAL,
+    borrowed_fallback      INTEGER NOT NULL DEFAULT 0,
+    provenance_quality     TEXT NOT NULL DEFAULT 'complete',
+    created_by_run         TEXT,
+    created_at             TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_forecast_game_model
+    ON forecast_log(game_id, model_version, horizon);
+
+-- WHY a forecast was or was not actionable, recorded either way. Without this a
+-- no-bet simply disappears, and a strategy's record silently becomes the record
+-- of the games it happened to like.
+CREATE TABLE IF NOT EXISTS strategy_evaluations (
+    evaluation_id     TEXT PRIMARY KEY,
+    forecast_id       TEXT NOT NULL,
+    strategy_version  TEXT NOT NULL,
+    evaluated_at      TEXT NOT NULL,
+    eligible          INTEGER NOT NULL,
+    reason_codes_json TEXT NOT NULL,
+    calculated_edge   REAL,
+    calculated_ev     REAL,
+    decision_market   TEXT,
+    decision_side     TEXT,
+    decision_line     REAL,
+    decision_price    INTEGER,
+    created_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_strategy_eval_forecast
+    ON strategy_evaluations(forecast_id, strategy_version);
+
+-- Only strategy-approved decisions. Side, line, price and provider are immutable
+-- from creation; a withdrawal before kickoff is a void event, not an edit.
+CREATE TABLE IF NOT EXISTS signal_log (
+    signal_id          TEXT PRIMARY KEY,
+    evaluation_id      TEXT NOT NULL,
+    forecast_id        TEXT NOT NULL,
+    game_id            TEXT NOT NULL,
+    strategy_version   TEXT NOT NULL,
+    market             TEXT NOT NULL,
+    side               TEXT NOT NULL,
+    line               REAL,
+    price              INTEGER,
+    provider           TEXT,
+    market_snapshot_id TEXT,
+    created_at         TEXT NOT NULL,
+    official_horizon   TEXT NOT NULL,
+    is_official        INTEGER NOT NULL DEFAULT 0,
+    locked_result      TEXT,
+    close_result       TEXT,
+    close_line         REAL,
+    line_clv           REAL,
+    profit_units       REAL,
+    graded_at          TEXT,
+    voided_at          TEXT,
+    void_reason        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_signal_game
+    ON signal_log(game_id, market, is_official);
+-- One official signal per game per market per strategy. A retried workflow
+-- re-derives the same content-addressed id and collides here instead of
+-- publishing the same opinion twice.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_official_signal
+    ON signal_log(game_id, market, strategy_version) WHERE is_official = 1;
+
+-- Results carry no model opinion. Grading joins these to signals.
+CREATE TABLE IF NOT EXISTS game_results_v2 (
+    game_id                    TEXT PRIMARY KEY,
+    final_home_score           INTEGER NOT NULL,
+    final_away_score           INTEGER NOT NULL,
+    finalized_at               TEXT NOT NULL,
+    close_policy_version       TEXT,
+    closing_market_snapshot_id TEXT,
+    result_hash                TEXT NOT NULL
+);
+
+-- A horizon whose acceptance window passed with no accepted forecast. Recorded
+-- so a gap cannot later be filled with a mislabelled forecast and so a missing
+-- snapshot is never indistinguishable from a healthy one.
+CREATE TABLE IF NOT EXISTS snapshot_misses (
+    miss_id       TEXT PRIMARY KEY,
+    game_id       TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    horizon       TEXT NOT NULL,
+    target_at     TEXT NOT NULL,
+    detected_at   TEXT NOT NULL,
+    reason        TEXT NOT NULL,
+    UNIQUE(game_id, model_version, horizon)
+);
+
+-- Withdrawals and corrections, for V2 objects. A rollback is a new event.
+CREATE TABLE IF NOT EXISTS v2_void_events (
+    void_id     TEXT PRIMARY KEY,
+    object_type TEXT NOT NULL,
+    object_id   TEXT NOT NULL,
+    voided_at   TEXT NOT NULL,
+    reason      TEXT NOT NULL,
+    payload     TEXT
+);
+
+-- §22.2. Availability is a SEQUENCE OF OBSERVATIONS, never a mutable status
+-- column. "Questionable at T72, probable at T24, out at T2" is three rows, and
+-- rewriting the first two into the third destroys the only training data there
+-- will ever be for what a status at a given distance from kickoff is worth.
+CREATE TABLE IF NOT EXISTS availability_events (
+    event_id      TEXT PRIMARY KEY,
+    sport         TEXT NOT NULL,
+    season        INTEGER NOT NULL,
+    team          TEXT NOT NULL,
+    player        TEXT NOT NULL,
+    player_key    TEXT NOT NULL,
+    position      TEXT,
+    status        TEXT NOT NULL,
+    status_raw    TEXT,
+    detail        TEXT,
+    source        TEXT NOT NULL,
+    source_tier   INTEGER NOT NULL,
+    impact_points REAL,
+    observed_at   TEXT NOT NULL,
+    payload_hash  TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_availability_team
+    ON availability_events(sport, season, team, observed_at);
+CREATE INDEX IF NOT EXISTS idx_availability_player
+    ON availability_events(sport, season, player_key, observed_at);
+
+-- §23. One forecast, read at one instant, from one source. Append-only for the
+-- same reason quotes are: "what is the weather" is a question about a moment,
+-- and a row that gets updated as kickoff approaches destroys the record of what
+-- was knowable at T48 — which is the only thing a pregame model may use.
+CREATE TABLE IF NOT EXISTS weather_snapshots (
+    snapshot_id    TEXT PRIMARY KEY,
+    sport          TEXT NOT NULL,
+    game_id        TEXT NOT NULL,
+    horizon        TEXT,
+    observed_at    TEXT NOT NULL,
+    source         TEXT NOT NULL,
+    venue          TEXT,
+    indoor         INTEGER,
+    temperature_f  REAL,
+    condition      TEXT,
+    condition_id   TEXT,
+    wind_mph       REAL,
+    gust_mph       REAL,
+    payload_json   TEXT NOT NULL,
+    payload_hash   TEXT NOT NULL,
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_weather_game
+    ON weather_snapshots(game_id, observed_at);
+
+-- What the migration did, so the numbers in the report can be re-read later.
+CREATE TABLE IF NOT EXISTS v2_migrations (
+    migration    TEXT PRIMARY KEY,
+    applied_at   TEXT NOT NULL,
+    source_hash  TEXT,
+    report_json  TEXT NOT NULL
+);
+"""
+
+
 # Columns added after a table already existed somewhere. CREATE TABLE IF NOT EXISTS
 # does nothing to a table that is already there, so a new column in SCHEMA above
 # reaches a fresh database and silently misses every existing one -- including the
@@ -245,7 +557,37 @@ ADDED_COLUMNS = [
     # themselves stay so the withdrawal is auditable and reversible.
     ("picks_log", "voided_at", "TEXT"),
     ("picks_log", "void_reason", "TEXT"),
+
+    # V2 grading semantics. The existing `ats_result` / `ou_result` columns are
+    # NOT repurposed: they hold the legacy close-based, side-recomputed answer and
+    # they keep holding it, because a historical value that is silently
+    # reinterpreted is worse than a wrong one that is labelled. These are the new
+    # facts, recorded beside them.
+    #
+    #   _at_pick   graded at the number actually locked, using the side actually
+    #              published. This is the official record.
+    #   _at_close  the SAME side, graded at the closing number. A diagnostic:
+    #              "was the side also right about the final market?"
+    #
+    # Prices are stored per market and are usually NULL for spreads and totals,
+    # because CFBD supplies moneylines and not juice. NULL means unknown and must
+    # stay unknown -- see grading.american_profit_units.
+    ("picks_log", "ats_result_at_pick", "TEXT"),
+    ("picks_log", "ats_result_at_close", "TEXT"),
+    ("picks_log", "ou_result_at_pick", "TEXT"),
+    ("picks_log", "ou_result_at_close", "TEXT"),
+    ("picks_log", "ats_price_at_pick", "INTEGER"),
+    ("picks_log", "ou_price_at_pick", "INTEGER"),
+    ("picks_log", "ats_closing_price", "INTEGER"),
+    ("picks_log", "ou_closing_price", "INTEGER"),
+    # Which grading rules produced the columns above, so a row graded under one
+    # set of semantics can never be mistaken for a row graded under another.
+    ("picks_log", "grading_version", "TEXT"),
 ]
+
+# Bumped whenever the meaning of a graded column changes. Stamped on every row
+# `ledger.grade` writes.
+GRADING_VERSION = "v2-locked-line-2026.09.06"
 
 # Appended to any query that computes the published record.
 NOT_VOIDED = "voided_at IS NULL"
@@ -344,6 +686,7 @@ def connect(path=DB_PATH):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    conn.executescript(SCHEMA_V2)
     _migrate(conn)
     return conn
 

@@ -19,6 +19,7 @@ is not a prediction.
 import datetime as dt
 
 import db
+import grading
 import metrics
 
 
@@ -225,13 +226,53 @@ def stale_locks(conn, sport, season=None, now=None, slack_days=2):
     return len(rows), [dict(r) for r in rows[:5]]
 
 
+def _legacy_result(model_value, line, actual):
+    """The OLD grader's answer, reproduced exactly. Do not use for new work.
+
+    Side inferred from `model_value - line`, graded at the close. Kept only so the
+    legacy columns keep their historical meaning during the transition; see the
+    note in `grade` for why that meaning was wrong.
+    """
+    if line is None or model_value is None:
+        return None
+    edge = model_value - line
+    diff = actual - line
+    if edge == 0:
+        return None
+    if diff == 0:
+        return "P"
+    return "W" if (edge > 0) == (diff > 0) else "L"
+
+
 def grade(conn, sport, now=None):
-    """Grade every locked pick whose game is now final. Returns how many were graded."""
+    """Grade every locked pick whose game is now final. Returns how many were graded.
+
+    TWICE, AND FROM THE SIDE THAT WAS PUBLISHED. This function used to compute
+
+        edge = model_margin - closing_margin
+
+    and take the sign of that as the side. `ats_pick` -- the side actually
+    published -- was never read, so when the market moved across the model's
+    number the graded side flipped and the row recorded a wager nobody made. It
+    also graded only at the close, while the site called the result the record of
+    the published pick.
+
+    Both are now recorded, separately and forever:
+
+        ats_result_at_pick   the side published, at the line it was locked at.
+                             This is the official result.
+        ats_result_at_close  the same side, at the closing line. A diagnostic.
+
+    The legacy `ats_result` / `ou_result` columns are still written with their
+    original close-based meaning so that no existing reader changes answer
+    underneath itself during the transition. They are not the record any more;
+    `tracking` reads the _at_pick columns.
+    """
     now = now or _now()
     rows = conn.execute(
         """SELECT p.game_id, p.model_margin, p.market_margin_at_pick,
                   p.model_total, p.market_total_at_pick,
-                  p.ml_pick, p.home_team, p.away_team,
+                  p.ats_pick, p.ou_pick, p.ml_pick, p.home_team, p.away_team,
                   g.home_score, g.away_score,
                   l.home_margin AS closing_margin, l.total AS closing_total,
                   l.home_ml, l.away_ml
@@ -246,52 +287,59 @@ def grade(conn, sport, now=None):
     for r in rows:
         actual_margin = r["home_score"] - r["away_score"]
         actual_total = r["home_score"] + r["away_score"]
-        # Grade against the closing line where we have it, otherwise the number
-        # the pick was actually made at. Never against a line chosen later.
-        close_m = r["closing_margin"] if r["closing_margin"] is not None else r["market_margin_at_pick"]
-        close_t = r["closing_total"] if r["closing_total"] is not None else r["market_total_at_pick"]
+        locked_m = r["market_margin_at_pick"]
+        locked_t = r["market_total_at_pick"]
+        # No close recorded means the last number we saw IS the last number there
+        # was. Falling back to the locked line makes the two columns equal, which
+        # is honest; inventing a close would not be.
+        close_m = r["closing_margin"] if r["closing_margin"] is not None else locked_m
+        close_t = r["closing_total"] if r["closing_total"] is not None else locked_t
 
-        ats = None
-        if close_m is not None and r["model_margin"] is not None:
-            edge = r["model_margin"] - close_m
-            diff = actual_margin - close_m
-            if edge == 0:
-                ats = None
-            elif diff == 0:
-                ats = "P"
-            else:
-                ats = "W" if (edge > 0) == (diff > 0) else "L"
+        teams = {"home_team": r["home_team"], "away_team": r["away_team"]}
+        try:
+            ats_pick_res = grading.grade_spread_pick(
+                side=r["ats_pick"], home_margin_line=locked_m,
+                actual_home_margin=actual_margin, **teams)
+            ats_close_res = grading.grade_spread_pick(
+                side=r["ats_pick"], home_margin_line=close_m,
+                actual_home_margin=actual_margin, **teams)
+        except ValueError as e:
+            # An ats_pick naming neither team is an upstream defect (alias drift,
+            # a mis-joined row). Grading it as a loss would book a defeat for a
+            # wager that never existed, so it is left ungraded and said out loud.
+            print("  WARNING: %s — pick left ungraded" % e)
+            ats_pick_res = ats_close_res = None
 
-        ou = None
-        if close_t is not None and r["model_total"] is not None:
-            edge = r["model_total"] - close_t
-            diff = actual_total - close_t
-            if edge == 0:
-                ou = None
-            elif diff == 0:
-                ou = "P"
-            else:
-                ou = "W" if (edge > 0) == (diff > 0) else "L"
+        ou_pick_res = grading.grade_total_pick(
+            side=r["ou_pick"], total_line=locked_t, actual_total=actual_total)
+        ou_close_res = grading.grade_total_pick(
+            side=r["ou_pick"], total_line=close_t, actual_total=actual_total)
 
-        # Moneyline. A tie is a push everywhere it can happen; college football
-        # cannot tie in regulation, but grading it as a loss on the one occasion
-        # the data says 0 would be a silent wrong answer rather than a rare one.
-        ml = None
-        if r["ml_pick"]:
-            if actual_margin == 0:
-                ml = "P"
-            elif r["ml_pick"] == r["home_team"]:
-                ml = "W" if actual_margin > 0 else "L"
-            elif r["ml_pick"] == r["away_team"]:
-                ml = "W" if actual_margin < 0 else "L"
+        try:
+            ml = grading.grade_moneyline_pick(
+                team=r["ml_pick"], actual_home_margin=actual_margin, **teams)
+        except ValueError as e:
+            print("  WARNING: %s — moneyline left ungraded" % e)
+            ml = None
         close_ml = (r["home_ml"] if r["ml_pick"] == r["home_team"]
                     else r["away_ml"] if r["ml_pick"] == r["away_team"] else None)
+
+        # LEGACY COLUMNS, LEGACY MEANING. Reproduced exactly as the old grader
+        # computed them -- close-based, side inferred from the model number --
+        # so that anything still reading them keeps getting the same answer it
+        # got yesterday. They are preserved, not trusted.
+        legacy_ats = _legacy_result(r["model_margin"], close_m, actual_margin)
+        legacy_ou = _legacy_result(r["model_total"], close_t, actual_total)
 
         updates.append({
             "game_id": r["game_id"], "closing_margin": close_m, "closing_total": close_t,
             "actual_margin": actual_margin, "actual_total": actual_total,
-            "ats_result": ats, "ou_result": ou, "ml_result": ml,
-            "closing_ml": close_ml, "graded_at": now.isoformat(),
+            "ats_result": legacy_ats, "ou_result": legacy_ou,
+            "ats_result_at_pick": ats_pick_res, "ats_result_at_close": ats_close_res,
+            "ou_result_at_pick": ou_pick_res, "ou_result_at_close": ou_close_res,
+            "ml_result": ml, "closing_ml": close_ml,
+            "grading_version": db.GRADING_VERSION,
+            "graded_at": now.isoformat(),
         })
 
     if updates:
@@ -301,7 +349,12 @@ def grade(conn, sport, now=None):
                  closing_margin=:closing_margin, closing_total=:closing_total,
                  actual_margin=:actual_margin, actual_total=:actual_total,
                  ats_result=:ats_result, ou_result=:ou_result,
+                 ats_result_at_pick=:ats_result_at_pick,
+                 ats_result_at_close=:ats_result_at_close,
+                 ou_result_at_pick=:ou_result_at_pick,
+                 ou_result_at_close=:ou_result_at_close,
                  ml_result=:ml_result, closing_ml=:closing_ml,
+                 grading_version=:grading_version,
                  graded_at=:graded_at
                WHERE game_id=:game_id""", updates)
         conn.commit()

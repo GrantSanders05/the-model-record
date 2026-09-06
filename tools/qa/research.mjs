@@ -96,7 +96,7 @@ ok("meta populated", ($("#meta").textContent || "").includes("CFB"), $("#meta").
 // been renamed into nonsense or two tabs point at the same view.
 {
   const want = ["Rankings","Schedule","Best bets","Results","My bets",
-                "Team","Line movement","What-if","Roster news"];
+                "Team","Line movement","What-if","Roster news","Model lab"];
   const got = $$("#nav button").map(b => b.textContent.trim());
   ok("every tab is present and named", JSON.stringify(got) === JSON.stringify(want), got.join(" | "));
   ok("every tab points at a view that exists",
@@ -1136,6 +1136,285 @@ ok("alerts table renders", $("#alerttbl").innerHTML.length > 20);
      wl ? `got ${rows("#watchtbl")}` : $("#alertnote").textContent.slice(0, 60));
 }
 ok("alert note explains empty board", ($("#alertnote").textContent||"").length > 20);
+
+/* ── the model lab (§27.4) ────────────────────────────────────────────
+   The four scoreboards exist so that a good model and a bad staking plan cannot
+   cancel out into one flattering number. A test that only asked "does the table
+   render" would pass just as happily if the page added them together, so what is
+   asserted here is that they stay APART, that the numbers on screen are the
+   numbers in the bundle, and that a challenger with no prospective record says
+   zero rather than borrowing the Champion's. */
+console.log("\n── model lab: four scoreboards, kept apart ──");
+{
+  const V = JSON.parse(bundle).v2;
+  ok("the bundle carries a V2 block", !!V && V.available === true);
+
+  const cards = $$("#labboards .card");
+  ok("four scoreboards, one card each", cards.length === 4, String(cards.length));
+  const keys = cards.map(c => c.querySelector(".k").textContent.trim());
+  ok("each scoreboard is named for the question it answers",
+     JSON.stringify(keys) === JSON.stringify(
+       ["Forecast quality","Signals · locked line","Close diagnostic","Your bets"]),
+     keys.join(" | "));
+  // The whole point of four boards is that no fifth number claims to combine
+  // them. A "total" or "overall" card is the failure this section prevents.
+  ok("CONTROL: nothing on the board is a combined total",
+     !/\b(overall|combined|total record|net)\b/i.test($("#labboards").textContent),
+     $("#labboards").textContent.slice(0,80));
+  ok("user bets are shown as separate, not as a record",
+     ($("#labboards").textContent || "").includes("never mixed"));
+
+  // Every strategy version that ever published, with the numbers from the bundle
+  // and not from an average of them.
+  const strats = V.strategies || [];
+  ok("every strategy version has a row", listRows("#labstrats") === strats.length,
+     `${listRows("#labstrats")} rows for ${strats.length} strategies`);
+  if (strats.length) {
+    const t = strats[0], g = t.signals;
+    const row = [...$$("#labstrats tbody tr")]
+      .find(tr => tr.textContent.includes(t.strategy_version));
+    ok("the strategy row is present and named", !!row, t.strategy_version);
+    ok("...and prints the locked record from the bundle, unrounded",
+       row.textContent.includes(`${g.locked_w}–${g.locked_l}`),
+       row.textContent.replace(/\s+/g," ").slice(0,90));
+    ok("...and its signal count",
+       row.querySelectorAll("td")[1].textContent.trim() === String(g.n),
+       row.querySelectorAll("td")[1].textContent);
+    // A blank ROI is the honest output when no price was recorded. A 0% or a
+    // −110 assumption here would be the exact thing §2.5 forbids.
+    if (g.roi == null)
+      ok("no price recorded, so ROI is explained rather than invented",
+         /no prices/i.test(row.textContent) && !/%\s*ROI|\bROI 0/.test(row.textContent),
+         row.textContent.slice(-70));
+  }
+  ok("break-even is stated so a % can be read against something",
+     ($("#labboardnote").textContent || "").includes("52.38"));
+}
+
+console.log("\n── model lab: challengers, not ranked by win rate ──");
+{
+  const V = JSON.parse(bundle).v2;
+  const models = V.models || [];
+  ok("every registered model has a row", listRows("#labmodels") === models.length,
+     `${listRows("#labmodels")} rows for ${models.length} models`);
+
+  const first = $("#labmodels tbody tr");
+  ok("the Champion is the first row", first.textContent.includes(V.champion),
+     first.textContent.replace(/\s+/g," ").slice(0,70));
+  // §27.4: do not sort challengers by ATS percentage by default. The ordering is
+  // role, then version -- assert the ROLE ordering directly, because a table that
+  // happens to be in the right order for one bundle is not an ordering rule.
+  {
+    const rank = { Champion:0, Baseline:1, Shadow:2, Retired:3 };
+    const seen = $$("#labmodels tbody tr")
+      .map(tr => tr.querySelectorAll("td")[2].textContent.trim())
+      .map(r => rank[r]);
+    ok("ordered by role — Champion, baseline, shadow, retired",
+       seen.every((v, i) => i === 0 || v >= seen[i-1]) && seen.every(v => v != null),
+       seen.join(","));
+  }
+  // A model registered this week has forecast nothing that has finished. Zero is
+  // the honest number and the table must print it rather than leaving the cell
+  // to be read as "not measured".
+  {
+    const zero = models.filter(m => !(m.quality && m.quality.n));
+    if (zero.length) {
+      const tr = [...$$("#labmodels tbody tr")]
+        .find(x => x.textContent.includes(zero[0].model_version));
+      ok("a model with no graded forecast shows 0, not a blank",
+         tr.querySelectorAll("td")[3].textContent.trim() === "0",
+         tr.querySelectorAll("td")[3].textContent);
+    }
+  }
+  ok("every challenger row says it is shadow only",
+     $$("#labmodels tbody tr")
+       .filter(tr => tr.querySelectorAll("td")[2].textContent.trim() === "Shadow")
+       .every(tr => /shadow only/i.test(tr.textContent)));
+  ok("the note explains why CLV is not in this table",
+     /CLV/.test($("#labmodelnote").textContent) &&
+     /shadow forecast/.test($("#labmodelnote").textContent));
+}
+
+console.log("\n── model lab: the decision policy is on the page ──");
+{
+  const V = JSON.parse(bundle).v2;
+  const txt = $("#labstrategy").textContent || "";
+  ok("every strategy rule is listed",
+     Object.keys(V.strategy_config || {}).every(k => txt.includes(k)),
+     Object.keys(V.strategy_config || {}).filter(k => !txt.includes(k)).join(","));
+  ok("...including the hash, so a changed rule is visible",
+     txt.includes(V.strategy_hash.slice(0, 16)));
+  // Booleans are the ones that decide whether a market is offered at all, so
+  // they must read as words rather than as "true"/"false" stringified objects.
+  ok("a switched-off market reads as a word, not a raw boolean",
+     !/\b(true|false)\b/.test(txt), txt.slice(0, 90));
+
+  const dr = V.declined_reasons || {};
+  ok("every decline reason has a row", listRows("#labdeclined") === Object.keys(dr).length,
+     `${listRows("#labdeclined")} rows for ${Object.keys(dr).length} reasons`);
+  ok("...and every one is glossed in English, not left as a code",
+     $$("#labdeclined tbody tr").every(tr =>
+       (tr.querySelectorAll("td")[2].textContent || "").trim().length > 8));
+  for (const k of Object.keys(dr)) {
+    const tr = [...$$("#labdeclined tbody tr")].find(x => x.textContent.includes(k));
+    ok(`decline reason ${k} shows its count`,
+       tr && tr.querySelectorAll("td")[1].textContent.trim() === String(dr[k]));
+  }
+}
+
+console.log("\n── model lab: a probability scoreboard is not a licence to bet it ──");
+{
+  const V = JSON.parse(bundle).v2;
+  const t = $("#labprob").textContent || "";
+  ok("the probability scoreboard is on the page", t.length > 40, t.slice(0, 60));
+  // The failure this guards: a Brier score published beside a moneyline board
+  // reads as authorisation. §12.5 keeps moneylines off and the page must say so.
+  ok("...and says moneylines stay off", /moneylines stay off/i.test(t));
+  ok("...and gives the reason, not just the state", /prospective/i.test(t));
+  const P = (V.models || []).find(m => m.role === "champion")?.quality?.probability;
+  ok("the bundle carries the scoreboard the panel renders", !!P);
+  if (P && !P.n) {
+    // An empty scoreboard because nothing has finished, and one because nothing
+    // emits a probability, are different problems with the same blank space.
+    ok("an empty scoreboard is explained by the calendar, not left blank",
+       /statement about the calendar/i.test(t), t.slice(0, 100));
+  }
+  ok("CONTROL: the strategy really does have moneylines off",
+     V.strategy_config.moneyline_enabled === false);
+}
+
+console.log("\n── model lab: the interval is bootstrapped over weeks, and says so ──");
+{
+  const tr = [...$$("#labmodels tbody tr")].find(x =>
+    x.querySelectorAll("td")[2].textContent.trim() !== "Champion");
+  const title = tr.querySelectorAll("td")[7].getAttribute("title") || "";
+  ok("the vs-Champion figure carries its interval, not just a point estimate",
+     title.length > 40, title.slice(0, 70));
+  // With no prospective games finished the honest answer is "no interval yet"
+  // plus the reason -- not a 95% label over three weekends.
+  ok("...and where there is no interval yet it says why",
+     /interval|too few weeks/i.test(title), title.slice(0, 90));
+  ok("the note explains the week-blocking rather than assuming it is understood",
+     /week/i.test($("#labmodelnote").textContent) &&
+     /too narrow/i.test($("#labmodelnote").textContent));
+}
+
+console.log("\n── model lab: the shadow inputs say they adjust nothing ──");
+{
+  const V = JSON.parse(bundle).v2;
+  const av = $("#labavail").textContent || "";
+  ok("the availability layer is described", av.length > 40, av.slice(0, 60));
+  // The layer records a status stream and moves no model. A panel that showed
+  // counts without saying so would read as an input the model uses.
+  ok("...and says outright that it adjusts nothing", /adjusts nothing/i.test(av));
+  ok("...and names the tiers that could ever be eligible",
+     (V.availability?.auto_adjust_eligible_tiers || []).every(t => av.includes(String(t))));
+  if (!(V.availability?.observations)) {
+    // An empty stream and a broken feed look identical. The timestamp is the
+    // only thing that separates them, so the panel must not read as "all clear".
+    ok("an empty stream is explained, not presented as a clean bill of health",
+       /expected answer|broken feed/i.test(av), av.slice(0, 80));
+  }
+
+  const wx = $("#labwx").textContent || "";
+  ok("the weather layer is described", wx.length > 40, wx.slice(0, 60));
+  // §23 names wind as the variable that matters and this source has none.
+  // A panel showing a temperature without that sentence would overclaim.
+  ok("...and states the wind gap on the page, not only in a docstring",
+     /wind is missing/i.test(wx), wx.slice(0, 90));
+  ok("...and reports how many snapshots actually carry wind",
+     wx.includes(String(V.weather?.with_wind ?? 0)));
+  ok("...and claims no model adjustment", /adjusts a model|adjusts nothing/i.test(wx));
+}
+
+console.log("\n── model lab: the methodology transition is stated (§27.5) ──");
+{
+  const V = JSON.parse(bundle).v2;
+  const m = $("#labmethod").textContent || "";
+  ok("the page explains the legacy close-based grading", /closing line/i.test(m));
+  ok("...and that the side used to be recomputed", /re-derived|recomputed/i.test(m));
+  ok("...and that it is now the published side at the locked line",
+     /published, at the\s+line it was locked at|locked at/i.test(m.replace(/\s+/g," ")));
+  ok("...and that the close is kept as a separate diagnostic",
+     /separate diagnostic/i.test(m));
+  ok("...and that legacy is preserved rather than overwritten", /preserved/i.test(m));
+  ok("...and never added to the new one", /never added together/i.test(m));
+  ok("the champion version is named", m.includes(V.champion));
+  ok("promotion is described as a decision, not a threshold",
+     /never by a threshold/i.test(m));
+}
+
+/* CONTROL. A missing V2 block must announce itself. The failure this guards
+   against is the one that keeps recurring in this repo: a reader with no writer,
+   rendering a clean empty table that is indistinguishable from a quiet week. */
+console.log("\n── model lab: CONTROL, an absent V2 block cannot look like a quiet week ──");
+{
+  const broken = JSON.parse(bundle);
+  broken.v2 = { available: false, why: "ImportError: no module named metrics_v2" };
+  const d4 = new JSDOM(html, {
+    runScripts: "dangerously", virtualConsole: new VirtualConsole(),
+    url: "https://example.test/research/",
+    beforeParse(win) {
+      win.fetch = async () => ({ ok: true, json: async () => broken });
+      win.matchMedia = () => ({ matches:false, addEventListener(){}, removeEventListener(){} });
+    },
+  });
+  await wait(400);
+  const w4 = d4.window;
+  const note = w4.document.querySelector("#labboardnote").textContent || "";
+  ok("CONTROL: the page says the V2 record is missing", /not in this bundle/i.test(
+     w4.document.querySelector("#labmodels").textContent));
+  ok("CONTROL: ...naming the reason it could not be read",
+     w4.document.querySelector("#labmodels").textContent.includes("ImportError"));
+  ok("CONTROL: ...and warns that this is not “no challengers ran”",
+     /not the same as/i.test(note), note.slice(0, 70));
+  ok("CONTROL: no scoreboard card is drawn from an unreadable block",
+     w4.document.querySelectorAll("#labboards .card").length === 0);
+}
+
+/* The sign convention on "vs market" is inverted relative to the rest of the
+   page -- a NEGATIVE number is the model doing better -- so it is coloured by
+   meaning. Getting that backwards would paint a winning model red for a season
+   and nobody would query it, because the number would still be correct. */
+console.log("\n── model lab: a better-than-market model is not painted as a loss ──");
+{
+  const tweaked = JSON.parse(bundle);
+  tweaked.v2.models = [
+    { model_version:"C0-x", model_id:"champion-grade", role:"champion",
+      experiment_id:null, quality:{ n:40, mae:12.1, paired_delta:-0.44, paired_n:40, bias:0.2 } },
+    { model_version:"E009-x", model_id:"residual-grade", role:"challenger",
+      experiment_id:"E009", quality:{ n:40, mae:13.9, paired_delta:1.30, paired_n:40, bias:-0.1 },
+      vs_champion:{ champion:"C0-x", challenger:"E009-x", paired_n:40, mean_improvement:-1.80 } },
+  ];
+  const d5 = new JSDOM(html, {
+    runScripts:"dangerously", virtualConsole:new VirtualConsole(),
+    url:"https://example.test/research/",
+    beforeParse(win){
+      win.fetch = async () => ({ ok:true, json:async()=>tweaked });
+      win.matchMedia = () => ({matches:false,addEventListener(){},removeEventListener(){}});
+    },
+  });
+  await wait(400);
+  const w5 = d5.window;
+  const trs = [...w5.document.querySelectorAll("#labmodels tbody tr")];
+  const champ = trs.find(t => t.textContent.includes("C0-x"));
+  const chall = trs.find(t => t.textContent.includes("E009-x"));
+  ok("a model closer than the market is marked good",
+     champ.querySelectorAll("td")[5].classList.contains("pos"),
+     champ.querySelectorAll("td")[5].className);
+  ok("CONTROL: a model further from the market than the market is not",
+     chall.querySelectorAll("td")[5].classList.contains("neg"),
+     chall.querySelectorAll("td")[5].className);
+  ok("a challenger worse than the Champion is marked as such",
+     chall.querySelectorAll("td")[7].classList.contains("neg"));
+  ok("...and the paired count travels with the number",
+     chall.querySelectorAll("td")[7].textContent.includes("(40)"),
+     chall.querySelectorAll("td")[7].textContent);
+  // Sorted by role, so the Champion leads even though the challenger would
+  // outrank it on nothing at all -- the ordering must not depend on the numbers.
+  ok("the Champion still leads a table where it is not the best row",
+     trs[0].textContent.includes("C0-x"));
+}
 
 console.log("\n── tab navigation ──");
 for (const b of $$("#nav button")) {

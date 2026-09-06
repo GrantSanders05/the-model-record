@@ -1,0 +1,76 @@
+name: The Model — publish the state journal
+
+# THE DURABILITY GUARANTEE. The Actions cache is an accelerator: GitHub evicts
+# caches after inactivity and under storage pressure, and a job must be able to
+# recover without one. That is fine for a CFBD response cache and not fine for
+# the only copy of what a book was offering at 4:58pm on a Saturday.
+#
+# This publishes the REDACTED journal to the data-state branch. Film grades are
+# stripped by state_events.write_publishable and the push is refused outright if
+# the audit finds one, because this repository is public.
+
+on:
+  schedule:
+    - cron: "40 7 * * *"          # nightly, after the daily update has landed
+  workflow_dispatch:
+
+# One writer at a time. Two jobs racing to push the same branch is how an
+# append-only journal acquires a merge conflict it cannot resolve.
+concurrency:
+  group: model-state-writer
+  cancel-in-progress: false
+
+permissions:
+  contents: write                 # needed to push the branch; nothing else
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Read-only. This job must never save the cache: it does not fetch results
+      # and letting it write would make a partially populated database the base
+      # every later run restores from.
+      - name: Restore data cache (read-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/cache
+            data/model.db
+            data/api_budget.json
+          key: model-data-v3-
+          restore-keys: |
+            model-data-v3-
+
+      - name: Restore the existing journal
+        run: |
+          git fetch origin data-state --quiet 2>/dev/null || true
+          if git show-ref --quiet refs/remotes/origin/data-state; then
+            git worktree add --quiet /tmp/ds origin/data-state --detach
+            mkdir -p state && cp -R /tmp/ds/state/. state/ 2>/dev/null || true
+            echo "restored $(find state -name '*.jsonl' | wc -l) journal file(s)"
+          else
+            echo "no data-state branch yet; it will be created"
+          fi
+
+      - name: Export, redact, audit and push
+        run: tools/state_commit.sh
+
+      # THE GUARANTEE, CHECKED. Rebuild a database from the journal alone and
+      # reconcile it against the live one. A journal that cannot reproduce the
+      # database is not a backup, and the only way to know is to try it.
+      - name: Prove the journal can rebuild the database
+        run: |
+          python3 src/replay_state.py --self-test
+          if [ -f data/model.db ]; then
+            python3 src/replay_state.py --verify-against data/model.db
+          else
+            echo "::warning::no restored database to reconcile against"
+          fi

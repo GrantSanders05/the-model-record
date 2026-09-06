@@ -2,7 +2,14 @@
 # The film grades are the one input no competitor can reproduce. The arithmetic
 # is public (that is the brand's transparency promise); the grades are not.
 exports/
-data/model.db
+# EVERY database file, not just this one name. `data/model.db` alone does not
+# match `data/model.pre-v2-20260906T050202Z.db` -- the timestamped backups
+# migrate_v2.py writes before it applies. Those are byte-for-byte copies of the
+# grade database, they are 20 MB each, and they were sitting untracked and
+# unignored one `git add -A` away from the public repository.
+data/*.db
+data/*.db-wal
+data/*.db-shm
 # The research bundle embeds every film grade. It is deployed to the PRIVATE
 # Vercel repo, never to this public one.
 site/research/data.json
@@ -19,6 +26,13 @@ FINDINGS.md
 SETUP.md
 service-account*.json
 *.env
+
+# ── the state journal ──
+# It lives on its own `data-state` branch, published by tools/state_commit.sh
+# from a REDACTED copy. The working journal here holds the film grades in full
+# and must never reach a commit on this branch.
+state/
+.state-publish/
 
 # ── generated ──
 output/

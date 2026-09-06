@@ -478,6 +478,148 @@ def health(conn, sport, season):
             "stale_locks": stale, "last_final_kickoff": last}
 
 
+def _availability_block(conn, sport, season):
+    """
+    §22 in shadow: what has been observed, and whether the market moved after.
+
+    Exported so the layer is VISIBLE. A table that is written every run and read
+    by nothing is the mirror image of the reader-with-no-writer defect, and just
+    as quiet — the observations would accumulate for a season and nobody would
+    notice they had stopped.
+    """
+    try:
+        import availability as _av
+    except Exception as e:                         # noqa: BLE001
+        return {"available": False, "why": "%s: %s" % (type(e).__name__, e)}
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) c FROM availability_events WHERE sport=? AND season=?",
+            (sport, season)).fetchone()["c"]
+        by_status = {r["status"]: r["c"] for r in conn.execute(
+            "SELECT status, COUNT(*) c FROM availability_events"
+            " WHERE sport=? AND season=? GROUP BY status", (sport, season))}
+        latest = conn.execute(
+            "SELECT MAX(observed_at) m FROM availability_events"
+            " WHERE sport=? AND season=?", (sport, season)).fetchone()["m"]
+        moves = _av.line_movement_after(conn, sport, season)
+    except Exception as e:                         # noqa: BLE001
+        return {"available": False, "why": "%s: %s" % (type(e).__name__, e)}
+    return {
+        "available": True,
+        "observations": total,
+        "by_status": by_status,
+        "latest_observed_at": latest,
+        "source_tiers": {str(k): v for k, v in _av.TIERS.items()},
+        "auto_adjust_eligible_tiers": list(_av.AUTO_ADJUST_ELIGIBLE),
+        "adjusts_model": False,
+        "why_not": "no calibrated P(absent | status, source, timing) exists yet; "
+                   "§22.3 forbids turning Questionable into Out, and wiring "
+                   "DEGRADED_AVAILABILITY into the decision rule is a strategy "
+                   "version change, not a data-module switch",
+        "line_movement": moves[:60],
+        "line_movement_n": len(moves),
+    }
+
+
+def _weather_block(conn, sport, season):
+    """§23 in shadow: what has been snapshotted, and the gap that remains."""
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) c FROM weather_snapshots w JOIN games g"
+            "   ON g.game_id = w.game_id"
+            " WHERE w.sport=? AND g.season=?", (sport, season)).fetchone()["c"]
+        latest = conn.execute(
+            "SELECT MAX(observed_at) m FROM weather_snapshots WHERE sport=?",
+            (sport,)).fetchone()["m"]
+        wind = conn.execute(
+            "SELECT COUNT(*) c FROM weather_snapshots"
+            " WHERE sport=? AND wind_mph IS NOT NULL", (sport,)).fetchone()["c"]
+        domes = conn.execute(
+            "SELECT COUNT(DISTINCT game_id) c FROM weather_snapshots"
+            " WHERE sport=? AND indoor=1", (sport,)).fetchone()["c"]
+    except Exception as e:                         # noqa: BLE001
+        return {"available": False, "why": "%s: %s" % (type(e).__name__, e)}
+    return {
+        "available": True,
+        "snapshots": n,
+        "latest_observed_at": latest,
+        "with_wind": wind,
+        "indoor_games": domes,
+        "source": "espn_scoreboard",
+        "adjusts_model": False,
+        "gap": "this source publishes no wind, which is the variable §23 names "
+               "as the one most likely to matter. The columns exist and stay "
+               "empty rather than holding a proxy.",
+    }
+
+
+def build_v2_block(conn, sport, season):
+    """
+    The V2 record: four scoreboards kept apart, and the challenger comparison.
+
+    Returns a dict with `scoreboards`, `strategies` and `models`. Nothing here is
+    summed into a headline — a challenger sorted to the top of a table by ATS
+    percentage is exactly the presentation §19.6 warns about, so the table is
+    ordered by version and carries the PAIRED comparison instead.
+    """
+    try:
+        import forecast_v2
+        import metrics_v2
+        import signals as _sig
+        import horizons as _hz
+    except Exception as e:                         # noqa: BLE001 - never block a build
+        return {"available": False, "why": "%s: %s" % (type(e).__name__, e)}
+
+    champ = conn.execute(
+        "SELECT model_version FROM model_registry WHERE role='champion'"
+        " ORDER BY created_at DESC LIMIT 1").fetchone()
+    champ_v = champ["model_version"] if champ else None
+
+    strategies = []
+    for r in conn.execute(
+            "SELECT DISTINCT strategy_version FROM signal_log WHERE is_official=1"
+            " ORDER BY strategy_version"):
+        sv = r["strategy_version"]
+        perf = metrics_v2.signal_performance(conn, strategy_version=sv, sport=sport)
+        diag = metrics_v2.closing_diagnostic(conn, strategy_version=sv, sport=sport)
+        strategies.append({"strategy_version": sv, "signals": perf, "close": diag})
+
+    models = []
+    for r in conn.execute(
+            "SELECT model_version, model_id, role, experiment_id, config_hash,"
+            "       git_sha, feature_schema_version, created_at, notes"
+            "  FROM model_registry ORDER BY role, model_version"):
+        m = dict(r)
+        m["quality"] = metrics_v2.forecast_quality(
+            conn, model_version=m["model_version"], sport=sport, season=season)
+        if champ_v and m["model_version"] != champ_v:
+            m["vs_champion"] = metrics_v2.paired_comparison(
+                conn, champion_version=champ_v,
+                challenger_version=m["model_version"], sport=sport)
+        models.append(m)
+
+    return {
+        "available": True,
+        "champion": champ_v,
+        "official_horizon": _hz.OFFICIAL_HORIZON,
+        "strategy_version": _sig.STRATEGY_V0["strategy_version"],
+        "strategy_config": _sig.STRATEGY_V0,
+        "strategy_hash": _sig.strategy_hash(),
+        "declined_reasons": _sig.reason_counts(conn),
+        "scoreboards": metrics_v2.all_scoreboards(
+            conn, model_version=champ_v,
+            strategy_version=_sig.STRATEGY_V0["strategy_version"], sport=sport),
+        "strategies": strategies,
+        "models": models,
+        "availability": _availability_block(conn, sport, season),
+        "weather": _weather_block(conn, sport, season),
+        "note": "four scoreboards, deliberately not summed: forecast quality is "
+                "over every forecast, signal performance only over what the "
+                "strategy offered, the close is a diagnostic, and user bets are "
+                "not modelled here at all.",
+    }
+
+
 def build_my_bets(conn, sport, season, labels):
     """
     The sheet-sourced half of his bet log, or a description of why there isn't one.
@@ -538,9 +680,19 @@ def main():
     # every game it refers to. The browser grades bets against the exported schedule
     # now, so a bet on a game the rating filter would have dropped has to keep its
     # fixture or it renders as ungraded forever.
-    mybets = build_my_bets(conn, args.sport, season, labels)
+    mybets_full = build_my_bets(conn, args.sport, season, labels)
+    # The game ids are derived BEFORE the rows are dropped: keeping a bet's game
+    # on the schedule is the behaviour, and publishing the bet is not.
+    _bet_games = [b["game_id"] for b in (mybets_full.get("bets") or [])]
+    # STATUS ONLY, ALWAYS. build_my_bets reads the sheet's My Bets tab; it is
+    # empty today, and a bet logged there would otherwise publish with its stake,
+    # its book and its ROI into a bundle that has been served in the clear since
+    # 1 September. The grades in this bundle are public BY DECISION; a person's
+    # wagering is not, and unlike a grade it cannot be un-published.
+    import public_export
+    mybets = public_export.safe_my_bets(mybets_full)
     slate = schedule(conn, args.sport, season, priced, labels, rated=rated,
-                     keep=[b["game_id"] for b in mybets.get("bets", [])])
+                     keep=_bet_games)
     for b in bets:
         b["week"] = labels.get(b["game_id"], b["week"])
 
@@ -612,6 +764,11 @@ def main():
             "loss_sign": config.get("sheet_loss_sign", -1.0),
             "raw_wl": config.get("sheet_raw_wl", 0.0),
         },
+        # ── V2: the four scoreboards, and the challenger table ───────────────
+        #
+        # Separate keys, never one "record". A reader who wants a single number
+        # has to choose which question they are asking, which is the point.
+        "v2": build_v2_block(conn, args.sport, season),
         "dispersion": disp,
         "preseason": preseason,
         "alerts": load_alerts(),
@@ -637,6 +794,20 @@ def main():
         "results": team_results(conn, args.sport, eff_season),
         "movement": line_movement(conn, args.sport, season),
     }
+
+    # THE LAST GATE, ON THE EXACT OBJECT THAT GETS WRITTEN. Not on the pieces, not
+    # on an earlier copy: on the bundle as assembled, so a field added anywhere
+    # between here and the top of this function is still checked. It refuses to
+    # write rather than writing and warning, because a bundle that has been served
+    # once has been fetched.
+    problems = public_export.audit(bundle)
+    if problems:
+        print("REFUSING TO WRITE the research bundle — it carries private data:")
+        for p in problems[:12]:
+            print("  %s" % p)
+        raise SystemExit(
+            "This bundle is served in the clear. Remove the fields above, or add "
+            "them to public_export.FORBIDDEN_KEYS if they are genuinely safe.")
 
     out = args.out if os.path.isabs(args.out) else os.path.join(ROOT, args.out)
     os.makedirs(os.path.dirname(out), exist_ok=True)

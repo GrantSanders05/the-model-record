@@ -182,12 +182,128 @@ FIX = {
 }
 
 
+def check_v2(now):
+    """
+    The V2 invariants that cannot look healthy while the pipeline is broken.
+
+    Local only: it opens the working database if there is one and says so if
+    there is not, rather than reporting green on the absence of evidence.
+
+    Everything here is a shape that produces NO error when it goes wrong. A
+    forecast with no provenance still renders. A horizon that closed empty leaves
+    a gap indistinguishable from a quiet week. A journal that has drifted from
+    the database still serves. Those are the ones a monitor has to carry.
+    """
+    import subprocess
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    dbp = os.path.join(root, "data", "model.db")
+    if not os.path.exists(dbp):
+        return WARN, "no local database on this runner — V2 checks skipped"
+    sys.path.insert(0, os.path.join(root, "src"))
+    try:
+        import db as _db
+        import api_budget as _ab
+        conn = _db.connect(dbp)
+    except Exception as e:                         # noqa: BLE001
+        return PROBLEM, "could not open the database — `%s`" % e
+
+    notes, worst = [], OK
+
+    # 1. Provenance on official signals. A signal that cannot name the model,
+    #    the code and the config that produced it is not evidence.
+    bad_prov = conn.execute(
+        "SELECT COUNT(*) c FROM signal_log s"
+        " LEFT JOIN forecast_log f ON f.forecast_id = s.forecast_id"
+        " LEFT JOIN model_registry m ON m.model_version = f.model_version"
+        " WHERE s.is_official=1 AND s.strategy_version != 'S-legacy'"
+        "   AND (f.forecast_id IS NULL OR m.model_version IS NULL"
+        "        OR m.git_sha IS NULL OR m.config_hash IS NULL)").fetchone()["c"]
+    if bad_prov:
+        worst = PROBLEM
+        notes.append("%d official signal(s) without complete provenance" % bad_prov)
+
+    # 2. Market freshness for games about to start.
+    soon = (now + dt.timedelta(hours=3)).isoformat()
+    stale = conn.execute(
+        "SELECT COUNT(*) c FROM games g WHERE g.sport='cfb'"
+        "  AND g.home_score IS NULL AND g.kickoff BETWEEN ? AND ?"
+        "  AND NOT EXISTS (SELECT 1 FROM market_quotes q WHERE q.game_id=g.game_id"
+        "                    AND q.observed_at >= ?)",
+        (now.isoformat(), soon,
+         (now - dt.timedelta(hours=6)).isoformat())).fetchone()["c"]
+    if stale:
+        worst = max(worst, WARN)
+        notes.append("%d game(s) kick off within 3h with no quote in the last 6h"
+                     % stale)
+
+    # 3. Missed horizons. Recorded, so they are visible rather than absent.
+    # Only misses for games that kicked off AFTER the model was registered. A
+    # game played before V2 existed has no T2 forecast because there was no V2,
+    # which is a fact about the calendar and not a pipeline failure. Counting
+    # those makes the number permanently large and therefore permanently ignored.
+    live_since = conn.execute(
+        "SELECT MIN(created_at) t FROM model_registry WHERE role='champion'"
+    ).fetchone()["t"]
+    if live_since:
+        misses = conn.execute(
+            "SELECT COUNT(*) c FROM snapshot_misses m"
+            "  JOIN games g ON g.game_id = m.game_id"
+            " WHERE m.detected_at >= ? AND g.kickoff > ?",
+            ((now - dt.timedelta(days=7)).isoformat(), live_since)).fetchone()["c"]
+        if misses:
+            worst = max(worst, WARN)
+            notes.append("%d horizon(s) closed with no forecast since V2 went live"
+                         % misses)
+
+    # 4. Budget, warned BEFORE requests start failing.
+    st = _ab.status(now)
+    if st["band"] != "normal" or st["projected_month_end"] > st["cap"]:
+        worst = max(worst, WARN)
+        notes.append("CFBD %d/%d used (%s band), projecting %d"
+                     % (st["used"], st["cap"], st["band"], st["projected_month_end"]))
+
+    # 5. The journal reconciles with the database it is supposed to reproduce.
+    state_dir = os.path.join(root, "state")
+    if os.path.isdir(state_dir):
+        r = subprocess.run(
+            [sys.executable, os.path.join(root, "src", "replay_state.py"),
+             "--verify-against", dbp], capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            # BEHIND IS NOT THE SAME AS WRONG, and conflating them makes the
+            # check useless. A journal with FEWER rows is simply not exported
+            # yet — the nightly job fixes it. A journal whose rows DIFFER means
+            # the database and the record of it have drifted apart, which is the
+            # thing this check exists to catch.
+            out = r.stdout or ""
+            differs = "differs" in out
+            if differs:
+                worst = PROBLEM
+                notes.append("the state journal DISAGREES with the database — "
+                             "rows differ, not just missing")
+            else:
+                worst = max(worst, WARN)
+                behind = [ln.split()[0] for ln in out.splitlines()
+                          if ln.strip().endswith("NO")]
+                notes.append("the state journal is behind on %s — the nightly "
+                             "export will catch up" % (", ".join(behind) or "some tables"))
+    else:
+        notes.append("no local journal to reconcile")
+
+    if worst == OK and not notes:
+        n_sig = conn.execute(
+            "SELECT COUNT(*) c FROM signal_log WHERE is_official=1").fetchone()["c"]
+        return OK, ("provenance complete, market fresh, no missed horizons, "
+                    "journal reconciles (%d official signal(s))" % n_sig)
+    return worst, "; ".join(notes)
+
+
 def main():
     now = dt.datetime.now(dt.timezone.utc)
     results = [("site", "Is the site current?") + check_site(now),
                ("runs", "Are the workflows healthy?") + check_runs(now),
                ("bundle", "Is the research app published?") + check_bundle(),
-               ("issues", "Anything already flagged?") + check_issues()]
+               ("issues", "Anything already flagged?") + check_issues(),
+               ("v2", "Is the V2 record trustworthy?") + check_v2(now)]
     worst = PROBLEM if any(r[2] == PROBLEM for r in results) else (
         WARN if any(r[2] == WARN for r in results) else OK)
     icon = {OK: "✅", WARN: "⚠️", PROBLEM: "❌"}
