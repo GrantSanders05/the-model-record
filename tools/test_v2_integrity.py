@@ -855,6 +855,115 @@ if os.path.exists(_bundle_path):
        "bets" not in (_live.get("mybets") or {}), _live.get("mybets"))
 
 
+# ══ 25.10 RESEARCH MODELS ═════════════════════════════════════════════════════
+
+print("\n── the ridge fit does what a ridge fit should ──")
+
+import random                                                   # noqa: E402
+from models_v2 import ridge as _ridge                           # noqa: E402
+from models_v2 import residual_grade as _rg                     # noqa: E402
+from models_v2 import matchup_residual as _mr                   # noqa: E402
+from models_v2 import MarketBaseline                            # noqa: E402
+
+random.seed(20260906)
+_syn = []
+for _ in range(600):
+    _a, _b, _c = random.gauss(0, 2), random.gauss(0, 3), random.gauss(0, 1)
+    _syn.append({"a": _a, "b": _b, "c": _c,
+                 "y": 3.0 * _a - 1.5 * _b + 0.0 * _c + 7.0 + random.gauss(0, 1)})
+_art = _ridge.fit_ridge(_syn, ["a", "b", "c"], "y", lam=0.01)
+_raw = {f: _art["coefficients"][f] / _art["sds"][f] for f in ("a", "b", "c")}
+ok("known coefficients are recovered",
+   abs(_raw["a"] - 3.0) < 0.15 and abs(_raw["b"] + 1.5) < 0.15
+   and abs(_raw["c"]) < 0.15, {k: round(v, 3) for k, v in _raw.items()})
+_big = _ridge.fit_ridge(_syn, ["a", "b", "c"], "y", lam=1000.0)
+ok("a larger lambda shrinks the coefficients",
+   sum(abs(v) for v in _big["coefficients"].values())
+   < sum(abs(v) for v in _art["coefficients"].values()))
+ok("standardization is recorded with the artifact",
+   set(_art["means"]) == {"a", "b", "c"} and set(_art["sds"]) == {"a", "b", "c"})
+ok("...and the feature ORDER is persisted, not re-derived",
+   _art["features"] == ["a", "b", "c"])
+ok("the intercept is not shrunk toward zero",
+   abs(_big["intercept"] - _art["intercept"]) < 1e-9,
+   (_art["intercept"], _big["intercept"]))
+
+# A zero-variance feature would divide by zero and poison every coefficient.
+_zv = [dict(r, d=5.0) for r in _syn]
+_azv = _ridge.fit_ridge(_zv, ["a", "d"], "y", lam=1.0)
+ok("a zero-variance feature does not produce NaN",
+   all(v == v for v in _azv["coefficients"].values()), _azv["coefficients"])
+ok("...and is named in the artifact rather than silently dropped",
+   "d" in _azv["zero_variance"], _azv["zero_variance"])
+
+# Lambda must be chosen on data the fit did not see.
+_refused = None
+try:
+    _rg.ResidualGrade().fit(_syn[:100])
+except ValueError as e:
+    _refused = str(e)
+ok("choosing lambda without a validation split is refused", _refused is not None,
+   _refused)
+
+# A model that cannot see one side of a game has no opinion about it.
+_full = {p: 10.0 for p in _rg.POSITIONS}
+ok("no grade vector means no features, not a vector of zeros",
+   _rg.features_from_payload({"home_grade_vector": None,
+                              "away_grade_vector": _full,
+                              "consensus_spread": -3.0}) is None)
+ok("...and one missing position is the same answer",
+   _rg.features_from_payload({"home_grade_vector": dict(_full, qb=None),
+                              "away_grade_vector": _full,
+                              "consensus_spread": -3.0}) is None)
+ok("...and so is no market",
+   _rg.features_from_payload({"home_grade_vector": _full,
+                              "away_grade_vector": _full,
+                              "consensus_spread": None}) is None)
+
+_pl = {"home_grade_vector": dict(_full, ol=12.0),
+       "away_grade_vector": dict(_full, dl=8.0),
+       "consensus_spread": -3.0, "neutral_site": 0}
+_f = _mr.features_from_payload(_pl)
+ok("the matchup features pit a line against the line it faces",
+   abs(_f["home_ol_vs_away_dl"] - 4.0) < 1e-9, _f["home_ol_vs_away_dl"])
+ok("...and are the ones pre-registered, not a set chosen after fitting",
+   set(_mr.MATCHUP_FEATURES) <= set(_f))
+
+# C1 is mandatory and must be exactly the market, never a smoothed version.
+_mb = MarketBaseline().predict({"consensus_spread": -3.5, "consensus_total": 52.5,
+                                "consensus_home_prob": 0.61})
+ok("the market baseline predicts the market", _mb["pred_home_margin"] == -3.5)
+ok("...and has nothing to fit", MarketBaseline().fit([]) is not None)
+ok("...and says nothing when there is no market",
+   MarketBaseline().predict({})["pred_home_margin"] is None)
+
+# Every model answers the same shape, and an unsupported field is None.
+for _m in (MarketBaseline(), _rg.ResidualGrade(), _mr.MatchupResidual()):
+    _out = _m.predict({})
+    ok("%s returns the normalized keys" % _m.model_id,
+       set(_out) >= {"pred_home_margin", "pred_total", "home_win_prob",
+                     "home_cover_prob", "over_prob", "borrowed_fallback"})
+    ok("...with None and not a default for what it cannot say" if _m.model_id
+       == "residual-grade" else "...%s: no invented defaults" % _m.model_id,
+       _out["home_cover_prob"] is None)
+
+# A registered version cannot be redefined into a different model.
+import forecast_v2 as _fv2                                      # noqa: E402
+_rconn = _db.connect(os.path.join(tempfile.mkdtemp(), "reg.db"))
+_fv2.register_model(_rconn, model_version="X1", model_id="m", role="challenger",
+                    config={"scale": 1.0})
+_conflict = None
+try:
+    _fv2.register_model(_rconn, model_version="X1", model_id="m",
+                        role="challenger", config={"scale": 2.0})
+except _fv2.VersionConflict as e:
+    _conflict = str(e)
+ok("a version cannot be redefined with a different config", _conflict is not None)
+ok("...and re-registering the SAME config is a no-op",
+   _fv2.register_model(_rconn, model_version="X1", model_id="m",
+                       role="challenger", config={"scale": 1.0})["model_version"] == "X1")
+
+
 print("\n── the moat covers what the tools actually write ──")
 #
 # migrate_v2 writes `data/model.pre-v2-<stamp>.db` before it applies: a

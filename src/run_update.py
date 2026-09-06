@@ -348,6 +348,32 @@ def main():
     else:
         print("  LIVE ledger: no graded picks yet")
 
+    # THE JOURNAL IS THE HAND-OFF between workflows. Only one job may write the
+    # database cache, so the frequent forecast-snapshot job records its work to
+    # the state journal instead and this run replays it in. Without this step a
+    # T2 forecast taken at 4pm by a job that cannot save the cache would simply
+    # vanish, which is the failure the whole horizon apparatus exists to prevent.
+    try:
+        import replay_state
+        import state_events as _se
+        _sdir = _se.DEFAULT_STATE_DIR
+        if os.path.isdir(_sdir):
+            _events = _se.read_all(_sdir)
+            _bad = _se.verify(_events)
+            if _bad:
+                print("  WARNING: the state journal does not verify; not replaying")
+                for _p in _bad[:3]:
+                    print("    %s" % _p)
+            else:
+                _applied = replay_state.apply_events(conn, _events)
+                if _applied:
+                    print("  replayed %d row(s) from the state journal: %s"
+                          % (sum(_applied.values()),
+                             ", ".join("%s %d" % kv for kv in sorted(_applied.items()))))
+    except Exception as e:                         # noqa: BLE001 - never block a run
+        print("  WARNING: could not replay the state journal — %s: %s"
+              % (type(e).__name__, e))
+
     print("\n[5b/9] V2 forecasts and official signals")
     try:
         import forecast_v2

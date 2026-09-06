@@ -1,0 +1,72 @@
+name: The Model — forecast snapshots
+
+# Takes every forecast that is due, at the standardized horizons, and evaluates
+# the official one. Runs often because a horizon window is 20-60 minutes wide and
+# a run outside every window fills nothing.
+#
+# IT DOES NOT WRITE THE DATABASE CACHE. Only the scheduled update may do that —
+# a second writer is how a half-populated database becomes the base every later
+# run restores from. This job records its work to the state journal instead, and
+# the next update replays it in. That is what the journal is for.
+
+on:
+  schedule:
+    # Game-day cadence, offset off the hour: :07 and :37 avoid the minute when
+    # every cron on GitHub fires at once and throttled runs get dropped.
+    - cron: "7,37 * * * 6"        # Saturday, all day
+    - cron: "7,37 16-23 * * 4,5"  # Thursday and Friday evenings
+    - cron: "7 */3 * * 0-3"       # a light heartbeat the rest of the week
+  workflow_dispatch:
+
+concurrency:
+  group: model-state-writer
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Restore data cache (read-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/cache
+            data/model.db
+            data/api_budget.json
+          key: model-data-v3-
+          restore-keys: model-data-v3-
+
+      - name: Restore the journal
+        run: |
+          git fetch origin data-state --quiet 2>/dev/null || true
+          if git show-ref --quiet refs/remotes/origin/data-state; then
+            git worktree add --quiet /tmp/ds origin/data-state --detach
+            mkdir -p state && cp -R /tmp/ds/state/. state/ 2>/dev/null || true
+          fi
+
+      # Market first: a forecast is only as good as the quote it saw, and a
+      # stale market makes the strategy decline. CRITICAL priority, so this
+      # keeps running even when the month is tight.
+      - name: Refresh the market
+        env:
+          CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
+        run: |
+          if [ -n "$CFBD_API_KEY" ]; then
+            python3 src/fetch_cfb.py --seasons "$(date -u +%Y)" --refresh
+          else
+            echo "::warning::no CFBD_API_KEY — forecasting from cached quotes"
+          fi
+
+      - name: Take the forecasts that are due
+        run: python3 src/forecast_v2.py --sport cfb
+
+      - name: Record them to the journal
+        run: tools/state_commit.sh

@@ -24,6 +24,7 @@ have changed.
 
 import datetime as dt
 import json
+import os
 
 import db
 import engine
@@ -363,3 +364,44 @@ def run_snapshots(conn, *, sport="cfb", config, now=None, horizons_wanted=None,
         if rep["misses"]:
             print("  %d horizon(s) recorded as missed" % rep["misses"])
     return rep
+
+
+def main():
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="Take every forecast that is due at a standardized horizon.")
+    ap.add_argument("--sport", default="cfb")
+    ap.add_argument("--config", default="config/cfb_grades.json")
+    ap.add_argument("--season", type=int)
+    ap.add_argument("--now", help="ISO time to pretend it is (for testing)")
+    ap.add_argument("--horizons", help="comma-separated subset, e.g. T24,T2")
+    ap.add_argument("--shadow", action="store_true",
+                    help="write signals with is_official=0")
+    args = ap.parse_args()
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg_path = (args.config if os.path.isabs(args.config)
+                else os.path.join(root, args.config))
+    with open(cfg_path) as fh:
+        config = json.load(fh)
+    conn = db.connect()
+
+    # A dirty tree means the recorded SHA does not describe what ran, so the run
+    # may take forecasts but not sign them as official. Said out loud rather than
+    # silently downgraded.
+    sha, dirty = provenance.git_sha(root)
+    okay, why = provenance.official_ready(sha, dirty)
+    official = (not args.shadow) and okay
+    if not args.shadow and not okay:
+        print("  NOT SIGNING OFFICIAL SIGNALS: %s" % why)
+
+    run_snapshots(conn, sport=args.sport, config=config, season=args.season,
+                  now=args.now,
+                  horizons_wanted=(args.horizons.split(",") if args.horizons else None),
+                  official=official,
+                  run_id=os.environ.get("GITHUB_RUN_ID"))
+
+
+if __name__ == "__main__":
+    main()
