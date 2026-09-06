@@ -345,6 +345,30 @@ def main():
     except Exception as e:
         print("  FAILED: %s: %s" % (type(e).__name__, e))
 
+    # ── V2, in shadow ────────────────────────────────────────────────────────
+    #
+    # Forecasts, feature snapshots, market snapshots and strategy evaluations for
+    # every game inside a horizon window, plus a recorded miss for every window
+    # that closed empty. Signals are written with is_official=0.
+    #
+    # SHADOW UNTIL THE CUTOVER, deliberately. The legacy lock path above is still
+    # the official writer, and two pipelines both publishing official picks is
+    # the one failure mode a transition must not have. Phase 1C flips this, once
+    # the shadow forecasts have been compared side by side with the legacy path.
+    print("\n[5b/9] V2 shadow forecasts")
+    try:
+        import forecast_v2
+        forecast_v2.run_snapshots(conn, sport=args.sport, config=config,
+                                  official=False,
+                                  run_id=os.environ.get("GITHUB_RUN_ID"))
+    except Exception as e:                         # noqa: BLE001 - shadow must not block
+        # A shadow layer that can take the production run down is worse than no
+        # shadow layer. Reported loudly, never silently.
+        print("  WARNING: the V2 shadow pass failed — %s: %s"
+              % (type(e).__name__, e))
+        import traceback
+        traceback.print_exc()
+
     print("\n[8/9] build private research bundle")
     try:
         import subprocess as _sp

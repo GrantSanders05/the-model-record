@@ -532,6 +532,144 @@ ok("...and storing it twice does not duplicate it",
    _mconn.execute("SELECT COUNT(*) c FROM market_snapshots").fetchone()["c"] == 1)
 
 
+# ══ 25.5 HORIZONS ═════════════════════════════════════════════════════════════
+
+print("\n── a run records the horizon it hit, not the one it aimed at ──")
+
+import horizons as H                                            # noqa: E402
+
+_KO = "2026-09-05T18:00:00+00:00"
+ok("exactly on target is accepted",
+   H.classify(kickoff=_KO, generated_at="2026-09-05T16:00:00+00:00",
+              horizon="T2")["status"] == H.ACCEPTED)
+ok("inside the tolerance is accepted",
+   H.classify(kickoff=_KO, generated_at="2026-09-05T16:15:00+00:00",
+              horizon="T2")["status"] == H.ACCEPTED)
+# A scheduler that fires an hour late has NOT produced a T2 forecast, and
+# relabelling it as one spends the only thing a standardized horizon buys.
+ok("an hour late is recorded as late, not relabelled",
+   H.classify(kickoff=_KO, generated_at="2026-09-05T17:00:00+00:00",
+              horizon="T2")["status"] == H.LATE)
+ok("too early is recorded as early",
+   H.classify(kickoff=_KO, generated_at="2026-09-05T15:00:00+00:00",
+              horizon="T2")["status"] == H.EARLY)
+ok("after kickoff is post_kick whatever the delta says",
+   H.classify(kickoff=_KO, generated_at="2026-09-05T18:00:01+00:00",
+              horizon="T2")["status"] == H.POST_KICK)
+ok("...and no tolerance is wide enough to make it pregame",
+   H.classify(kickoff=_KO, generated_at="2026-09-05T19:00:00+00:00",
+              horizon="T2", tolerance_minutes=10000)["status"] == H.POST_KICK)
+ok("the delta is signed, positive for a late run",
+   H.classify(kickoff=_KO, generated_at="2026-09-05T16:10:00+00:00",
+              horizon="T2")["delta_seconds"] == 600)
+ok("only the horizons whose window is open are due",
+   H.due_horizons(kickoff=_KO, now="2026-09-05T15:55:00+00:00") == ["T2"])
+ok("a run outside every window fills nothing",
+   H.due_horizons(kickoff=_KO, now="2026-09-05T09:00:00+00:00") == [])
+ok("T30 is collected but never official",
+   "T30" in H.ALL and not H.is_official("T30"))
+ok("T2 is the official lock", H.is_official("T2"))
+ok("a window that has closed is missed",
+   H.missed(kickoff=_KO, now="2026-09-05T17:00:00+00:00", horizon="T2"))
+ok("...and one still open is not",
+   not H.missed(kickoff=_KO, now="2026-09-05T16:05:00+00:00", horizon="T2"))
+
+_hconn = _db.connect(os.path.join(tempfile.mkdtemp(), "h.db"))
+ok("a miss is recorded once",
+   H.record_miss(_hconn, game_id="g1", model_version="C0", horizon="T2",
+                 kickoff=_KO, now="2026-09-05T17:00:00+00:00"))
+ok("...and re-detecting it does not duplicate the record",
+   not H.record_miss(_hconn, game_id="g1", model_version="C0", horizon="T2",
+                     kickoff=_KO, now="2026-09-05T17:30:00+00:00"))
+ok("...so a later retry cannot erase the gap",
+   _hconn.execute("SELECT COUNT(*) c FROM snapshot_misses").fetchone()["c"] == 1)
+
+
+# ══ 25.6 STRATEGY ═════════════════════════════════════════════════════════════
+
+print("\n── every decision is recorded, including the ones that decline ──")
+
+import signals as sig                                           # noqa: E402
+
+_FC = {"forecast_id": "fc_t", "game_id": "g1", "snapshot_status": H.ACCEPTED,
+       "horizon": "T2", "borrowed_fallback": 0, "pred_home_margin": 7.0}
+_PL = {"home_team": "H", "away_team": "A", "market_status": "valid_consensus",
+       "consensus_spread": 3.0, "market_policy_version": "consensus_v1",
+       "market_snapshot_id": "ms_1",
+       "home_grade_vector": {p: 1.0 for p in gsnap.POSITIONS},
+       "away_grade_vector": {p: 1.0 for p in gsnap.POSITIONS}}
+
+_e, _r, _x = sig.evaluate_spread(forecast=_FC, payload=_PL)
+ok("a clean forecast at the official horizon is eligible", _e, _r)
+ok("...and picks the side the edge points at",
+   _x["decision"]["side"] == "H" and _x["edge"] == 4.0, _x)
+ok("...at the consensus line, with no price invented",
+   _x["decision"]["line"] == 3.0 and _x["decision"]["price"] is None)
+
+for label, fc, pl, code in [
+        ("a game the film could not answer", dict(_FC, borrowed_fallback=1), _PL,
+         sig.BORROWED_RATER),
+        ("an unrated team", _FC, dict(_PL, home_grade_vector=None), sig.UNRATED_TEAM),
+        ("an incomplete grade vector", _FC,
+         dict(_PL, home_grade_vector=dict(_PL["home_grade_vector"], qb=None)),
+         sig.INCOMPLETE_GRADE),
+        ("a line outside the model's domain", _FC, dict(_PL, consensus_spread=40.0),
+         sig.BLOWOUT_OUT_OF_DOMAIN),
+        ("no market at all", _FC,
+         dict(_PL, market_status="missing", consensus_spread=None), sig.MISSING_MARKET),
+        ("a stale market", _FC, dict(_PL, market_status="stale_fallback"),
+         sig.STALE_MARKET),
+        ("a forecast made after kickoff", dict(_FC, snapshot_status=H.POST_KICK),
+         _PL, sig.POST_KICKOFF),
+        ("a forecast from the wrong horizon", dict(_FC, horizon="T24"), _PL,
+         sig.OUTSIDE_HORIZON),
+        ("a late run", dict(_FC, snapshot_status=H.LATE), _PL, sig.OUTSIDE_HORIZON),
+        ("no model number", dict(_FC, pred_home_margin=None), _PL, sig.NO_MODEL_NUMBER)]:
+    e2, r2, _ = sig.evaluate_spread(forecast=fc, payload=pl)
+    ok("%s is declined, and says why" % label, (not e2) and code in r2, r2)
+
+# The evaluations table is written whether or not anything is bet.
+_sconn = _db.connect(os.path.join(tempfile.mkdtemp(), "s.db"))
+_evals = sig.evaluate(_sconn, forecast=_FC, payload=_PL)
+ok("one evaluation per market, every time", len(_evals) == 3,
+   [e["decision_market"] or "-" for e in _evals])
+ok("...and a disabled market is a recorded policy, not an absence",
+   any(sig.MARKET_DISABLED in e["_reasons"] for e in _evals))
+_stored = _sconn.execute("SELECT COUNT(*) c FROM strategy_evaluations").fetchone()["c"]
+ok("declines are stored, so 'no bet' can be audited", _stored == 3, _stored)
+
+_spread_eval = next(e for e in _evals if e["decision_market"] == "spread")
+_s1 = sig.emit_signal(_sconn, evaluation=_spread_eval, forecast=_FC, is_official=True)
+ok("an eligible evaluation produces exactly one signal", _s1 is not None)
+_s2 = sig.emit_signal(_sconn, evaluation=_spread_eval, forecast=_FC, is_official=True)
+_n_sig = _sconn.execute("SELECT COUNT(*) c FROM signal_log").fetchone()["c"]
+ok("...and a retried run does not publish it twice", _n_sig == 1, _n_sig)
+ok("an ineligible evaluation produces none",
+   sig.emit_signal(_sconn, evaluation=dict(_evals[1], eligible=0),
+                   forecast=_FC) is None)
+
+# The database refuses a second official signal even if the code forgets to.
+_dup = dict(_s1, signal_id="sg_different", evaluation_id="ev_different")
+_refused = False
+try:
+    _sconn.execute("INSERT INTO signal_log (%s) VALUES (%s)"
+                   % (",".join(sig.SIGNAL_COLUMNS),
+                      ",".join(":" + c for c in sig.SIGNAL_COLUMNS)),
+                   {k: _dup[k] for k in sig.SIGNAL_COLUMNS})
+except sqlite3.IntegrityError:
+    _refused = True
+ok("a second OFFICIAL signal for the same game and market is refused by the schema",
+   _refused, "the partial unique index did not fire")
+
+ok("the strategy is data, and it is hashed", len(sig.strategy_hash()) == 64)
+ok("...and the version names the rules, not the week",
+   sig.STRATEGY_V0["strategy_version"].startswith("S0-"))
+ok("totals are off until a totals model exists",
+   sig.STRATEGY_V0["totals_enabled"] is False)
+ok("moneylines are off until a calibrated probability exists",
+   sig.STRATEGY_V0["moneyline_enabled"] is False)
+
+
 print("\n── the moat covers what the tools actually write ──")
 #
 # migrate_v2 writes `data/model.pre-v2-<stamp>.db` before it applies: a
