@@ -27,6 +27,13 @@ SETUP.md
 service-account*.json
 *.env
 
+# ── the state journal ──
+# It lives on its own `data-state` branch, published by tools/state_commit.sh
+# from a REDACTED copy. The working journal here holds the film grades in full
+# and must never reach a commit on this branch.
+state/
+.state-publish/
+
 # ── generated ──
 output/
 *.pyc

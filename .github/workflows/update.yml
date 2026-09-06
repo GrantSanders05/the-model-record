@@ -341,6 +341,9 @@ jobs:
           # It needs no production data, so it runs on every commit rather than
           # only on the one run that happens to migrate something.
           python3 src/migrate_v2.py --fixture-test
+          # The journal round trip: export, replay into an empty database,
+          # reconcile, and prove reconciliation FAILS on a deleted row.
+          python3 src/replay_state.py --self-test
           node tools/qa/public.mjs
           if [ -f output/research/data.json ]; then node tools/qa/research.mjs; fi
           # The populated branch of every tracking view. The live ledger is empty

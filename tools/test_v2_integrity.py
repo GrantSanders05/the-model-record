@@ -670,6 +670,123 @@ ok("moneylines are off until a calibrated probability exists",
    sig.STRATEGY_V0["moneyline_enabled"] is False)
 
 
+# ══ 25.8 STATE JOURNAL ════════════════════════════════════════════════════════
+
+print("\n── the cache is an accelerator, not the record ──")
+
+import state_events as sev                                      # noqa: E402
+import replay_state                                             # noqa: E402
+
+_sdir = tempfile.mkdtemp()
+_ev = sev.make_event("market_quote", {"quote_id": "mq_1", "home_spread": -3.5},
+                     occurred_at="2026-09-05T12:00:00+00:00")
+ok("an append writes the event", sev.append([_ev], _sdir, known=set()) == (1, 0))
+ok("...and appending it again writes nothing",
+   sev.append([_ev], _sdir) == (0, 1))
+_read = sev.read_all(_sdir)
+ok("what comes back is what went in", len(_read) == 1
+   and _read[0]["payload"]["home_spread"] == -3.5)
+ok("the journal verifies against its own hashes", not sev.verify(_read))
+_tampered = sev.read_all(_sdir)
+_tampered[0]["payload"]["home_spread"] = -99.0
+ok("[control] an edited payload fails verification", bool(sev.verify(_tampered)))
+_dupe = dict(_ev, payload={"quote_id": "mq_1", "home_spread": -9.9})
+_dupe["payload_hash"] = pv.payload_hash(_dupe["payload"])
+ok("[control] two events sharing an id with different payloads is a problem",
+   bool(sev.verify([_ev, _dupe])))
+
+# Events are ordered by the world's clock, not by file order, so a replay applies
+# facts in the order they happened however the files were written.
+_out_of_order = [
+    sev.make_event("signal", {"signal_id": "sg_2"}, occurred_at="2026-09-05T20:00:00+00:00"),
+    sev.make_event("signal", {"signal_id": "sg_1"}, occurred_at="2026-09-05T10:00:00+00:00")]
+sev.append(_out_of_order, _sdir)
+ok("events read back in occurrence order",
+   [e["payload"].get("signal_id") for e in sev.read_all(_sdir)
+    if e["event_type"] == "signal"] == ["sg_1", "sg_2"])
+
+
+# ══ 25.9 PRIVACY / THE MOAT ═══════════════════════════════════════════════════
+#
+# This repository is PUBLIC and a grade_snapshot payload carries the eight
+# position grades for a named team. Publishing the journal without redaction
+# would put every grade Grant has ever entered on the internet, machine-readable,
+# permanently. These are the checks standing between the two.
+
+print("\n── nothing published carries a film grade ──")
+
+ok("the grade stream is marked unpublishable", not sev.publishable("grade_snapshot"))
+ok("...and the market stream is publishable", sev.publishable("market_quote"))
+
+_g = sev.make_event("grade_snapshot", {
+    "grade_snapshot_id": "gs_1", "team": "Oregon", "source_hash": "abc",
+    "effective_at": "2026-09-01T00:00:00+00:00",
+    "qb": 12.2, "ol": 11.8, "dl": 12.2, "coach_st": 12.5})
+_r = sev.redact(_g)
+ok("redaction removes every position value",
+   not any(p in _r["payload"] for p in gsnap.POSITIONS), _r["payload"])
+ok("...and keeps the identity, so provenance survives",
+   {"grade_snapshot_id", "team", "effective_at", "source_hash"} <= set(_r["payload"]))
+ok("...and says what it removed", "qb" in _r["redacted"])
+ok("...and re-hashes what is left, so verification still passes",
+   _r["payload_hash"] == pv.payload_hash(_r["payload"]))
+
+# The audit, against the three shapes a leak actually takes.
+_leak = tempfile.mkdtemp()
+sev.append([_g], _leak, known=set())
+ok("an unredacted grade snapshot is caught", bool(sev.audit_publishable(_leak)))
+
+_nested = tempfile.mkdtemp()
+sev.append([sev.make_event("forecast", {
+    "forecast_id": "fc_1",
+    "debug": '{"team":"Oregon","qb":12.2,"ol":11.8}'})], _nested, known=set())
+ok("...and so are grades nested inside a JSON string on a PUBLIC stream",
+   bool(sev.audit_publishable(_nested)),
+   "a top-level-only scan would pass this")
+
+# And the check that keeps the gate usable: the model config's per-position
+# WEIGHTS are public arithmetic, and a scan that fires on them gets switched off.
+_cfgdir = tempfile.mkdtemp()
+sev.append([sev.make_event("model_registry", {
+    "model_version": "C0",
+    "config_json": '{"grade_weights":{"qb":1.0,"ol":1.0,"dl":1.0}}'})],
+    _cfgdir, known=set())
+ok("...but the config's grade WEIGHTS do not trip it",
+   not sev.audit_publishable(_cfgdir), sev.audit_publishable(_cfgdir))
+
+_pub = tempfile.mkdtemp()
+_full = tempfile.mkdtemp()
+sev.append([_g, sev.make_event("market_quote", {"quote_id": "mq_9"})],
+           _full, known=set())
+_counts = sev.write_publishable(_full, _pub)
+ok("a publishable copy redacts rather than dropping",
+   _counts["redacted"] == 1 and _counts["dropped"] == 0, _counts)
+ok("...and the result audits clean", not sev.audit_publishable(_pub))
+ok("...while the working journal still has the grades",
+   any("qb" in (e.get("payload") or {}) for e in sev.read_all(_full)))
+
+# The whole point of the journal: an empty database, rebuilt.
+_rt_src = _db.connect(os.path.join(tempfile.mkdtemp(), "rt.db"))
+_now_iso = "2026-09-05T12:00:00+00:00"
+_rt_src.execute(
+    "INSERT INTO signal_log (signal_id, evaluation_id, forecast_id, game_id,"
+    " strategy_version, market, side, line, created_at, official_horizon, is_official)"
+    " VALUES ('sg_rt','ev','fc','g1','S0','spread','H',-3.5,?, 'T2',1)", (_now_iso,))
+_rt_src.commit()
+_rt_dir = tempfile.mkdtemp()
+sev.append(sev.export_from_db(_rt_src), _rt_dir, known=set())
+_rt_conn, _rt_counts = replay_state.rebuild(_rt_dir, os.path.join(tempfile.mkdtemp(), "back.db"),
+                                            verbose=False)
+ok("an empty database is rebuilt from the journal alone",
+   _rt_counts.get("signal_log") == 1, _rt_counts)
+ok("...and reconciles against the original",
+   all(d["match"] for d in replay_state.reconcile(_rt_src, _rt_conn)))
+_rt_conn.execute("DELETE FROM signal_log")
+_rt_conn.commit()
+ok("[control] a missing row makes reconciliation fail",
+   any(not d["match"] for d in replay_state.reconcile(_rt_src, _rt_conn)))
+
+
 print("\n── the moat covers what the tools actually write ──")
 #
 # migrate_v2 writes `data/model.pre-v2-<stamp>.db` before it applies: a
@@ -690,7 +807,10 @@ _stamp = "20260906T050202Z"
 for name in ["data/model.db",
              "data/model.pre-v2-%s.db" % _stamp,      # migrate_v2.backup()
              "data/model.db-wal", "data/model.db-shm",
-             "output/research/data.json", "output/v2_migration_report.json"]:
+             "output/research/data.json", "output/v2_migration_report.json",
+             # The working journal holds the grades in full; only the redacted
+             # copy is ever published, and only from its own branch.
+             "state/grades/2026/09.jsonl", ".state-publish/grades/2026/09.jsonl"]:
     ok("the moat ignores %s" % name, _ignored(name))
 ok("...and does not ignore the source it is protecting",
    not _ignored("src/migrate_v2.py"))
