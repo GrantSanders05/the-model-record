@@ -25,6 +25,7 @@ exactly this reason.
 
 import json
 import math
+import random
 import statistics
 
 
@@ -42,6 +43,57 @@ def _wilson(w, n, z=1.96):
     c = p + z * z / (2 * n)
     m = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
     return (round(100 * (c - m) / d, 1), round(100 * (c + m) / d, 1))
+
+
+# §19.4. Games inside one weekend share the market, the news cycle and the
+# weather. Resampling GAMES treats forty correlated observations as forty
+# independent ones and reports an interval that is too narrow — flattering,
+# stable-looking, and wrong in the direction that gets a challenger promoted.
+# Resampling WEEKS keeps the correlation inside the unit being resampled.
+BOOTSTRAP_ITERS = 2000
+BOOTSTRAP_SEED = 20260906
+MIN_BOOTSTRAP_WEEKS = 4
+
+
+def block_bootstrap_ci(by_week, *, iters=BOOTSTRAP_ITERS, seed=BOOTSTRAP_SEED,
+                       alpha=0.05):
+    """
+    A percentile CI for the mean, resampling whole weeks. -> dict
+
+    Fixed seed, so the same data gives the same interval and a number quoted in a
+    report can be reproduced. Returns a `why` instead of an interval when there
+    are too few weeks: an interval over three weekends is a statement about three
+    weekends, and printing it with a 95% label would be the fake precision §27.3
+    forbids.
+    """
+    weeks = [w for w, vals in by_week.items() if vals]
+    out = {"weeks": len(weeks), "iters": iters, "seed": seed,
+           "lo": None, "hi": None}
+    if len(weeks) < MIN_BOOTSTRAP_WEEKS:
+        out["why"] = ("%d week(s) of evidence; a block bootstrap needs at least %d "
+                      "before its interval means anything"
+                      % (len(weeks), MIN_BOOTSTRAP_WEEKS))
+        return out
+    rng = random.Random(seed)
+    means = []
+    for _ in range(iters):
+        pooled = []
+        for _ in range(len(weeks)):
+            pooled.extend(by_week[weeks[rng.randrange(len(weeks))]])
+        if pooled:
+            means.append(sum(pooled) / len(pooled))
+    if not means:
+        out["why"] = "no resample produced an observation"
+        return out
+    means.sort()
+    lo = means[int((alpha / 2) * (len(means) - 1))]
+    hi = means[int((1 - alpha / 2) * (len(means) - 1))]
+    out["lo"] = round(lo, 3)
+    out["hi"] = round(hi, 3)
+    # Said explicitly, because "the interval contains zero" is the sentence that
+    # keeps getting dropped between a table and a decision.
+    out["separated_from_zero"] = bool(lo > 0 or hi < 0)
+    return out
 
 
 def forecast_quality(conn, *, model_version=None, horizon=None, sport="cfb",
@@ -82,6 +134,13 @@ def forecast_quality(conn, *, model_version=None, horizon=None, sport="cfb",
                      "mkt_err": (abs(actual - mkt) if mkt is not None else None)})
 
     out = {"n": len(rows), "model_version": model_version, "horizon": horizon}
+    # Attached BEFORE the early return. A margin scoreboard with nothing in it and
+    # a probability scoreboard with nothing in it are separate facts, and hanging
+    # the second off the first meant the panel vanished whenever the first was
+    # empty — which is exactly when a reader most wants to know why.
+    out["probability"] = probability_quality(
+        conn, model_version=model_version, horizon=horizon, sport=sport,
+        season=season) if model_version else None
     if not rows:
         return out
     out["mae"] = round(_mean([r["err"] for r in rows]), 3)
@@ -108,6 +167,101 @@ def forecast_quality(conn, *, model_version=None, horizon=None, sport="cfb",
         den = sum((x - mx) ** 2 for x in xs)
         out["calibration_slope"] = round(
             sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den, 3) if den else None
+    return out
+
+
+# The floor and ceiling a probability may be scored at. A model that emits a
+# bare 0 or 1 has claimed certainty about a football game; log loss would be
+# infinite and one row would swamp the season. Clipping is standard, and the
+# COUNT of clipped rows is reported, because a model doing it often is telling
+# you something about itself.
+PROB_CLIP = 1e-6
+CALIBRATION_BINS = ((0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0))
+
+
+def probability_quality(conn, *, model_version, horizon=None, sport="cfb",
+                        season=None):
+    """
+    Is the win probability any good, and is it any better than the price? -> dict
+
+    §12.5 keeps moneylines off until a prospectively calibrated probability
+    exists. This is the measurement that would eventually answer that, and it is
+    deliberately paired against the DE-VIGGED market probability from the same
+    feature snapshot — §19.2's same-time baseline. Comparing a T2 model
+    probability against a closing price would flatter the model for being late.
+
+    Nothing here promotes anything. `enables_moneyline` is False with a reason,
+    and it stays False until a human reads a prospective sample.
+    """
+    q = ("SELECT f.home_win_prob, f.horizon, s.payload_json,"
+         "       g.home_score, g.away_score, g.week"
+         "  FROM forecast_log f"
+         "  JOIN feature_snapshots s ON s.feature_snapshot_id = f.feature_snapshot_id"
+         "  JOIN games g ON g.game_id = f.game_id"
+         " WHERE g.sport=? AND f.model_version=? AND f.home_win_prob IS NOT NULL"
+         "   AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL")
+    args = [sport, model_version]
+    if horizon:
+        q += " AND f.horizon=?"
+        args.append(horizon)
+    if season:
+        q += " AND g.season=?"
+        args.append(season)
+
+    rows, clipped = [], 0
+    for r in conn.execute(q, args):
+        if r["home_score"] == r["away_score"]:
+            # Not scored rather than scored as a loss. A tie is not a home loss,
+            # and college football does not produce them — so one appearing is a
+            # data problem, and silently grading it would hide that.
+            continue
+        p = float(r["home_win_prob"])
+        if p <= PROB_CLIP or p >= 1 - PROB_CLIP:
+            clipped += 1
+            p = min(max(p, PROB_CLIP), 1 - PROB_CLIP)
+        payload = json.loads(r["payload_json"])
+        rows.append({"p": p, "y": 1 if r["home_score"] > r["away_score"] else 0,
+                     "market": payload.get("consensus_home_prob"),
+                     "week": r["week"]})
+
+    out = {"model_version": model_version, "horizon": horizon, "n": len(rows),
+           "clipped": clipped,
+           "enables_moneyline": False,
+           "why": "a probability is not usable as a price until it has a "
+                  "prospective calibration sample a human has read; §12.5 keeps "
+                  "moneyline_enabled False until then"}
+    if not rows:
+        return out
+    out["brier"] = round(_mean([(r["p"] - r["y"]) ** 2 for r in rows]), 4)
+    out["log_loss"] = round(_mean([
+        -(r["y"] * math.log(r["p"]) + (1 - r["y"]) * math.log(1 - r["p"]))
+        for r in rows]), 4)
+    out["base_rate"] = round(_mean([r["y"] for r in rows]), 4)
+    # The reference every Brier score needs: what a model that always predicted
+    # the base rate would have scored. A Brier of 0.24 means nothing on its own.
+    out["brier_base_rate_model"] = round(
+        _mean([(out["base_rate"] - r["y"]) ** 2 for r in rows]), 4)
+
+    paired = [r for r in rows if r["market"] is not None]
+    out["paired_n"] = len(paired)
+    if paired:
+        mkt = _mean([(r["market"] - r["y"]) ** 2 for r in paired])
+        own = _mean([(r["p"] - r["y"]) ** 2 for r in paired])
+        out["market_brier"] = round(mkt, 4)
+        out["brier_vs_market"] = round(own - mkt, 4)
+        by_week = {}
+        for r in paired:
+            by_week.setdefault(r["week"], []).append(
+                (r["market"] - r["y"]) ** 2 - (r["p"] - r["y"]) ** 2)
+        out["block_bootstrap"] = block_bootstrap_ci(by_week)
+
+    bins = []
+    for lo, hi in CALIBRATION_BINS:
+        inside = [r for r in rows if lo <= r["p"] < hi or (hi == 1.0 and r["p"] == 1.0)]
+        bins.append({"lo": lo, "hi": hi, "n": len(inside),
+                     "predicted": round(_mean([r["p"] for r in inside]), 4) if inside else None,
+                     "realized": round(_mean([r["y"] for r in inside]), 4) if inside else None})
+    out["calibration"] = bins
     return out
 
 
@@ -162,7 +316,7 @@ def paired_comparison(conn, *, champion_version, challenger_version, horizon=Non
     error, its standard error, and a win/tie/loss count.
     """
     q = ("SELECT f.model_version, f.game_id, f.pred_home_margin,"
-         "       g.home_score, g.away_score"
+         "       g.home_score, g.away_score, g.week"
          "  FROM forecast_log f JOIN games g ON g.game_id=f.game_id"
          " WHERE g.sport=? AND f.model_version IN (?,?)"
          "   AND g.home_score IS NOT NULL AND g.away_score IS NOT NULL")
@@ -170,17 +324,28 @@ def paired_comparison(conn, *, champion_version, challenger_version, horizon=Non
     if horizon:
         q += " AND f.horizon=?"
         args.append(horizon)
-    by_game = {}
+    by_game, week_of = {}, {}
     for r in conn.execute(q, args):
         actual = r["home_score"] - r["away_score"]
         if r["pred_home_margin"] is None:
             continue
+        week_of[r["game_id"]] = r["week"]
         by_game.setdefault(r["game_id"], {})[r["model_version"]] = abs(
             actual - r["pred_home_margin"])
-    both = [(v[champion_version], v[challenger_version]) for v in by_game.values()
-            if champion_version in v and challenger_version in v]
+    paired_games = [gid for gid, v in by_game.items()
+                    if champion_version in v and challenger_version in v]
+    both = [(by_game[g][champion_version], by_game[g][challenger_version])
+            for g in paired_games]
+    by_week = {}
+    for gid in paired_games:
+        by_week.setdefault(week_of.get(gid), []).append(
+            by_game[gid][champion_version] - by_game[gid][challenger_version])
     out = {"champion": champion_version, "challenger": challenger_version,
-           "paired_n": len(both), "horizon": horizon}
+           "paired_n": len(both), "horizon": horizon,
+           # Always present, even at zero pairs. An absent key and an interval
+           # that cannot be computed yet look identical to a reader, and only one
+           # of them is a bug.
+           "block_bootstrap": block_bootstrap_ci(by_week)}
     if not both:
         return out
     deltas = [c - ch for c, ch in both]        # positive = challenger closer

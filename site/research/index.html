@@ -630,6 +630,13 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
      pipeline that failed on the other sixty.</p>
   <div class="panel scroll"><table id="labdeclined"></table></div>
 
+  <h2>Win probability, and why moneylines are off</h2>
+  <p class="sub">A margin and a probability are different claims and are scored
+     differently. This is the measurement that would have to come good before a
+     moneyline could be priced — against the de-vigged market price the model saw,
+     not against a closing number it never had.</p>
+  <div class="panel" id="labprob"></div>
+
   <h2>Shadow inputs — availability and weather</h2>
   <p class="sub">Who is listed as unavailable, recorded as a stream of observations
      rather than one status that gets overwritten. It adjusts nothing: there is no
@@ -2480,6 +2487,7 @@ function drawLab(){
       "means the export could not read the V2 tables, and nothing below should be trusted.";
     $("#labdeclined").innerHTML="";
     $("#labstrategy").innerHTML="";
+    $("#labprob").innerHTML="";
     $("#labavail").innerHTML="";
     $("#labwx").innerHTML="";
     $("#labmethod").innerHTML="";
@@ -2553,6 +2561,19 @@ function drawLab(){
            String(a.model_version).localeCompare(String(b.model_version));
   });
   const good=v=>v==null?"muted":(+v<0?"pos":(+v>0?"neg":"muted"));   // closer = better
+  /* §19.4. Games in one weekend share the market, the news and the weather, so
+     the interval is bootstrapped over WEEKS. Resampling games would report one
+     that is too narrow — flattering, and wrong in the direction that promotes a
+     challenger. The interval lives in the cell's tooltip rather than a tenth
+     column; what it changes is whether the point estimate means anything. */
+  function bootTitle(vc){
+    const base="mean improvement in absolute error over the Champion, on the games both forecast";
+    const b=vc&&vc.block_bootstrap;
+    if(!b) return base;
+    if(b.lo==null) return `${base}. No interval yet: ${b.why||"too few weeks"}`;
+    return `${base}. 95% week-block interval ${b.lo} to ${b.hi} over ${b.weeks} weeks`+
+           `${b.separated_from_zero?"":" — which contains zero, so this is not yet separated from no difference"}`;
+  }
   $("#labmodels").innerHTML = ms.length
     ? `<thead><tr><th>Version</th><th>Experiment</th><th>Status</th>
         <th class="num">Prospective n</th><th class="num">MAE</th>
@@ -2568,7 +2589,8 @@ function drawLab(){
            <td class="num ${good(q.paired_delta)}" title="model MAE minus market MAE on the same games; negative means the model was closer">${
               q.paired_delta!=null?`${sgn(q.paired_delta,2)} (${q.paired_n})`:"—"}</td>
            <td class="num ${cls(q.bias)}">${q.bias!=null?sgn(q.bias,2):"—"}</td>
-           <td class="num ${vc&&vc.mean_improvement!=null?(vc.mean_improvement>0?"pos":"neg"):"muted"}" title="mean improvement in absolute error over the Champion, on the games both forecast">${
+           <td class="num ${vc&&vc.mean_improvement!=null?(vc.mean_improvement>0?"pos":"neg"):"muted"}" title="${
+              esc(bootTitle(vc))}">${
               vc&&vc.mean_improvement!=null?`${sgn(vc.mean_improvement,2)} (${vc.paired_n})`:"—"}</td>
            <td class="muted">${esc(PROMO[m.role]||"—")}</td></tr>`;
        }).join("")}</tbody>`
@@ -2582,7 +2604,10 @@ function drawLab(){
     "in this table on purpose: it is a property of a signal that was published at a "+
     "line, not of a shadow forecast nobody acted on, so it lives with the strategies "+
     "above. A model registered this week has a prospective n of 0, and that is the "+
-    "honest number — anything else would be a backtest wearing a prospective label.";
+    "honest number — anything else would be a backtest wearing a prospective label. "+
+    "Hover the vs-Champion figure for its 95% interval, bootstrapped over whole "+
+    "weeks rather than games: a weekend's games share the market and the news, and "+
+    "resampling them individually reports an interval too narrow to be true.";
 
   /* The strategy that turns a prediction into a published pick, hashed. */
   const cfgRow=(k,v)=>`<tr><td class="team">${esc(k)}</td><td class="num">${
@@ -2652,6 +2677,35 @@ function drawLab(){
          <td class="num">${num(m.modelled_impact,2)}</td>
          <td class="num ${cls(m.move)}">${sgn(m.move,2)}</td></tr>`).join("")}
        </tbody></table></div>`:""}`;
+
+  /* §12.5 / §19. A probability scoreboard that did not say "and this is still
+     not enough to bet a moneyline" would read as an authorisation. */
+  {
+    const P=(ms.find(m=>m.role==="champion")||{}).quality?.probability;
+    $("#labprob").innerHTML = !P
+      ? `<div class="empty">No probability scoreboard in this bundle.</div>`
+      : `<div style="padding:14px 15px;font-size:12.5px;line-height:1.62">
+         <p style="margin:0 0 10px">${P.n
+           ? `<b>${P.n} graded forecast${P.n===1?"":"s"}</b> carried a win probability.
+              Brier ${num(P.brier,4)} against ${num(P.brier_base_rate_model,4)} for a
+              model that always predicted the base rate${
+              P.paired_n?`, and ${num(P.market_brier,4)} for the market on the
+              ${P.paired_n} it could be paired against`:""}.`
+           : `<b>No graded forecast carries a win probability yet.</b> The Champion
+              publishes one and no game it has forecast has finished — which is a
+              statement about the calendar, not about the model.`}</p>
+         <p style="margin:0"><b>Moneylines stay off.</b> ${esc(P.why||"")}</p></div>`+
+         (P.n&&P.calibration?`<div class="scroll"><table>
+           <thead><tr><th>Predicted band</th><th class="num">Games</th>
+           <th class="num">Predicted</th><th class="num">Actually won</th></tr></thead><tbody>${
+           P.calibration.map(b=>`<tr>
+             <td class="team">${(b.lo*100).toFixed(0)}–${(b.hi*100).toFixed(0)}%</td>
+             <td class="num">${b.n}</td>
+             <td class="num">${b.predicted==null?"—":(b.predicted*100).toFixed(1)+"%"}</td>
+             <td class="num ${b.n?"strong":"muted"}">${
+                b.realized==null?"—":(b.realized*100).toFixed(1)+"%"}</td></tr>`).join("")}
+           </tbody></table></div>`:"");
+  }
 
   /* §23. The gap is stated on the page, not only in a docstring: a weather
      panel that showed a temperature and said nothing about wind would read as a

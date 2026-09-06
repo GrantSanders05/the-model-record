@@ -1175,6 +1175,105 @@ _fv2.register_model(_lc_conn, model_version="E098-empty", model_id="form-quality
 ok("CONTROL: a registry row with no coefficients is skipped, not run empty",
    "E098-empty" not in dict(_fv2.load_challengers(_lc_conn)))
 
+# ── §19.4 the block bootstrap, and why it is blocked by week ─────────────────
+import metrics_v2 as _m19                                       # noqa: E402
+import random as _rnd                                           # noqa: E402
+
+_rg9 = _rnd.Random(1)
+_bw = {w: [_rg9.gauss(0.0, 3.0) for _ in range(30)] for w in range(1, 13)}
+_ci = _m19.block_bootstrap_ci(_bw)
+ok("a block bootstrap over twelve weeks produces an interval", _ci["lo"] is not None)
+ok("...that brackets the truth it was drawn from", _ci["lo"] < 0.0 < _ci["hi"],
+   "%s..%s" % (_ci["lo"], _ci["hi"]))
+ok("...and says outright that it is not separated from zero",
+   _ci["separated_from_zero"] is False)
+ok("the seed is fixed, so a number quoted in a report can be reproduced",
+   _m19.block_bootstrap_ci(_bw) == _ci)
+
+# Three weekends is a statement about three weekends. An interval labelled 95%
+# over that is the fake precision §27.3 forbids.
+_thin = _m19.block_bootstrap_ci({1: [1.0], 2: [2.0], 3: [3.0]})
+ok("CONTROL: too few weeks yields no interval and a reason",
+   _thin["lo"] is None and "at least" in _thin["why"], _thin.get("why"))
+
+# The point of blocking. Forty correlated games resampled INDIVIDUALLY report an
+# interval that is too narrow -- flattering, stable-looking, and wrong in the
+# direction that gets a challenger promoted.
+_shift = _rnd.Random(7)
+_corr = {w: [(_shift.gauss(0, 1) + (6.0 if w % 2 else -6.0)) for _ in range(40)]
+         for w in range(1, 9)}
+_blocked = _m19.block_bootstrap_ci(_corr)
+_flat = _m19.block_bootstrap_ci(
+    {i: [v] for i, v in enumerate(x for xs in _corr.values() for x in xs)})
+ok("blocking by week gives a WIDER interval than resampling games",
+   (_blocked["hi"] - _blocked["lo"]) > (_flat["hi"] - _flat["lo"]) * 2,
+   "blocked %.2f wide vs per-game %.2f"
+   % (_blocked["hi"] - _blocked["lo"], _flat["hi"] - _flat["lo"]))
+
+# ── the probability scoreboard, and why moneylines stay off ──────────────────
+_pconn = _db.connect(os.path.join(tempfile.mkdtemp(), "prob.db"))
+_pv = "C0-prob"
+_fv2.register_model(_pconn, model_version=_pv, model_id="champion-grade",
+                    role="champion", config={"scale": 1.0})
+_rg_p = _rnd.Random(11)
+for _i in range(200):
+    _true = 0.25 + 0.5 * ((_i % 10) / 9.0)
+    _y = 1 if _rg_p.random() < _true else 0
+    _gid = "p%03d" % _i
+    _pconn.execute(
+        "INSERT INTO games (game_id, sport, season, week, home_team, away_team,"
+        " kickoff, home_score, away_score, neutral_site)"
+        " VALUES (?,?,?,?,?,?,?,?,?,0)",
+        (_gid, "cfb", 2026, 1 + _i % 10, "H%d" % _i, "A%d" % _i,
+         "2026-09-0%dT18:00:00+00:00" % (1 + _i % 5),
+         30 if _y else 10, 10 if _y else 30))
+    _fsid = "fs_%s" % _gid
+    _pconn.execute(
+        "INSERT INTO feature_snapshots (feature_snapshot_id, game_id, created_at,"
+        " feature_schema_version, payload_json, payload_hash)"
+        " VALUES (?,?,?,?,?,?)",
+        (_fsid, _gid, "2026-09-01T00:00:00+00:00", "champion_features_v3",
+         json.dumps({"consensus_home_prob": _true}), "h%03d" % _i))
+    _pconn.execute(
+        "INSERT INTO forecast_log (forecast_id, sport, game_id, model_version,"
+        " feature_snapshot_id, horizon, generated_at, snapshot_status,"
+        " pred_home_margin, home_win_prob, provenance_quality, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("fc_%s" % _gid, "cfb", _gid, _pv, _fsid, "T2",
+         "2026-09-01T00:00:00+00:00", "on_time", 0.0, _true, "complete",
+         "2026-09-01T00:00:00+00:00"))
+_pconn.commit()
+
+_pq = _m19.probability_quality(_pconn, model_version=_pv, sport="cfb")
+ok("a probability scoreboard scores every finished forecast", _pq["n"] == 200)
+ok("...with a Brier score", _pq["brier"] is not None)
+# A Brier of 0.24 means nothing on its own. What a base-rate model would have
+# scored is the reference that makes it readable.
+ok("...and the base-rate model it has to beat", _pq["brier_base_rate_model"] is not None)
+ok("a well-calibrated model beats the base rate",
+   _pq["brier"] < _pq["brier_base_rate_model"],
+   "%s vs %s" % (_pq["brier"], _pq["brier_base_rate_model"]))
+ok("calibration is reported in bins, not as one number",
+   len(_pq["calibration"]) == 5 and sum(b["n"] for b in _pq["calibration"]) == 200)
+ok("...and a populated bin's realized rate tracks its predicted one",
+   all(abs(b["realized"] - b["predicted"]) < 0.2
+       for b in _pq["calibration"] if b["n"] >= 30),
+   [(b["n"], b["predicted"], b["realized"]) for b in _pq["calibration"]])
+
+# The whole point of §12.5: measuring a probability does not authorise betting it.
+ok("measuring a probability does not turn moneylines on",
+   _pq["enables_moneyline"] is False and sig.STRATEGY_V0["moneyline_enabled"] is False)
+ok("...and the scoreboard says why in words", "prospective" in _pq["why"])
+
+# A model claiming certainty about a football game would make log loss infinite
+# and one row would swamp the season.
+_pconn.execute("UPDATE forecast_log SET home_win_prob=0.0 WHERE game_id='p000'")
+_pconn.commit()
+_pq2 = _m19.probability_quality(_pconn, model_version=_pv, sport="cfb")
+ok("CONTROL: a bare 0 is clipped, counted, and does not produce an infinity",
+   _pq2["clipped"] == 1 and _pq2["log_loss"] not in (None, float("inf")),
+   "clipped %s, log loss %s" % (_pq2["clipped"], _pq2["log_loss"]))
+
 # ── §22 availability: observations, never a mutable status ───────────────────
 import availability as _av                                      # noqa: E402
 

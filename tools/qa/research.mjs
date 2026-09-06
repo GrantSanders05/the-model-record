@@ -1262,6 +1262,43 @@ console.log("\n── model lab: the decision policy is on the page ──");
   }
 }
 
+console.log("\n── model lab: a probability scoreboard is not a licence to bet it ──");
+{
+  const V = JSON.parse(bundle).v2;
+  const t = $("#labprob").textContent || "";
+  ok("the probability scoreboard is on the page", t.length > 40, t.slice(0, 60));
+  // The failure this guards: a Brier score published beside a moneyline board
+  // reads as authorisation. §12.5 keeps moneylines off and the page must say so.
+  ok("...and says moneylines stay off", /moneylines stay off/i.test(t));
+  ok("...and gives the reason, not just the state", /prospective/i.test(t));
+  const P = (V.models || []).find(m => m.role === "champion")?.quality?.probability;
+  ok("the bundle carries the scoreboard the panel renders", !!P);
+  if (P && !P.n) {
+    // An empty scoreboard because nothing has finished, and one because nothing
+    // emits a probability, are different problems with the same blank space.
+    ok("an empty scoreboard is explained by the calendar, not left blank",
+       /statement about the calendar/i.test(t), t.slice(0, 100));
+  }
+  ok("CONTROL: the strategy really does have moneylines off",
+     V.strategy_config.moneyline_enabled === false);
+}
+
+console.log("\n── model lab: the interval is bootstrapped over weeks, and says so ──");
+{
+  const tr = [...$$("#labmodels tbody tr")].find(x =>
+    x.querySelectorAll("td")[2].textContent.trim() !== "Champion");
+  const title = tr.querySelectorAll("td")[7].getAttribute("title") || "";
+  ok("the vs-Champion figure carries its interval, not just a point estimate",
+     title.length > 40, title.slice(0, 70));
+  // With no prospective games finished the honest answer is "no interval yet"
+  // plus the reason -- not a 95% label over three weekends.
+  ok("...and where there is no interval yet it says why",
+     /interval|too few weeks/i.test(title), title.slice(0, 90));
+  ok("the note explains the week-blocking rather than assuming it is understood",
+     /week/i.test($("#labmodelnote").textContent) &&
+     /too narrow/i.test($("#labmodelnote").textContent));
+}
+
 console.log("\n── model lab: the shadow inputs say they adjust nothing ──");
 {
   const V = JSON.parse(bundle).v2;
