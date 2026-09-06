@@ -438,6 +438,15 @@ def apply_migration(conn, rows, rep, src_hash=None):
     for t in order:
         _insert(conn, t, rows.get(t, []))
     rep["pick_rows_backfilled"] = backfill_pick_columns(conn, rows)
+    # Historical grade vectors, reconstructed from the weekly `grades` table so
+    # `grade_asof` can answer questions about past forecasts. Labelled `backfill`
+    # and effective at the first kickoff of the week they were stamped for; a
+    # week with no scheduled game gets no snapshot rather than a guessed time.
+    import grade_snapshots
+    st, seen, skipped = grade_snapshots.backfill_from_grades(conn, rep["sport"])
+    rep["grade_snapshots_backfilled"] = st
+    rep["grade_team_weeks_seen"] = seen
+    rep["grade_team_weeks_without_a_kickoff"] = skipped
     conn.execute(
         "INSERT OR REPLACE INTO v2_migrations (migration, applied_at, source_hash, report_json)"
         " VALUES (?,?,?,?)",
@@ -473,6 +482,11 @@ def print_report(rep, counts_before, counts_after=None):
     print("    signals                         : %d  (%d spread, %d total)"
           % (rep["signals_created"], rep["signals_spread"], rep["signals_total"]))
     print("    voided picks carried as events  : %d" % rep["voided_rows_migrated"])
+    if "grade_snapshots_backfilled" in rep:
+        print("    grade snapshots reconstructed   : %d of %d team-weeks (%d had no"
+              % (rep["grade_snapshots_backfilled"], rep["grade_team_weeks_seen"],
+                 rep["grade_team_weeks_without_a_kickoff"]))
+        print("                                       scheduled game to date them by)")
     if "pick_rows_backfilled" in rep:
         print("    picks_log rows given V2 columns : %d  (new columns only; the"
               % rep["pick_rows_backfilled"])

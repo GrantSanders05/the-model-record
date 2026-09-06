@@ -24,11 +24,13 @@ Usage:
 """
 
 import argparse
+import datetime as dt
 import os
 import re
 import sys
 
 import db
+import grade_snapshots
 import import_workbook as iw
 
 WEEK_RE = re.compile(r"week\s*(\d+)\s*data", re.I)
@@ -194,6 +196,27 @@ def sync(conn, sheet_id, sport, season, week_offset=1, dry_run=False, verbose=Tr
                    ON CONFLICT(sport, season, week, team, position)
                    DO UPDATE SET grade = excluded.grade""", recs)
             conn.commit()
+
+            # AND A TIMESTAMPED SNAPSHOT, so a Friday edit can reach a Saturday
+            # forecast without being backdated to Monday. The week key above can
+            # express neither: it would either hide the edit until next week or
+            # rewrite week N so that Monday retroactively knew a Friday fact.
+            #
+            # observed_at is NOW, because that is when this system saw it, and it
+            # is the only timestamp that exists -- the sheet does not record when
+            # a cell was edited. effective_at defaults to the same instant. A
+            # frozen weekly tab is a reconstruction of a past state rather than a
+            # live observation, and is labelled as one.
+            observed = dt.datetime.now(dt.timezone.utc).isoformat()
+            stored, examined = grade_snapshots.sync_from_records(
+                conn, recs, sport=sport, season=season, observed_at=observed,
+                source_type=(grade_snapshots.SOURCE_LIVE if kind == "live tab"
+                             else grade_snapshots.SOURCE_WEEKLY),
+                source_name=title)
+            report[-1]["snapshots_stored"] = stored
+            if verbose:
+                print("  %-16s    %d of %d team vector(s) changed since the last sync"
+                      % ("", stored, examined))
         total += len(recs)
         imported_tabs += 1
     return total, imported_tabs, report

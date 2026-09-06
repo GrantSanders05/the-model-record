@@ -350,6 +350,77 @@ ok("...and without losing the row that was in it",
         )["ats_result"] == "L")
 
 
+# ══ 25.3 AS-OF / LEAKAGE ══════════════════════════════════════════════════════
+#
+# The single most valuable property in the whole file. Every one of these is a
+# question about time, and every one of them fails silently in production: a
+# forecast that saw the future does not crash, it just looks unusually good.
+
+print("\n── a forecast cannot see anything that had not happened yet ──")
+
+import grade_snapshots as gsnap                                 # noqa: E402
+
+_gconn = _db.connect(os.path.join(tempfile.mkdtemp(), "grades.db"))
+_V = {"qb": 12.0, "rb": 8.0, "wr": 8.5, "ol": 11.0, "dl": 11.5,
+      "lb": 7.5, "db": 8.0, "coach_st": 11.0}
+_NOON = "2026-09-05T12:00:00+00:00"
+_ONE_MINUTE_LATER = "2026-09-05T12:01:00+00:00"
+
+gsnap.append_if_changed(_gconn, gsnap.build_snapshot(
+    sport="cfb", season=2026, team="Oregon", values=_V, observed_at=_NOON))
+_gconn.commit()
+# Grant edits the sheet one minute after the forecast was generated.
+gsnap.append_if_changed(_gconn, gsnap.build_snapshot(
+    sport="cfb", season=2026, team="Oregon", values=dict(_V, qb=14.0),
+    observed_at=_ONE_MINUTE_LATER))
+_gconn.commit()
+
+_at_noon = gsnap.grade_asof(_gconn, "cfb", 2026, "Oregon", _NOON)
+ok("a grade effective one minute later is invisible to the earlier forecast",
+   _at_noon["qb"] == 12.0, _at_noon["qb"])
+_after = gsnap.grade_asof(_gconn, "cfb", 2026, "Oregon", "2026-09-05T12:02:00+00:00")
+ok("...and visible to a later one", _after["qb"] == 14.0, _after["qb"])
+ok("before any snapshot exists there is no grade, not a zero",
+   gsnap.grade_asof(_gconn, "cfb", 2026, "Oregon", "2026-01-01T00:00:00+00:00") is None)
+ok("a team never graded has no vector at all",
+   gsnap.grade_asof(_gconn, "cfb", 2026, "Nobody", _NOON) is None)
+
+# A vector that has not moved must not become a new row, or "when did this team
+# change" stops being answerable.
+_n_before = _gconn.execute("SELECT COUNT(*) c FROM grade_snapshots").fetchone()["c"]
+gsnap.append_if_changed(_gconn, gsnap.build_snapshot(
+    sport="cfb", season=2026, team="Oregon", values=dict(_V, qb=14.0),
+    observed_at="2026-09-05T18:00:00+00:00"))
+_gconn.commit()
+_n_after = _gconn.execute("SELECT COUNT(*) c FROM grade_snapshots").fetchone()["c"]
+ok("re-syncing an unchanged sheet writes nothing", _n_before == _n_after,
+   "%d then %d" % (_n_before, _n_after))
+ok("a changed vector hashes differently",
+   gsnap.vector_hash(_V) != gsnap.vector_hash(dict(_V, qb=14.0)))
+ok("...and an unchanged one hashes the same regardless of key order",
+   gsnap.vector_hash(_V) == gsnap.vector_hash(dict(reversed(list(_V.items())))))
+ok("the hash covers the football and not the plumbing",
+   gsnap.build_snapshot(sport="cfb", season=2026, team="X", values=_V,
+                        observed_at=_NOON, source_name="tab A")["source_hash"]
+   == gsnap.build_snapshot(sport="cfb", season=2026, team="X", values=_V,
+                           observed_at="2026-10-01T00:00:00+00:00",
+                           source_name="tab B")["source_hash"])
+
+# A snapshot carries the whole team, so a forecast cannot pick up this week's QB
+# beside last week's line.
+ok("a snapshot is one team's whole vector",
+   set(gsnap.vector_of(_at_noon)) == set(gsnap.POSITIONS))
+ok("a missing position is reported as missing, not as zero",
+   gsnap.missing_positions(_gconn, "cfb", 2026, "Nobody", _NOON) == gsnap.POSITIONS)
+
+# Reconstructed history says it is reconstructed.
+ok("a backfilled snapshot is labelled a backfill, not a live observation",
+   gsnap.build_snapshot(sport="cfb", season=2025, team="X", values=_V,
+                        observed_at=_NOON,
+                        source_type=gsnap.SOURCE_BACKFILL)["source_type"]
+   == "backfill")
+
+
 # ══ 25.4 MARKET ═══════════════════════════════════════════════════════════════
 
 print("\n── every provider is kept, and policy decides later ──")
