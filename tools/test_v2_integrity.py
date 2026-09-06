@@ -1227,6 +1227,20 @@ ok("...and it is skipped once recorded, so it costs one lookup a run",
 ok("...and a failure to migrate is reported, never swallowed",
    "ERROR: the V2 migration did not apply" in _ru)
 
+# ── the shadow challengers exist where the model actually runs ───────────────
+#
+# They were fitted and registered on a laptop, and the registry lives in the
+# cached database. The first production deploy published a challenger table
+# holding the Champion and nothing else — a whole shadow apparatus inert, every
+# test passing. Same shape as the migration that had never run.
+_wf = open(os.path.join(ROOT, ".github", "workflows", "update.yml")).read()
+ok("the workflow registers the challengers when none are registered",
+   "tools/fit_challengers.py --season 2025 --apply" in _wf)
+ok("...guarded on the registry, so it fits once and never re-mints a version",
+   "count_challengers.py" in _wf and 'if [ "$N" -eq 0 ]' in _wf)
+ok("...and the counter is a script, not Python embedded in YAML",
+   os.path.exists(os.path.join(ROOT, "tools", "count_challengers.py")))
+
 # ── §31 the research dataset contract ────────────────────────────────────────
 #
 # The one thing §31 says must not happen: development rows mixed silently with

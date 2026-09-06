@@ -256,6 +256,30 @@ jobs:
       # His own bet log. Read from the same workbook, after the update so the games
       # it grades against are current. Allowed to fail: a typo in a spreadsheet must
       # never be able to stop the picks from publishing.
+      # THE CHALLENGERS HAVE TO EXIST HERE, TOO. They were fitted and registered
+      # on a laptop, and the registry lives in the cached database — so the first
+      # deploy published a challenger table holding the Champion and nothing
+      # else. A shadow model that is not registered forecasts nothing, and the
+      # whole apparatus sits inert while every test passes. Same shape as the
+      # migration that had never run: a step that only ever ran on one machine.
+      #
+      # Guarded on the registry rather than on a marker file: it fits once, and a
+      # later run finds the rows and skips. Re-fitting daily would mint a new
+      # version string every morning and scatter the prospective record across
+      # them, which is the one thing a version is for.
+      - name: Register the shadow challengers if none are registered
+        if: ${{ env.HAS_CFBD == 'true' }}
+        continue-on-error: true
+        run: |
+          N=$(python3 tools/count_challengers.py)
+          echo "challengers registered: $N"
+          if [ "$N" -eq 0 ]; then
+            echo "None. Fitting on 2025 development data and registering as shadow."
+            python3 tools/fit_challengers.py --season 2025 --apply
+          else
+            echo "Already registered; not re-fitting."
+          fi
+
       - name: Read the My Bets tab
         continue-on-error: true
         env:
