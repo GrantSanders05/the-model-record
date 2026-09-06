@@ -1241,6 +1241,17 @@ ok("...guarded on the registry, so it fits once and never re-mints a version",
 ok("...and the counter is a script, not Python embedded in YAML",
    os.path.exists(os.path.join(ROOT, "tools", "count_challengers.py")))
 
+# run_update replays the journal, and the journal has to BE there. `state/` is
+# gitignored and only the two V2 workflows fetched the data-state branch, so the
+# replay step ran in production, found no directory, and said nothing — the
+# hand-off it exists to perform landing nowhere.
+ok("the update job restores the state journal before replaying it",
+   "git fetch origin data-state" in _wf)
+ok("...before the update that replays it",
+   _wf.index("git fetch origin data-state") < _wf.index("src/run_update.py"))
+ok("...and an absent branch is stated rather than passed over in silence",
+   "no data-state branch yet" in _wf)
+
 # ── §31 the research dataset contract ────────────────────────────────────────
 #
 # The one thing §31 says must not happen: development rows mixed silently with

@@ -111,6 +111,24 @@ jobs:
           restore-keys: |
             model-data-v3-
 
+      # THE JOURNAL HAS TO BE HERE FOR run_update TO REPLAY IT. run_update has a
+      # replay step and it was dead in production: `state/` is gitignored, only
+      # the two V2 workflows fetched the data-state branch, and this job never
+      # did — so the hand-off the journal exists to perform (a T2 forecast taken
+      # by a job that cannot save the cache) landed nowhere. The step ran, found
+      # no directory, and said nothing.
+      - name: Restore the state journal
+        run: |
+          git fetch origin data-state --quiet 2>/dev/null || true
+          if git show-ref --quiet refs/remotes/origin/data-state; then
+            git worktree add --quiet /tmp/ds origin/data-state --detach
+            mkdir -p state && cp -R /tmp/ds/state/. state/ 2>/dev/null || true
+            echo "journal restored: $(find state -name '*.jsonl' 2>/dev/null | wc -l) file(s)"
+          else
+            echo "no data-state branch yet — nothing to replay, and that is a"
+            echo "statement about the branch rather than about the journal."
+          fi
+
       - name: Seed history if the cache was empty
         env:
           CFBD_API_KEY: ${{ secrets.CFBD_API_KEY }}
@@ -275,7 +293,14 @@ jobs:
           echo "challengers registered: $N"
           if [ "$N" -eq 0 ]; then
             echo "None. Fitting on 2025 development data and registering as shadow."
-            python3 tools/fit_challengers.py --season 2025 --apply
+            # This needs 2025 film grades, which reach a database from Grant's
+            # historical workbook and not from the weekly sheet sync. A runner
+            # whose cache was seeded from the API alone has the games and the
+            # lines and none of the grades, so the fit finds zero usable rows and
+            # says so. That is a data fact, not a failure of this step: the
+            # challengers are fitted where the development data lives and reach
+            # this database through the state journal.
+            python3 tools/fit_challengers.py --season 2025 --apply || echo "::warning::no 2025 development grades here; challengers must arrive via the state journal rather than be refitted"
           else
             echo "Already registered; not re-fitting."
           fi
