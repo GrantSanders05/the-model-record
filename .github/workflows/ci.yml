@@ -1,0 +1,83 @@
+name: CI
+
+# THE GATES, ON EVERY BRANCH. `update.yml` declares `environment: github-pages`
+# at the JOB level, so the whole job — tests included — is blocked on any branch
+# that is not allowed to deploy. A test suite that can only run on main cannot
+# gate a pull request, which is the one moment it is most wanted.
+#
+# So this runs the checks that need neither secrets nor the restored database.
+# It deploys nothing, needs no environment, and reads nothing it does not build
+# itself.
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      # Self-contained: every one of these builds whatever database it needs in a
+      # temp directory. None reads data/model.db, and none needs an API key.
+      - name: Grading, provenance, as-of, market, horizons, strategy, journal, moat
+        run: python3 tools/test_v2_integrity.py
+
+      - name: The record arithmetic
+        run: python3 tools/test_tracking.py
+
+      - name: The legacy migration, on a miniature database built in the test
+        run: python3 src/migrate_v2.py --fixture-test
+
+      - name: The state journal round trip, and that reconciliation can fail
+        run: python3 src/replay_state.py --self-test
+
+      # A fresh database must get the whole schema, including every V2 table and
+      # every column added since. A migration that only works on a fresh database
+      # is broken, and the integrity suite covers the other direction.
+      - name: A database created from nothing has the full schema
+        run: |
+          python3 - <<'PY'
+          import sys, tempfile, os
+          sys.path.insert(0, "src")
+          import db
+          conn = db.connect(os.path.join(tempfile.mkdtemp(), "fresh.db"))
+          have = {r[0] for r in conn.execute(
+              "SELECT name FROM sqlite_master WHERE type='table'")}
+          want = {"market_quotes", "market_snapshots", "grade_snapshots",
+                  "feature_snapshots", "model_registry", "forecast_log",
+                  "strategy_evaluations", "signal_log", "game_results_v2",
+                  "snapshot_misses", "v2_void_events", "v2_migrations"}
+          missing = sorted(want - have)
+          assert not missing, "missing from a fresh database: %s" % missing
+          cols = {c["name"] for c in conn.execute("PRAGMA table_info(picks_log)")}
+          need = {"ats_result_at_pick", "ats_result_at_close", "grading_version"}
+          assert need <= cols, "picks_log is missing %s" % sorted(need - cols)
+          print("fresh database: %d tables, picks_log has the V2 columns" % len(have))
+          PY
+
+      - name: Every module imports
+        run: |
+          python3 - <<'PY'
+          import sys, pathlib
+          sys.path.insert(0, "src")
+          failed = []
+          for p in sorted(pathlib.Path("src").rglob("*.py")):
+              name = str(p.with_suffix("")).replace("/", ".").replace("src.", "", 1)
+              try:
+                  __import__(name)
+              except Exception as e:
+                  failed.append("%s: %s: %s" % (name, type(e).__name__, e))
+          for f in failed:
+              print("  IMPORT FAILED  %s" % f)
+          assert not failed, "%d module(s) do not import" % len(failed)
+          print("every module in src/ imports")
+          PY
