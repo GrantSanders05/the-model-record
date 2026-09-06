@@ -348,6 +348,45 @@ def main():
     else:
         print("  LIVE ledger: no graded picks yet")
 
+    # THE MIGRATION RUNS ITSELF, and it has to.
+    #
+    # It was a one-off command a human was supposed to remember, and the first
+    # production run after the cutover proved why that is not good enough: the
+    # code was V2-official, `MODEL_V2_OFFICIAL` was on, the legacy writer had
+    # stood down — and `picks_log.ats_result_at_pick` was NULL on every row and
+    # `signal_log` held no legacy signals, because nothing had ever migrated that
+    # database. The public page would have quietly fallen back to the legacy
+    # headline: the close-based, side-recomputed record this whole project exists
+    # to replace, shown under a page that now claims otherwise.
+    #
+    # It is idempotent by construction -- `v2_migrations` has a primary key and a
+    # test asserts running it twice changes nothing -- so applying it on every run
+    # costs one indexed lookup and closes the gap permanently. A database cannot
+    # be V2-official and unmigrated at the same time any more.
+    if V2_OFFICIAL:
+        try:
+            import migrate_v2
+            if migrate_v2.already_applied(conn):
+                pass
+            else:
+                _dest = migrate_v2.backup(db.DB_PATH)
+                print("  V2 migration has never been applied to this database.")
+                print("  backup written to %s" % os.path.basename(_dest))
+                _rows, _rep = migrate_v2.plan(conn, args.sport)
+                migrate_v2.apply_migration(conn, _rows, _rep,
+                                           src_hash=migrate_v2.source_hash(db.DB_PATH))
+                print("  migrated: %d pick(s) examined, %d with results, "
+                      "%d locked-line vs legacy difference(s), %d signal(s)"
+                      % (_rep.get("picks_examined", 0),
+                         _rep.get("picks_with_results", 0),
+                         _rep.get("locked_vs_legacy_differences", 0),
+                         _rep.get("signals_created", 0)))
+        except Exception as e:                     # noqa: BLE001 - never block a run
+            # Reported loudly rather than swallowed: an unmigrated database is a
+            # record integrity problem, and the acceptance gate fails on it.
+            print("  ERROR: the V2 migration did not apply — %s: %s"
+                  % (type(e).__name__, e))
+
     # THE JOURNAL IS THE HAND-OFF between workflows. Only one job may write the
     # database cache, so the frequent forecast-snapshot job records its work to
     # the state journal instead and this run replays it in. Without this step a

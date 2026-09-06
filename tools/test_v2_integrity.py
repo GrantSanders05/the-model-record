@@ -1210,6 +1210,23 @@ _fv2.register_model(_lc_conn, model_version="E098-empty", model_id="form-quality
 ok("CONTROL: a registry row with no coefficients is skipped, not run empty",
    "E098-empty" not in dict(_fv2.load_challengers(_lc_conn)))
 
+# ── the migration applies itself ─────────────────────────────────────────────
+#
+# It was a one-off command a human was supposed to remember. The first production
+# run after the cutover proved that is not good enough: V2-official code, the
+# legacy writer stood down, and `ats_result_at_pick` NULL on every row because
+# nothing had ever migrated that database. The public page would have fallen back
+# to the legacy close-based headline under a page claiming otherwise.
+_ru = open(os.path.join(ROOT, "src", "run_update.py")).read()
+ok("run_update applies the V2 migration itself",
+   "migrate_v2.already_applied(conn)" in _ru and "migrate_v2.apply_migration" in _ru)
+ok("...only when V2 is the official writer",
+   _ru.index("if V2_OFFICIAL:") < _ru.index("migrate_v2.already_applied"))
+ok("...and it is skipped once recorded, so it costs one lookup a run",
+   "if migrate_v2.already_applied(conn):" in _ru)
+ok("...and a failure to migrate is reported, never swallowed",
+   "ERROR: the V2 migration did not apply" in _ru)
+
 # ── §31 the research dataset contract ────────────────────────────────────────
 #
 # The one thing §31 says must not happen: development rows mixed silently with
@@ -1503,8 +1520,16 @@ if os.path.exists(_live_path):
     ok("a declined forecast keeps its row and produces nothing",
        _q("""SELECT COUNT(*) FROM forecast_log f WHERE NOT EXISTS
              (SELECT 1 FROM signal_log s WHERE s.forecast_id=f.forecast_id)""") > 0)
+    # WHEN THIS FAILS, SAY WHY. It failed on the first production run after the
+    # cutover and the count alone did not explain it: the database had never had
+    # the V2 migration applied, so nothing had ever been evaluated on it. A red
+    # gate that names the cause is the difference between a fix and an hour.
+    _migrated = _lc.execute("SELECT applied_at FROM v2_migrations LIMIT 1").fetchone()
     ok("...and the decline itself is recorded",
-       _q("SELECT COUNT(*) FROM strategy_evaluations WHERE eligible=0") > 0)
+       _q("SELECT COUNT(*) FROM strategy_evaluations WHERE eligible=0") > 0,
+       "this database has NEVER been migrated — run src/migrate_v2.py --apply"
+       if not _migrated else "migrated %s and still no declined evaluation"
+       % _migrated["applied_at"])
     ok("no unpriced WIN claims a profit",
        _q("""SELECT COUNT(*) FROM signal_log
               WHERE locked_result='W' AND price IS NULL
@@ -1526,7 +1551,16 @@ if os.path.exists(_live_path):
     ok("the legacy result column still holds its legacy values",
        _q("SELECT COUNT(*) FROM picks_log WHERE ats_result IS NOT NULL") > 0)
     ok("...beside the locked-line one",
-       _q("SELECT COUNT(*) FROM picks_log WHERE ats_result_at_pick IS NOT NULL") > 0)
+       _q("SELECT COUNT(*) FROM picks_log WHERE ats_result_at_pick IS NOT NULL") > 0,
+       "this database has NEVER been migrated, so the published record is still "
+       "the legacy close-based one — run src/migrate_v2.py --apply"
+       if not _migrated else "migrated, but no pick carries a locked-line result")
+
+    # THE CUTOVER CANNOT BE HALF-DONE. A database running V2-official code with
+    # an unmigrated record publishes the legacy close-based headline under a page
+    # that claims otherwise, and every individual component test still passes.
+    ok("a V2-official database has had the migration applied", bool(_migrated),
+       "MODEL_V2_OFFICIAL is on and v2_migrations is empty")
     ok("the schema enforces one official signal per game, market and strategy",
        bool(_lc.execute("SELECT name FROM sqlite_master WHERE type='index'"
                         " AND name='idx_one_official_signal'").fetchone()))
