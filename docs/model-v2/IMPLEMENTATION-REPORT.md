@@ -219,6 +219,70 @@ score beside it. `enables_moneyline` is false with a reason.
 **§19.4 week-block bootstrap.** Paired comparisons now carry an interval
 resampled over whole weeks, not games.
 
+## What the first production deploys found
+
+The gates blocked the deploy three times and were right every time. Each failure
+was the same shape: **a step that had only ever run on one machine.**
+
+1. **The migration had never been applied to production.** V2-official code, the
+   legacy writer stood down, and `ats_result_at_pick` NULL on every row. The
+   public page would have shown the legacy close-based headline under a page that
+   claims otherwise, with every component test passing. `run_update` applies the
+   migration itself now — idempotent, one indexed lookup a run — and the
+   acceptance assertions print *"this database has NEVER been migrated"* rather
+   than a bare count. **In production it found 19 locked-line vs legacy
+   differences**, against 3 on the development copy.
+
+2. **An empty-state row has one cell.** Production's bundle had nothing declined,
+   so the decline table fell to its empty state and every column-indexed
+   assertion read `undefined`. A *thrown* test takes the whole suite down, which
+   reads as a broken page rather than a quiet one. `dataRows` filters them, every
+   `.find()` is guarded, and a control reproduces production's exact bundle.
+
+3. **The challengers were only ever registered on a laptop.** The registry lives
+   in the cached database, so the first deploy published a challenger table
+   holding the Champion and nothing else.
+
+4. **`run_update`'s journal replay was dead.** `state/` is gitignored and only
+   the two V2 workflows fetched the `data-state` branch; the update job never
+   did. The step ran, found no directory, and said nothing.
+
+5. **Two formats for one number.** `fetch_cfb.budget_status` read the month's
+   budget entry as an integer; `api_budget.spend` writes a dict. It failed on the
+   first run *after* a spend rewrote the entry — a different run, a different
+   workflow, and a stack trace naming neither.
+
+Both V2 workflows have now run in production. `data-state` exists with 3,057
+events, 546 redacted, audit clean, and the update job replays it back:
+`forecast_log 104, grade_snapshots 546, market_quotes 1007, signal_log 192,
+weather_snapshots 16`.
+
+## The live record
+
+```
+ATS 83–103–0   44.62%   n=186   95% CI 37.7–51.8   ROI unavailable
+```
+
+Graded at the line each pick was locked at, on the side that was published.
+
+## One decision left for Grant
+
+**Production cannot fit the challengers**, and it is a data fact rather than a
+bug: 2025 film grades reach a database from the historical workbook, not the
+weekly sheet sync, so the fitter finds zero usable rows there. The challengers
+are fitted where the development data lives.
+
+The mechanism to move them is the state journal, which already carries
+`model_registry`. But that stream publishes **unredacted**, so pushing the local
+journal would put each fitted artifact — coefficients plus the means and standard
+deviations of grade *differences* over ~570 games — on the public `data-state`
+branch. No team's grades are recoverable from twenty population moments, and the
+model's arithmetic is already public. It is still grade-derived data on a public
+branch, so it is Grant's call, not one to make silently.
+
+Until then the challenger table shows the Champion and the retired legacy
+versions, which is honest: no challenger has forecast in production.
+
 ## Not built
 
 **C4 preseason priors (§20.6)** — the document says "later phase".
