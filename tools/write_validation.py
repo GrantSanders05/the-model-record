@@ -59,6 +59,13 @@ def main():
     path = args.config if os.path.isabs(args.config) else os.path.join(ROOT, args.config)
     config = json.load(open(path))
     conn = db.connect()
+    # THE UNITS THE SEASON WAS REPLAYED UNDER, not the ones in the file. `scale`
+    # is fitted per grade vintage at run time, so a validation summary computed
+    # from the file's value describes a model that never ran -- and the config
+    # fingerprint below would then certify the wrong thing as current.
+    import calibrate
+    config = calibrate.calibrated_config(conn, args.sport, config,
+                                         season=args.season)
     n = conn.execute("SELECT COUNT(*) c FROM grades WHERE sport=? AND season=?",
                      (args.sport, args.season)).fetchone()["c"]
     if not n:

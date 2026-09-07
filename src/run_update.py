@@ -35,6 +35,7 @@ import db
 import ledger
 import metrics
 import predict
+import calibrate
 import publish
 import selection
 import research_export
@@ -120,6 +121,14 @@ def validation_backtest(conn, sport, current_season, config):
         print("  no completed season with grades in this database — using the "
               "committed validation summary instead (see data/validation/).")
         return None
+    # THE UNITS OF THE SEASON BEING REPLAYED, not of the one being played.
+    # `scale` is fitted per grade vintage, and 2025's hand grades and 2026's
+    # EA-derived ones need 1.31 and 1.94 respectively. Replaying 2025 under
+    # 2026's number describes a model that never existed and disagreed with the
+    # committed summary, which fits its own season correctly.
+    import calibrate
+    config = calibrate.calibrated_config(conn, sport, config, season=season,
+                                         quiet=True)
     try:
         preds, m = season_grade(conn, sport, season, config)
     except Exception as e:                         # noqa: BLE001 - never block a run
@@ -218,6 +227,18 @@ def main():
     conn = db.connect()
     season = args.season or (dt.date.today().year if dt.date.today().month >= 7
                              else dt.date.today().year - 1)
+
+    # THE UNITS OF THE SHEET, RE-FITTED, and it needs the database so it lands
+    # here rather than beside the config load. `scale` converts a rating point
+    # into a point of margin: it is a property of the GRADE SHEET, not of the
+    # edge. The sheet changed between seasons and the constant did not. 1.311 is
+    # the right fit for 2025's hand grades and 48% too small for 2026's
+    # EA-derived ones, which is why the model priced Oregon at Oklahoma State as
+    # Oregon by 6.5 against a market number of 22.5, and why it spent week 1
+    # taking the underdog in games it had no business being on: it carried a
+    # -5.7 point bias on the biggest favourites and +2.8 on pick'ems.
+    # See calibrate.fit_units.
+    config = calibrate.calibrated_config(conn, args.sport, config, season=season)
 
     # ── step 0: pull the film grades straight from the live sheet ──
     # This is what makes the loop hands-off. Grant grades film; nothing else
@@ -487,7 +508,8 @@ def main():
     try:
         site_dir = os.path.join(OUT, "site")
         os.makedirs(site_dir, exist_ok=True)
-        page = publish.render(conn, args.sport, publish._backtest_summary())
+        page = publish.render(conn, args.sport,
+                              publish._backtest_summary(args.sport, conn=conn))
         with open(os.path.join(site_dir, "index.html"), "w") as fh:
             fh.write(page)
         print("  %s" % os.path.join(site_dir, "index.html"))

@@ -24,6 +24,7 @@ import os
 
 import backtest
 import best_bets
+import calibrate
 import selection as selection_mod
 import bet_log
 import db
@@ -664,6 +665,12 @@ def main():
     config = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
 
     conn = db.connect()
+    # The same units the pipeline prices with. A research page built at one scale
+    # beside a board priced at another is two models wearing one name. AFTER the
+    # connection exists -- the first version of this line ran before it, and
+    # `calibrated_config` caught the NameError and returned the config unchanged,
+    # so the page rendered at the stale scale with nothing to show for it.
+    config = calibrate.calibrated_config(conn, args.sport, config, quiet=True)
     season = args.season or max(
         r["season"] for r in conn.execute(
             "SELECT DISTINCT season FROM games WHERE sport=?", (args.sport,)))

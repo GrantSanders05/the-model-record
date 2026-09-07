@@ -55,6 +55,239 @@ import pro_models    # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+# ── the units of the sheet, fitted rather than remembered ────────────────────
+#
+# WHAT WENT WRONG, AND IT IS THE WHOLE OF WHY WEEK 1 LOOKED THE WAY IT DID.
+#
+# `scale` converts rating points into points of margin. It is a property of the
+# GRADE SHEET, not of the model's edge -- and the sheet changed. The 2025 hand
+# grades span 35.2 rating points and correlate 0.82 with the market; the 2026
+# EA-derived ones span 25.3 and correlate 0.94. Fitted jointly with
+# `quality_scale` and `hfa` on each vintage:
+#
+#     2025 hand grades   scale 1.30   (the shipped config is 1.311 -- correct)
+#     2026 EA grades     scale 2.06   (the shipped config is 1.311 -- 57% small)
+#
+# So every 2026 prediction came out about a third too flat. Oregon at Oklahoma
+# State priced as Oregon by 6.5 against a market number of 22.5, and the model
+# spent week 1 taking the underdog in games it had no business being on: it took
+# the away side 53 times and went 20-33.
+#
+# The repository already knew. `best_bets` says in a comment that Grant's hand
+# grades needed 1.57x and the EA-derived ones 1.98x. `calibrate.fit_two` below
+# will fit exactly this. NOTHING EVER CALLED IT. A calibration tool with no
+# caller is a calibration that happens once and then rots, and this one rotted
+# across a grade-vintage change.
+#
+# Hence this: fitted every run, from the current season's own market, so it
+# cannot go stale again whatever sheet arrives next year.
+#
+# WHY AGAINST THE MARKET AND NOT AGAINST RESULTS. Both, and they agree -- on 2025
+# the fit is 1.295 against the market and 1.322 against actual margins. But the
+# market residual is 6.6 points against 15.9, so the market estimate is roughly
+# nine times more precise per game, and in September there are 45 finished games
+# and 155 priced ones. Units are not edge: nobody's advantage is in the exchange
+# rate between a rating point and a point of margin, and adopting the market's
+# rate leaves every disagreement about a GAME intact.
+MIN_UNITS_GAMES = 60
+MIN_UNITS_R2 = 0.45
+UNITS_BAND = (0.40, 4.00)
+# Home field has been between 2 and 5 points for as long as anyone has measured
+# it. A fit outside this is a broken sample, not a discovery.
+HFA_BAND = (1.00, 6.00)
+# Below this the fit has not really moved and adopting it would mint a new
+# Champion version for nothing, fragmenting the prospective record across
+# versions that predict the same thing.
+UNITS_HYSTERESIS = 0.05
+
+
+def fit_units(conn, sport, season, config, *, as_of_week=None):
+    """
+    Re-fit (scale, hfa) for this season's grade vintage. -> dict | None
+
+    `market ~= scale * strength + hfa * is_home`, where `strength` is the model's
+    own rating difference with `quality_scale` held at its configured value. Two
+    parameters, ordinary least squares, on games where the FILM answered -- a
+    borrowed Elo prediction is a different rater and would drag the fit toward
+    Elo's units.
+
+    `as_of_week` restricts the fit to strictly earlier weeks. Required when
+    replaying history: `market_margin` is the CLOSING line, set minutes before
+    that game kicks off, so a week-12 line is a week-12 statement and feeding it
+    into a week-3 fit is look-ahead. Live, the lines already posted for future
+    games are public and may be used, so it is left None.
+
+    Returns None rather than a guess when the evidence is thin, the fit is poor,
+    or the answer is outside a sane band. A units fit that has gone wrong is
+    worse than a stale one: it moves every number on the board at once.
+    """
+    import backtest
+    import engine
+
+    grades = backtest.load_grades(conn, sport)
+    cfg = dict(config)
+    cfg.pop("_grades", None)
+    model = engine.Model(cfg, grades)
+    rows, seen = [], None
+    for g in backtest.load_games(conn, sport):
+        if g["season"] != seen:
+            seen = g["season"]
+            model.new_season(seen)
+        if g["season"] == season and g["market_margin"] is not None:
+            if as_of_week is None or g["week"] < as_of_week:
+                st_ = model.rater.strength(g)
+                if st_ is not None:
+                    rows.append((st_, 0.0 if g["neutral_site"] else 1.0,
+                                 g["market_margin"]))
+        model.observe(g)
+
+    if len(rows) < MIN_UNITS_GAMES:
+        return None
+
+    # TWO PARAMETERS, FITTED TOGETHER, THROUGH THE ORIGIN.
+    #
+    #     market ~= scale * strength + hfa * is_home
+    #
+    # No intercept and no mean-centring. The first version centred the regressors,
+    # which handed the home term to the absorbed intercept and left `hfa`
+    # identified only off the handful of NEUTRAL-site games -- it came back 1.27
+    # for 2025. The second held `hfa` fixed at 4.0 and let `scale` absorb the
+    # error, which dragged 2025's scale down to 1.19 from a hand-fit of 1.311
+    # that two independent criteria had agreed on.
+    #
+    # AND 4.0 IS THE WRONG NUMBER TO HOLD. `engine.hfa_for` cites 4.26, measured
+    # as the mean margin of 8,364 non-neutral FBS-vs-FBS games. That is the
+    # UNCONDITIONAL mean and it is not the home-field parameter: home teams in
+    # college football are better than their visitors on average, because good
+    # programmes buy home games. Conditioning on the rating difference -- which is
+    # exactly what this model does -- the home bump is 2.6-2.9 across 2025 and
+    # 2026, and the rest of that 4.26 is team quality being counted twice.
+    #
+    # It matters most where it is worst: a road favourite has the whole error
+    # subtracted from its number. Oregon at Oklahoma State loses 4.0 points to
+    # home field when it should lose about 2.7.
+    n = len(rows)
+    s_ss = sum(r[0] * r[0] for r in rows)
+    s_sh = sum(r[0] * r[1] for r in rows)
+    s_hh = sum(r[1] * r[1] for r in rows)
+    s_sy = sum(r[0] * r[2] for r in rows)
+    s_hy = sum(r[1] * r[2] for r in rows)
+    det = s_ss * s_hh - s_sh * s_sh
+    if abs(det) < 1e-9:
+        return None
+    scale = (s_hh * s_sy - s_sh * s_hy) / det
+    hfa = (s_ss * s_hy - s_sh * s_sy) / det
+    ys = [r[2] for r in rows]
+    my = sum(ys) / n
+    ss = sum((y - my) ** 2 for y in ys)
+    rs = sum((mkt - (scale * st_ + hfa * is_home)) ** 2
+             for st_, is_home, mkt in rows)
+    r2 = 1 - rs / ss if ss else 0.0
+    bad = None
+    if r2 < MIN_UNITS_R2:
+        bad = "r2 %.3f below %.2f" % (r2, MIN_UNITS_R2)
+    elif not (UNITS_BAND[0] <= scale <= UNITS_BAND[1]):
+        bad = "scale %.3f outside %s" % (scale, UNITS_BAND)
+    elif not (HFA_BAND[0] <= hfa <= HFA_BAND[1]):
+        bad = "hfa %.3f outside %s" % (hfa, HFA_BAND)
+    if bad:
+        return {"ok": False, "scale": scale, "hfa": hfa, "r2": r2, "n": n,
+                "reason": bad}
+    # SCALE IS ADOPTED. HOME FIELD IS REPORTED AND NOT ADOPTED, and that asymmetry
+    # is deliberate.
+    #
+    # Fitting to the market means inheriting the market's opinions, which is
+    # exactly right for units -- nobody's edge is the exchange rate between a
+    # rating point and a point of margin -- and exactly wrong for a quantity the
+    # market may be mispricing. Home field is the second kind. Across 2023-2026
+    # the home team actually wins by 5.21 while the market charges 4.71, and on
+    # 2025 the shipped hfa of 4.0 leaves the model's residual bias at +0.13
+    # points where the market-fitted 2.96 leaves it at +1.19. Adopting the fitted
+    # value would hand back a real half-point every home game.
+    #
+    # So `scale` is fitted with `hfa` HELD at its configured value, which keeps
+    # the pair internally consistent, and the jointly-fitted home number rides
+    # along as a diagnostic for whoever next re-measures it deliberately.
+    held = float(config.get("hfa", 0.0))
+    held_neutral = float(config.get("neutral_hfa", 0.0))
+    num = den = 0.0
+    for st_, is_home, mkt in rows:
+        y = mkt - (held if is_home else held_neutral)
+        num += st_ * y
+        den += st_ * st_
+    scale_held = (num / den) if den > 0 else scale
+    if not (UNITS_BAND[0] <= scale_held <= UNITS_BAND[1]):
+        return {"ok": False, "scale": scale_held, "r2": r2, "n": n,
+                "reason": "scale %.3f outside %s" % (scale_held, UNITS_BAND)}
+    return {"ok": True, "scale": round(scale_held, 2), "r2": r2, "n": n,
+            "raw_scale": scale_held,
+            "joint_scale": round(scale, 3), "joint_hfa": round(hfa, 2),
+            "held_hfa": held}
+
+
+def apply_units(config, fit):
+    """
+    Adopt a fit into a config copy, or return it unchanged. -> (config, note)
+
+    Hysteresis, because the config hash is the Champion's identity: adopting a
+    scale that moved 0.01 mints a new Champion version every week and scatters
+    the prospective record across versions that predict the same thing.
+    """
+    if not fit or not fit.get("ok"):
+        return config, None
+    if abs(fit["scale"] - config.get("scale", 0.0)) < UNITS_HYSTERESIS:
+        return config, None
+    out = dict(config)
+    old_scale, old_hfa = out.get("scale"), out.get("hfa")
+    out["scale"] = fit["scale"]
+    return out, ("scale %.3f -> %.2f  (fitted on %d priced games, R2 %.3f; "
+                 "home field held at %.1f, jointly it fits %.2f)"
+                 % (old_scale, fit["scale"], fit["n"], fit["r2"], old_hfa,
+                    fit.get("joint_hfa", 0.0)))
+
+
+def calibrated_config(conn, sport, config, *, season=None, as_of_week=None,
+                      quiet=False):
+    """
+    The config with its units re-fitted for the grade vintage in use. -> config
+
+    ONE ENTRY POINT, called by everything that loads a config file, because a
+    board priced at one scale and a record graded at another are two models
+    wearing one name. Never raises: a calibration that cannot be computed leaves
+    the config exactly as it was.
+    """
+    try:
+        if season is None:
+            row = conn.execute(
+                "SELECT MAX(season) s FROM games WHERE sport=?", (sport,)).fetchone()
+            season = row and row["s"]
+        if not season:
+            return config
+        fit = fit_units(conn, sport, season, config, as_of_week=as_of_week)
+        out, note = apply_units(config, fit)
+        if note and not quiet:
+            print("  units re-fitted for the %s grade sheet: %s" % (season, note))
+        elif fit and not fit.get("ok") and not quiet:
+            print("  units NOT re-fitted (%s) — keeping scale %.3f"
+                  % (fit.get("reason"), config.get("scale", 0.0)))
+        return out
+    except (NameError, AttributeError, TypeError, ImportError):
+        # NOT SWALLOWED. These are programming errors, and catching them here is
+        # how this function silently did nothing for a whole pipeline stage: the
+        # call site referenced `conn` before it was assigned, the NameError was
+        # caught, the config came back unchanged, and the research page rendered
+        # at the stale scale with no sign anything had gone wrong. A broad
+        # `except` around a wiring bug is an off switch nobody can see.
+        raise
+    except Exception as e:                         # noqa: BLE001 - never block a run
+        # Data problems only: a database missing a table, a season with no games.
+        # Those are reasons to keep the shipped scale, and they are announced.
+        if not quiet:
+            print("  units re-fit failed (%s: %s) — keeping the shipped scale"
+                  % (type(e).__name__, e))
+        return config
+
+
 def _ats(preds, scale):
     w = n = 0
     for p in preds:

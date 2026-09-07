@@ -378,6 +378,8 @@ def main():
     path = args.config if os.path.isabs(args.config) else os.path.join(ROOT, args.config)
     config = json.load(open(path)) if os.path.exists(path) else {}
     conn = db.connect()
+    import calibrate
+    config = calibrate.calibrated_config(conn, args.sport, config)
     rows = rank(conn, args.sport, config, args.season, args.week, args.bankroll)
     if not rows:
         print("No upcoming games. Off-season, or the schedule isn't fetched yet.")

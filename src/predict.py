@@ -132,6 +132,10 @@ def main():
         print("NOTE: no config at %s — using engine defaults (un-optimized)." % path)
 
     conn = db.connect()
+    # After the connection exists, and before anything predicts: the same units
+    # the pipeline prices with.
+    import calibrate
+    config = calibrate.calibrated_config(conn, args.sport, config)
     picks = generate(conn, args.sport, config, args.week, args.season)
     picks = [p for p in picks
              if p["edge"] is None or abs(p["edge"]) >= args.min_edge]

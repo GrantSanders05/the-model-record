@@ -192,6 +192,51 @@ from the same feature snapshot. Comparing a T2 forecast's error with the closing
 line's error flatters or damns it depending on which way the market moved and says
 nothing either way.
 
+## Units — `scale` is fitted, not remembered
+
+`scale` converts a rating point into a point of margin. It is a property of the
+**grade sheet**, not of the model's edge, and the sheet changed between seasons
+while the constant did not.
+
+| grade vintage | rating spread | correlation with the market | fitted scale |
+|---|---:|---:|---:|
+| 2025, Grant's hand grades | 35.2 pts | 0.82 | **1.31** |
+| 2026, EA-derived | 25.3 pts | 0.94 | **1.94** |
+
+The config shipped 1.311 — correct for 2025, **48% too small for 2026**. The
+consequence was systematic and one-directional:
+
+| market line | model's mean error, scale 1.311 | at 1.94 |
+|---|---:|---:|
+| 2–3 (pick'em) | **+2.78** | +2.47 |
+| 7–12 | +0.27 | +1.01 |
+| 14–22 | −2.91 | −0.14 |
+| 22–50 | **−5.67** | +0.86 |
+
+Every big favourite was priced short, so the model took the underdog on games it
+had no business being on: in week 1 of 2026 it took the away side 53 times and
+went **20–33**. Oregon at Oklahoma State priced as Oregon by 6.5 against a market
+number of 22.5. Model-to-market dispersion was 0.65; it is 0.91 now.
+
+`calibrate.fit_units` re-fits it every run from the current season's own priced
+games, so it cannot go stale again whatever sheet arrives next year. Guards: at
+least 60 games, R² ≥ 0.45, a sanity band of 0.40–4.00, and 0.05 of hysteresis so
+a fit that has not really moved does not mint a new Champion version. On 2025 the
+auto-fit reproduces the hand value (1.16–1.31 through the season) and the record
+is unchanged, which is the property that makes it safe.
+
+**Home field is fitted and deliberately not adopted.** The joint fit puts it at
+2.5–3.0 against a shipped 4.0, but fitting to the market means inheriting the
+market's opinions — right for units, wrong for a quantity the market may be
+mispricing. Across 2023–2026 the home team actually wins by 5.21 while the market
+charges 4.71, and on 2025 the shipped 4.0 leaves the model's residual bias at
++0.13 points where the market-fitted 2.96 leaves it at +1.19. So `scale` is
+fitted with `hfa` held, and the fitted home number is reported beside it.
+
+**A replay uses its own season's units.** 2025 is replayed at 1.31 and 2026 runs
+at 1.94; using the current season's number to replay an older one describes a
+model that never existed.
+
 ## Selection — what counts as a best bet
 
 Two records, never one, and never merged. The **best bets** record counts only
