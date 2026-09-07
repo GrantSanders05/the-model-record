@@ -1227,6 +1227,46 @@ ok("...and it is skipped once recorded, so it costs one lookup a run",
 ok("...and a failure to migrate is reported, never swallowed",
    "ERROR: the V2 migration did not apply" in _ru)
 
+# ── a version holds a record together, so it cannot follow the calendar ──────
+#
+# The Champion's version string carried TODAY'S date, so an unchanged config
+# minted a fresh Champion at every midnight UTC: the same model, forecasting
+# under a new version each morning, scattering the prospective record across as
+# many versions as there are days. It surfaced as a DOM failure the first night
+# after the deploy — the page named one champion and the table led with another.
+_cvc = _db.connect(os.path.join(tempfile.mkdtemp(), "champ.db"))
+_cfg = {"scale": 1.0}
+_h8 = pv.config_hash(_cfg)[:8]
+for _d in ("2026.09.06", "2026.09.07", "2026.09.08"):
+    _fv2.register_model(_cvc, model_version="C0-%s.%s" % (_d, _h8),
+                        model_id="champion-grade", role="champion", config=_cfg)
+_live = lambda: [r["model_version"] for r in _cvc.execute(
+    "SELECT model_version FROM model_registry WHERE role='champion'"
+    " AND retired_at IS NULL ORDER BY created_at")]
+ok("CONTROL: three days of an unchanged config made three champions",
+   len(_live()) == 3, _live())
+_dups = _fv2.dedupe_champions(_cvc)
+ok("the duplicates are retired, and the earliest one is kept",
+   _live() == ["C0-2026.09.06.%s" % _h8], _live())
+# RETIRED, not deleted: the forecasts filed under a duplicate are real forecasts
+# by an identical model, and erasing the row would orphan them.
+ok("...retired rather than deleted, so nothing is orphaned",
+   _cvc.execute("SELECT COUNT(*) c FROM model_registry").fetchone()["c"] == 3)
+ok("...and the row says what superseded it",
+   "superseded by" in (_cvc.execute(
+       "SELECT notes FROM model_registry WHERE model_version=?",
+       ("C0-2026.09.07.%s" % _h8,)).fetchone()["notes"] or ""))
+ok("a version for a config already registered is REUSED, not re-minted",
+   _fv2.champion_version(_cfg, conn=_cvc) == "C0-2026.09.06.%s" % _h8)
+ok("CONTROL: with no registry to ask, it still stamps a date",
+   _fv2.champion_version(_cfg, date="2027.01.01") == "C0-2027.01.01.%s" % _h8)
+# A config that really did change must still get its own version.
+ok("a CHANGED config still mints a new version",
+   _fv2.champion_version({"scale": 2.0}, conn=_cvc) != "C0-2026.09.06.%s" % _h8)
+ok("the bundle names a LIVE champion, not the newest row",
+   'AND retired_at IS NULL ORDER BY created_at LIMIT 1' in
+   open(os.path.join(ROOT, "src", "research_export.py")).read())
+
 # ── a spread and a total are two bets, not one record ────────────────────────
 #
 # The first deploy of the locked-line headline pooled both markets and printed

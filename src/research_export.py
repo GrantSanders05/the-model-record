@@ -570,9 +570,13 @@ def build_v2_block(conn, sport, season):
     except Exception as e:                         # noqa: BLE001 - never block a build
         return {"available": False, "why": "%s: %s" % (type(e).__name__, e)}
 
+    # A RETIRED champion is not the champion. Duplicates minted by the old
+    # calendar-stamped version string are retired rather than deleted, so the
+    # filter matters: without it the newest row wins and the page names a version
+    # nothing files under any more.
     champ = conn.execute(
         "SELECT model_version FROM model_registry WHERE role='champion'"
-        " ORDER BY created_at DESC LIMIT 1").fetchone()
+        " AND retired_at IS NULL ORDER BY created_at LIMIT 1").fetchone()
     champ_v = champ["model_version"] if champ else None
 
     strategies = []

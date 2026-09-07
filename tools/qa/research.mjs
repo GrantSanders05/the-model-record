@@ -1204,9 +1204,22 @@ console.log("\n── model lab: challengers, not ranked by win rate ──");
   ok("every registered model has a row", listRows("#labmodels") === models.length,
      `${listRows("#labmodels")} rows for ${models.length} models`);
 
-  const first = $("#labmodels tbody tr");
-  ok("the Champion is the first row", first.textContent.includes(V.champion),
-     first.textContent.replace(/\s+/g," ").slice(0,70));
+  const first = dataRows("#labmodels")[0];
+  // Two assertions, not one. "The first row is a Champion" is about ordering;
+  // "and it is the one the bundle names" is about identity — and it was the
+  // second that broke, when a calendar-stamped version string minted a second
+  // Champion at midnight and the page named one while the table led with the
+  // other. Folded together they reported the wrong cause.
+  ok("the first row is the Champion row",
+     !!first && first.querySelectorAll("td")[2].textContent.trim() === "Champion",
+     first ? first.textContent.replace(/\s+/g," ").slice(0,70) : "no model rows");
+  ok("...and it is the version the bundle names as Champion",
+     !!first && first.textContent.includes(V.champion),
+     `bundle says ${V.champion}, row says ${
+       first ? first.querySelectorAll("td")[0].textContent.trim() : "nothing"}`);
+  ok("CONTROL: exactly one row is marked Champion",
+     dataRows("#labmodels").filter(
+       r => r.querySelectorAll("td")[2].textContent.trim() === "Champion").length === 1);
   // §27.4: do not sort challengers by ATS percentage by default. The ordering is
   // role, then version -- assert the ROLE ordering directly, because a table that
   // happens to be in the right order for one bundle is not an ordering rule.

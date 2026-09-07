@@ -103,16 +103,69 @@ def register_model(conn, *, model_version, model_id, role, config,
     return rec
 
 
-def champion_version(config, *, date=None):
+def champion_version(config, *, date=None, conn=None):
     """
     The Champion's version string: C0-<date>.<config hash prefix>.
 
     The hash is in the name on purpose. Two configs that differ cannot share a
     version string even by accident, and a version string alone is enough to see
     that something moved.
+
+    THE DATE IS THE DAY THE CONFIG FIRST APPEARED, NOT TODAY. It was today, and
+    that minted a new Champion version at every midnight UTC from an unchanged
+    config: the same model, forecasting under a fresh version string each morning,
+    scattering the prospective record across as many versions as days. A version
+    exists to hold a record together, so when `conn` is given the registry is
+    asked first and an existing version for this exact config hash is reused.
+
+    Without `conn` it still stamps today, which is right for the one case that
+    has no registry to ask: minting a version for a config nobody has seen.
     """
+    chash = provenance.config_hash(config)
+    if conn is not None:
+        row = conn.execute(
+            "SELECT model_version FROM model_registry"
+            " WHERE role='champion' AND config_hash=? AND retired_at IS NULL"
+            " ORDER BY created_at LIMIT 1", (chash,)).fetchone()
+        if row:
+            return row["model_version"]
     stamp = date or dt.datetime.now(dt.timezone.utc).strftime("%Y.%m.%d")
-    return "C0-%s.%s" % (stamp, provenance.config_hash(config)[:8])
+    return "C0-%s.%s" % (stamp, chash[:8])
+
+
+def dedupe_champions(conn, *, commit=True):
+    """
+    Retire duplicate Champion versions that share one config. -> [retired]
+
+    They should not exist, and they did: the version string carried today's date,
+    so an unchanged config minted a fresh Champion every midnight UTC. RETIRED,
+    not deleted — the forecasts filed under a duplicate are real forecasts by an
+    identical model, and erasing the row would orphan them. Retiring says "this
+    is not the version to file under any more", which is exactly true.
+
+    The EARLIEST row for a config hash wins, because that is when the config
+    actually started.
+    """
+    seen, retired = {}, []
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    for r in conn.execute(
+            "SELECT model_version, config_hash, created_at FROM model_registry"
+            " WHERE role='champion' AND retired_at IS NULL"
+            " ORDER BY created_at, model_version"):
+        keep = seen.get(r["config_hash"])
+        if keep is None:
+            seen[r["config_hash"]] = r["model_version"]
+            continue
+        conn.execute(
+            "UPDATE model_registry SET retired_at=?,"
+            " notes=COALESCE(notes,'') || ? WHERE model_version=?",
+            (now, " | superseded by %s: same config, a version string that "
+                  "carried the calendar rather than the config" % keep,
+             r["model_version"]))
+        retired.append((r["model_version"], keep))
+    if retired and commit:
+        conn.commit()
+    return retired
 
 
 class ChampionAdapter:
@@ -359,7 +412,11 @@ def run_snapshots(conn, *, sport="cfb", config, now=None, horizons_wanted=None,
     if season is None:
         season = max(g["season"] for g in games)
 
-    model_version = model_version or champion_version(config)
+    # Any duplicate minted by the old calendar-stamped version string is retired
+    # before a version is chosen, so the choice cannot land on one of them.
+    for _dup, _keep in dedupe_champions(conn):
+        print("  retired duplicate champion %s (same config as %s)" % (_dup, _keep))
+    model_version = model_version or champion_version(config, conn=conn)
     register_model(conn, model_version=model_version, model_id=CHAMPION_MODEL_ID,
                    role=ROLE_CHAMPION, config=config,
                    notes="the shipped grade model, frozen as the V2 Champion")
