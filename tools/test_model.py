@@ -229,10 +229,17 @@ if files:
        bool(v.get("config_fingerprint")))
     # A frozen number with no way to notice it has gone stale is worse than none.
     # Change `scale` or the rater and this fails until it is regenerated.
-    ok("...and that fingerprint still matches config/cfb_grades.json",
-       v.get("config_fingerprint") == wv.fingerprint(CFG),
+    # AGAINST THE CALIBRATED CONFIG, not the file. `scale` is fitted per grade
+    # vintage at run time, so the summary is computed under a config the file
+    # does not contain -- comparing to the file makes the check fail forever and
+    # teaches everyone to ignore it, which is worse than not having it.
+    import calibrate as _calib                                   # noqa: E402
+    _eff = _calib.calibrated_config(conn, "cfb", dict(CFG),
+                                    season=v.get("season"), quiet=True)
+    ok("...and that fingerprint still matches the calibrated config",
+       v.get("config_fingerprint") == wv.fingerprint(_eff),
        "committed %s vs current %s — re-run tools/write_validation.py"
-       % (v.get("config_fingerprint"), wv.fingerprint(CFG)))
+       % (v.get("config_fingerprint"), wv.fingerprint(_eff)))
     ok("it reports an interval, not just a headline",
        v.get("ci_lo") is not None and v.get("ci_hi") is not None)
     ok("it leaks no grades", not any(

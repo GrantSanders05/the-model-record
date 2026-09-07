@@ -616,6 +616,42 @@ dozens of plausible interactions and 800 games will happily rank one best;
 choosing after looking is how a model acquires a beautiful backtest and no
 future.
 
+## E017 — units fitted per grade vintage — **SHIPPED 2026-09-07**
+
+**The finding.** `scale` is a units conversion between rating points and points
+of margin, and it is a property of the grade sheet. Fitted jointly with
+`quality_scale` and home field: 2025's hand grades want **1.30**, 2026's
+EA-derived grades want **2.06**. The config shipped 1.311 for both.
+
+**How it showed.** A one-directional bias by line size — +2.78 points on
+pick'ems, **−5.67 on the biggest favourites** — so every large favourite was
+priced short and the model took the dog. Week 1 2026: away side 20–33, home side
+18–14. Oregon at Oklahoma State priced Oregon by 6.5 against 22.5.
+
+**What was already known and not acted on.** `best_bets` carries a comment
+stating that Grant's hand grades needed 1.57× and the EA-derived ones 1.98×.
+`calibrate.fit_two` exists and fits exactly this. **Nothing ever called it.** A
+calibration tool with no caller is a calibration that happens once and rots.
+
+**The fix.** `calibrate.fit_units` runs every update from the season's own priced
+games, behind guards (n ≥ 60, R² ≥ 0.45, band 0.40–4.00, 0.05 hysteresis). Every
+config load goes through `calibrated_config`.
+
+**Measured.** On 2025 with grades frozen at week 1, auto-calibrated units,
+form 0.6, the board rule: **56.77% over 384** against 56.49% for the hand value —
+a wash, which is the point. Rescoring 2026's played games at the corrected scale
+takes the season grade from 46.81% to **61.70%**. Model-market dispersion
+0.65 → 0.91.
+
+**Rejected in the same pass.** Team-level market anchoring — blending the film
+rating with market-implied power ratings — looked like 60.9% ATS and was **pure
+look-ahead**: the pool included later weeks' *closing* lines, which are
+statements made after the game being predicted. Restricted to strictly earlier
+weeks it adds nothing (56.21% vs 56.16%). Also rejected: adopting the fitted home
+field, which hands back a measured half-point per home game.
+
+---
+
 ## E015 — performance form in the champion — **SHIPPED 2026-09-07**
 
 Distinct from E005, which fitted continuous form as a *challenger ridge feature*

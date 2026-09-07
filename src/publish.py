@@ -608,7 +608,7 @@ def main():
     conn = db.connect()
     out_dir = os.path.join(ROOT, "output", "site")
     os.makedirs(out_dir, exist_ok=True)
-    html_doc = render(conn, "cfb", backtest_summary=_backtest_summary())
+    html_doc = render(conn, "cfb", backtest_summary=_backtest_summary(conn=conn))
     path = os.path.join(out_dir, "index.html")
     with open(path, "w") as fh:
         fh.write(html_doc)
@@ -808,7 +808,7 @@ def _v2_close_diagnostic(conn, sport="cfb", market="spread"):
     return tot
 
 
-def _backtest_summary(sport="cfb"):
+def _backtest_summary(sport="cfb", conn=None):
     """
     The most recent validation replay run_update wrote, if there is one.
 
@@ -839,8 +839,22 @@ def _backtest_summary(sport="cfb"):
             import sys as _sys
             _sys.path.insert(0, os.path.join(ROOT, "tools"))
             import write_validation as _wv
-            b["stale"] = (_wv.fingerprint(json.load(open(cfg_path)))
-                          != b["config_fingerprint"])
+            # The CALIBRATED config, for the season the summary describes. The
+            # units are fitted per grade vintage at run time, so the file's own
+            # values are not what any replay ran under and comparing to them
+            # would mark every summary stale on the day it was written.
+            _raw = json.load(open(cfg_path))
+            if conn is None:
+                # Unknown, not False. Without a database the units cannot be
+                # re-fitted, so the honest answer is that staleness could not be
+                # checked -- and `None` is what the page already renders as
+                # silence rather than as a clean bill of health.
+                b["stale"] = None
+            else:
+                import calibrate as _calib
+                _cfg_eff = _calib.calibrated_config(
+                    conn, sport, _raw, season=b.get("season"), quiet=True)
+                b["stale"] = (_wv.fingerprint(_cfg_eff) != b["config_fingerprint"])
         except Exception:                          # noqa: BLE001 - never block a page
             b["stale"] = None
     return b

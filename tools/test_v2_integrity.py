@@ -1913,6 +1913,110 @@ ok("the residual is measured against the RATING, never the form-adjusted number"
    "self.form.observe(game, s * scale" in open(
        os.path.join(ROOT, "src", "engine.py")).read())
 
+
+# ── the units of the grade sheet ─────────────────────────────────────────────
+#
+# `scale` converts a rating point into a point of margin. It is a property of the
+# SHEET, not of the edge, and the sheet changed between seasons while the constant
+# did not: 1.311 fits 2025's hand grades and is 48% too small for 2026's
+# EA-derived ones. That is why Oregon at Oklahoma State priced as Oregon by 6.5
+# against a market number of 22.5, and why week 1 took the away side 53 times and
+# went 20-33 -- the model carried a -5.7 point bias on the biggest favourites.
+print("\n── calibration: the units are fitted, not remembered ──")
+import calibrate as _cal                                        # noqa: E402
+
+_cc = _db.connect(os.path.join(tempfile.mkdtemp(), "cal.db"))
+_cfg = {"rater": "grades", "grade_formula": "computed", "scale": 1.0, "hfa": 3.0,
+        "neutral_hfa": 0.0, "quality_scale": 0.0, "totals_enabled": False,
+        "sheet_coach_weight": 1.0}
+# A sheet where every team's rating is known, and a market that pays exactly
+# TWO points per rating point plus three for home field. A correct fit must
+# recover 2.0 and nothing else.
+for _i in range(40):
+    _cc.execute("INSERT INTO grades (sport,season,week,team,position,grade)"
+                " VALUES ('cfb',2026,1,?, 'qb', ?)", ("T%02d" % _i, 5.0 + _i * 0.25))
+    _cc.execute("INSERT INTO grades (sport,season,week,team,position,grade)"
+                " VALUES ('cfb',2026,1,?, 'coach_st', 0)", ("T%02d" % _i,))
+_gid = 0
+for _h in range(0, 40, 2):
+    for _a in range(1, 40, 2):
+        if _gid >= 120:
+            break
+        # `_grade_total` DOUBLES the seven player groups, so a team's rating is
+        # 2 x qb here, and the strength the fit sees is twice the qb difference.
+        # Building the market off the raw grades instead made the true scale 1.0
+        # and the assertion pass for the wrong reason.
+        strength = 2.0 * ((5.0 + _h * 0.25) - (5.0 + _a * 0.25))
+        rating = 2.0 * strength
+        _cc.execute(
+            "INSERT INTO games (game_id,sport,season,week,home_team,away_team,"
+            "kickoff,neutral_site,home_div,away_div) VALUES (?,'cfb',2026,2,?,?,"
+            "'2026-09-12T00:00:00Z',0,'fbs','fbs')",
+            ("cal-%d" % _gid, "T%02d" % _h, "T%02d" % _a))
+        # `home_margin` is the market's HOME margin, positive when the home team
+        # is favoured -- the same convention backtest.load_games reads it under.
+        _cc.execute("INSERT INTO lines (game_id,provider,home_margin,total)"
+                    " VALUES (?,'test',?,NULL)",
+                    ("cal-%d" % _gid, rating + 3.0))
+        _gid += 1
+_cc.commit()
+_fit = _cal.fit_units(_cc, "cfb", 2026, _cfg)
+ok("a units fit is returned when there is enough evidence", bool(_fit and _fit.get("ok")),
+   _fit)
+ok("...and it recovers the scale the market was built with",
+   _fit and abs(_fit["scale"] - 2.0) < 0.05, _fit and _fit["scale"])
+ok("...reporting the sample it used", _fit and _fit["n"] >= 60, _fit and _fit["n"])
+ok("...and an R^2 for a market it can explain exactly",
+   _fit and _fit["r2"] > 0.99, _fit and round(_fit["r2"], 4))
+
+# CONTROL: the shipped constant must NOT survive contact with a sheet it does
+# not fit. This is the whole failure -- 1.311 was correct and stayed correct
+# looking while the sheet under it changed.
+_applied, _note = _cal.apply_units(_cfg, _fit)
+ok("the fit is adopted", abs(_applied["scale"] - 2.0) < 0.05, _applied["scale"])
+ok("...and home field is NOT adopted from the market",
+   _applied["hfa"] == _cfg["hfa"], _applied["hfa"])
+ok("...the note says both what moved and what was held",
+   _note and "scale" in _note and "held" in _note, _note)
+
+# Hysteresis: the config hash is the Champion's identity, so a fit that has not
+# really moved must not mint a new version every week.
+_near = dict(_fit, scale=round(_cfg["scale"] + 0.01, 2))
+ok("a fit within the hysteresis band changes nothing",
+   _cal.apply_units(_cfg, _near)[1] is None)
+_far = dict(_fit, scale=_cfg["scale"] + 0.5)
+ok("...and one outside it does", _cal.apply_units(_cfg, _far)[1] is not None)
+
+# Guards. A units fit that has gone wrong moves every number on the board at
+# once, so it must refuse rather than guess.
+ok("too few games -> no fit at all",
+   _cal.fit_units(_cc, "cfb", 2099, _cfg) is None)
+_bad = dict(_fit, scale=99.0)
+ok("[control] a scale outside the sane band is not adopted",
+   _cal.apply_units(_cfg, dict(_bad, ok=False))[1] is None)
+ok("MIN_UNITS_GAMES and the band are real constants, not inline numbers",
+   _cal.MIN_UNITS_GAMES >= 30 and _cal.UNITS_BAND[0] > 0
+   and _cal.UNITS_BAND[1] > _cal.UNITS_BAND[0])
+
+# CONTROL: A WIRING BUG MUST NOT BE SWALLOWED. `calibrated_config` wraps the fit
+# so a data problem cannot take a run down -- and the first version caught
+# NameError too, so a call that referenced `conn` before it existed returned the
+# config unchanged and the research page rendered at the stale scale in silence.
+_raised = False
+try:
+    _cal.calibrated_config(None, "cfb", _cfg, quiet=True)
+except (AttributeError, TypeError, NameError):
+    _raised = True
+ok("[control] a programming error propagates instead of being swallowed",
+   _raised, "calibrated_config(None, ...) returned quietly")
+
+# And every place that loads a config must go through it, or the board and the
+# record are priced at different scales.
+for _mod in ("run_update", "research_export", "best_bets", "predict"):
+    _src = open(os.path.join(ROOT, "src", "%s.py" % _mod)).read()
+    ok("%s calibrates the config it loads" % _mod,
+       "calibrate.calibrated_config(" in _src)
+
 # ── proving this section can fail ────────────────────────────────────────────
 print("\n── proving these can fail ──")
 _before = F

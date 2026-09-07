@@ -115,7 +115,59 @@ page says so in those words.
 - **The form term with fresh grades.** Neutral on ATS (56.16% vs 56.14%) and
   positive on RMSE, so it stays on either way.
 
-## 6. What is still missing
+## 6. Postscript — the units were wrong, and that was most of it
+
+Added 7 September, after Grant pointed at a single number: *"there is no reason
+our model should be so low on Oregon vs Oklahoma State."* He was right, and
+chasing it found a bigger fault than anything above.
+
+`scale` converts a rating point into a point of margin. It is a property of the
+**grade sheet**, and the sheet changed: 2025's hand grades span 35.2 rating
+points, 2026's EA-derived ones span 25.3. Fitted per vintage, 2025 wants 1.30 and
+2026 wants 2.06. The config shipped **1.311 for both**.
+
+The error was one-directional. Mean model-minus-market by line size, 2026:
+
+| market line | at 1.311 | at 1.94 |
+|---|---:|---:|
+| 2–3 (pick'em) | **+2.78** | +2.47 |
+| 14–22 | −2.91 | −0.14 |
+| 22–50 | **−5.67** | +0.86 |
+
+Every big favourite was priced short, so the model took the underdog. **That is
+the away-side 20–33 in §1** — not a coincidence and not variance.
+
+`calibrate.fit_units` now re-fits it every run, so it cannot rot again. Rescoring
+2026's played games at the corrected scale takes the season grade from 46.81% to
+**61.70%**; on 2025 the auto-fit reproduces the hand value and the record is
+unchanged, which is what makes it safe to ship.
+
+**Two things this does not fix, stated plainly.** Oregon at Oklahoma State moves
+from 6.5 to 10.8, against a market number of 22.5. The remaining 12 points is not
+units — it is the sheet disagreeing with the market about two teams. Solving the
+market's own power ratings from every posted line puts Oklahoma State **7.9
+points below** its film grade and Oregon **4.9 above**. Only film, or results,
+closes that.
+
+And **the repository already knew.** `best_bets` carries a comment saying the
+hand grades needed 1.57× and the EA grades 1.98×. `calibrate.fit_two` fits
+exactly this parameter. Nothing ever called it. The lesson is not "re-fit the
+scale" — it is that a calibration with no caller is a calibration that happens
+once and then rots, silently, across the one change it exists to absorb.
+
+## 6b. Something that looked like a fix and was a leak
+
+Blending the film rating with market-implied team power ratings scored **60.93%
+ATS** on 2025. It was look-ahead: the ratings were solved from every priced game
+except the current week's, and `market_margin` is the **closing** line — so a
+week-12 line is a week-12 statement, and feeding it into a week-3 rating imports
+eleven weeks of results. Restricted to strictly earlier weeks the same idea is
+worth nothing at all (56.21% against 56.16% without it).
+
+It is recorded here because it took twenty minutes to build and would have
+shipped a 61% claim.
+
+## 7. What is still missing
 
 - **Injuries.** The §22 availability layer is built and its ESPN feed resolves
   every team, and both the `injuredReserveOrOut` and `suspended` groups are empty
