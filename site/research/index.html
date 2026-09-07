@@ -381,13 +381,24 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
 <!-- ── BEST BETS ───────────────────────────────────────────────────── -->
 <section class="view" id="v-bets">
   <h2>Best bets</h2>
-  <p class="sub"><b>Edge</b> is the raw disagreement with the closing number.
-     <b>Worth</b> is what that disagreement has historically been worth — only about
-     an eighth of it shows up, so an eleven-point gap is a point and a half of real
-     edge. Read Worth. Everything here is a hypothesis being tracked, not a bet
-     known to be good.</p>
+  <p class="sub">This is the board, and the record on the Results tab counts exactly
+     these games. A pick qualifies when both teams have a film grade, the line is
+     inside &plusmn;28 points, the model disagrees by at least 3, and it is not week 1
+     &mdash; spreads only. Replaying 2025 under those rules gives <b>56.5% over 393
+     games</b> against 52.4% for every game with a line; the games each rule removes
+     went 49&ndash;50%. The 95% interval is 51.6&ndash;61.4%, so the low end is still
+     under break-even. One season is not a proof.<br>
+     <b>Edge</b> is the raw disagreement with the closing number. <b>Worth</b> is what
+     that disagreement has historically been worth &mdash; only about a sixth of it
+     shows up, so an eleven-point gap is under two points of real edge. Read Worth.
+     Everything here is a hypothesis being tracked, not a bet known to be good.</p>
   <div class="cards" id="betcards"></div>
   <div class="bar">
+    <div class="field"><label for="showsel">Show</label>
+      <select id="showsel">
+        <option value="best">Best bets only</option>
+        <option value="all">Every priced game</option>
+      </select></div>
     <div class="field"><label for="sortby">Rank by</label>
       <select id="sortby">
         <option value="spread">Spread disagreement</option>
@@ -416,6 +427,14 @@ input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;bac
   <p class="sub">Every pick locked before kickoff and graded after, cut every way that
      could change the answer. No rate is shown without the number of decisions behind it
      and a 95% interval, because those are what decide whether it means anything.</p>
+  <div class="bar">
+    <div class="field"><label for="recsel">Record</label>
+      <select id="recsel">
+        <option value="best">Best bets only</option>
+        <option value="all">Every published pick</option>
+      </select></div>
+  </div>
+  <div id="selnote" class="banner" hidden></div>
   <div id="resultstate"></div>
   <div class="cards" id="rescards"></div>
   <div id="resproof"></div>
@@ -887,7 +906,7 @@ function boot(){
   /* Both events: `input` fires per keystroke in the number boxes, `change` is what a
      select reliably emits everywhere. Binding one of the two leaves a control that
      looks wired and is not. */
-  ["#sortby","#wk","#sizing","#bank","#weekly"].forEach(s=>{
+  ["#showsel","#sortby","#wk","#sizing","#bank","#weekly"].forEach(s=>{
     $(s).oninput=drawBets; $(s).onchange=drawBets;
   });
   $("#team").oninput=drawTeam; $("#game").oninput=drawMove;
@@ -897,6 +916,7 @@ function boot(){
   try{ const u=localStorage.getItem(UNIT_KEY); if(u) $("#unitsize").value=u; }catch(e){}
   ["#segcut"].forEach(s=>{ $(s).oninput=drawSeg; $(s).onchange=drawSeg; });
   ["#rfilter","#rweek"].forEach(s=>{ $(s).oninput=drawPickList; $(s).onchange=drawPickList; });
+  $("#recsel").onchange=drawResults;
   ["#unitsize","#mbmarket","#mbresult"].forEach(s=>{
     $(s).oninput=drawMyBets; $(s).onchange=drawMyBets; });
   initBetForm();
@@ -1318,7 +1338,12 @@ function drawBets(){
   $("#weekly").disabled = (mode==="kelly");
   saveBetPrefs();
 
-  let rows=D.bets.filter(b=>!wk||String(b.week)===wk);
+  /* THE BOARD SHOWS THE BOARD. Until now this tab listed every priced game
+     sorted by disagreement and called the page "Best bets", so the record and
+     the recommendation were different sets and nobody could see it. `best`
+     applies the same stored rule the record counts. */
+  const show=($("#showsel")||{}).value||"best";
+  let rows=D.bets.filter(b=>(!wk||String(b.week)===wk) && (show!=="best"||b.best_bet));
   rows = by==="ml"
     ? rows.filter(b=>b.ml_ev!=null).sort((a,b)=>b.ml_ev-a.ml_ev)
     : rows.filter(b=>b.spread_edge!=null).sort((a,b)=>Math.abs(b.spread_edge)-Math.abs(a.spread_edge));
@@ -1343,8 +1368,15 @@ function drawBets(){
       <div class="s">${mult==null?"no priced plays"
         :mult>1.05?"over-betting the edge":mult<0.95?"under Kelly":"about right"}</div></div>`;
 
+  const S=D.selection||{};
+  const scope=D.bets.filter(b=>!wk||String(b.week)===wk);
+  const declined={};
+  scope.forEach(b=>{ if(b.decline_reason) declined[b.decline_reason]=(declined[b.decline_reason]||0)+1; });
+  const nQual=scope.filter(b=>b.best_bet).length;
   $("#betcards").innerHTML=`
-    <div class="card"><div class="k">Games</div><div class="v">${rows.length}</div></div>
+    <div class="card"><div class="k">${show==="best"?"Best bets":"Games"}</div>
+      <div class="v">${rows.length}</div>
+      <div class="s">${show==="best"?`of ${scope.length} on the slate`:`${nQual} qualify`}</div></div>
     <div class="card"><div class="k">${by==="ml"?"Positive EV":"With a line"}</div>
       <div class="v">${pos}</div></div>${sizeCards}
     <div class="card"><div class="k">Live record</div>
@@ -1434,7 +1466,14 @@ function drawBets(){
     : `<span class="legend"><span><b>Away @ Home</b> — the bold team is hosting</span>`+
       `<span><b>Model makes it / Market has it</b> — the favourite and the points it lays</span>`+
       `<span><b>Spread pick</b> — the side, and the number you would be taking</span></span>`;
-  $("#betnote").innerHTML = legend + `<span style="display:block;margin-top:8px">` + (by!=="ml"
+  /* WHAT IS NOT ON THE BOARD, AND WHY. A short board with no explanation reads
+     as missing data; naming the rule that removed each game makes it a decision. */
+  const declineNote = Object.keys(declined).length
+    ? `<span style="display:block;margin-top:8px"><b>Not offered${wk?" in week "+wk:""}:</b> `+
+      Object.entries(declined).sort((a,b)=>b[1]-a[1])
+        .map(([k,n])=>`${n} — ${(S.labels||{})[k]||k}`).join("; ")+`.</span>`
+    : "";
+  $("#betnote").innerHTML = legend + declineNote + `<span style="display:block;margin-top:8px">` + (by!=="ml"
     ? "Break-even at −110 is 52.38%."
     : mode==="kelly"
       ? `Quarter Kelly on a ${money(bank)} bankroll, capped at 2% (${money(bank*0.02)}) per game. `+
@@ -1499,15 +1538,48 @@ function betsNeeded(pct){
   return null;
 }
 function drawResults(){
-  const T=D.tracking||{};
+  /* TWO RECORDS, AND THE READER PICKS. `best` is the default because it is what
+     the board actually offers; `all` is one click away and never hidden. Week 1
+     of 2026 is the case that made this necessary: 85 graded picks, 38-47, and
+     not one of them a game the board would have put up. */
+  const sel=($("#recsel")||{}).value||"best";
+  const T=(sel==="best"?D.tracking_best:D.tracking)||{};
+  const S=D.selection||{};
+  const note=$("#selnote");
+  if(note){
+    const dec=Object.entries(S.counts||{}).filter(([k])=>k!=="best");
+    const nDec=dec.reduce((a,[,n])=>a+n,0);
+    note.hidden=false;
+    note.innerHTML = sel==="best"
+      ? `<b>Best bets only</b>A pick qualifies when both teams have a film grade, the `+
+        `line is inside ±${S.blowout_line} points, the model disagrees by at least `+
+        `${S.min_edge}, and it is not week 1 — and only against the spread. `+
+        `${nDec} published pick(s) are declined: `+
+        `${dec.sort((a,b)=>b[1]-a[1]).map(([k,n])=>`${n} ${k}`).join(", ")}. `+
+        `The rule is fixed in advance and stored on each pick (${S.version}), so it `+
+        `cannot be loosened later to admit a winner.`
+      : `<b>Every published pick</b>Including the ${nDec} the board declines to bet. `+
+        `This is the honest denominator and it is not the product — a record that `+
+        `counts picks the board never offered measures the schedule as much as the model.`;
+  }
   const state=$("#resultstate");
   if(T.empty){
     /* An empty record is a STATE, not a zero. "0-0, 0.0%" would be a lie about a
        season that has not started, and a blank panel reads as a broken page. */
-    state.innerHTML=`<div class="banner"><b>No games have finished yet</b>`+
-      `${T.pending||0} pick(s) are locked and waiting on kickoff. Results appear here `+
-      `automatically as games go final — nothing to set up. Until then this screen is `+
-      `empty on purpose: an empty record is not a 0% record.</div>`;
+    /* WHICH KIND OF EMPTY. "No games have finished yet" is false when 85 have
+       and none of them qualified, and a reader who sees it next to a full
+       every-game record concludes the page is broken. */
+    const anyGraded=(D.tracking||{}).graded||0;
+    state.innerHTML = (sel==="best" && anyGraded)
+      ? `<div class="banner"><b>The board has not offered a bet yet</b>`+
+        `${anyGraded} pick(s) have been graded and none of them qualified, so this `+
+        `record is <b style="display:inline">0–0</b> rather than a selection of the `+
+        `ones that happened to win. Switch to <i>every published pick</i> for what the `+
+        `model did on all of them.</div>`
+      : `<div class="banner"><b>No games have finished yet</b>`+
+        `${T.pending||0} pick(s) are locked and waiting on kickoff. Results appear here `+
+        `automatically as games go final — nothing to set up. Until then this screen is `+
+        `empty on purpose: an empty record is not a 0% record.</div>`;
     ["#rescards","#resproof","#clvcards","#calcards"].forEach(s=>$(s).innerHTML="");
     $("#restbl").innerHTML=$("#segtbl").innerHTML=$("#rpicks").innerHTML=
       `<tbody><tr><td><div class="empty">Nothing graded yet.</div></td></tr></tbody>`;

@@ -36,6 +36,7 @@ import ledger
 import metrics
 import predict
 import publish
+import selection
 import research_export
 import sync_grades
 
@@ -132,23 +133,32 @@ def validation_backtest(conn, sport, current_season, config):
            "vs_baseline": round(m.get("su_edge_vs_baseline") or 0.0, 2),
            "calib_slope": m.get("calib_slope"), "mae": m.get("mae")}
 
-    # AND THE SAME REPLAY OVER THE GAMES THE MODEL WOULD ACTUALLY HAVE OFFERED.
-    # best_bets marks everything outside +/-BLOWOUT_LINE `no_bet` and gives it no
-    # stake, so the headline above is the record of a strategy nobody runs: it bets
-    # a hundred and twenty games a season that the board declines. Both are carried
-    # because either one alone is a half-truth -- the wide number understates what
-    # the model does, and the narrow one, published alone, would look like the
-    # blowouts had been dropped for being losers.
+    # AND THE SAME REPLAY OVER THE GAMES THE BOARD WOULD ACTUALLY HAVE OFFERED.
+    # The headline above bets every game with a line, which is a strategy nobody
+    # runs. Both are carried because either alone is a half-truth: the wide number
+    # understates what the model does, and the narrow one published alone would
+    # look like the losers had been quietly dropped.
+    #
+    # THE SAME RULE THE LIVE BOARD USES, via the same function. This filtered on
+    # `BLOWOUT_LINE` alone, which was the whole rule when it was written and has
+    # not been since -- so the page's backtest was measuring a different strategy
+    # from the one it recommends, under a heading that implied they were one.
     import best_bets
     offered = [p for p in preds
-               if p.get("market_margin") is not None
-               and abs(p["market_margin"]) <= best_bets.BLOWOUT_LINE]
+               if best_bets.qualifies({"unrated": p.get("borrowed"),
+                                       "market_margin": p.get("market_margin"),
+                                       "week": p.get("week"),
+                                       "edge": (None if p.get("market_margin") is None
+                                                else p["pred_margin"] - p["market_margin"])})]
     if offered:
         om = metrics.evaluate(offered)
         if om.get("ats_pct"):
             out.update({"offered_n": om["ats_n"], "offered_ats_pct": om["ats_pct"],
                         "offered_roi": om["roi"],
-                        "blowout_line": best_bets.BLOWOUT_LINE})
+                        "blowout_line": best_bets.BLOWOUT_LINE,
+                        "min_edge": best_bets.MIN_EDGE,
+                        "first_week": best_bets.FIRST_BETTABLE_WEEK,
+                        "selection_version": best_bets.SELECTION_VERSION})
     return out
 
 
@@ -436,6 +446,30 @@ def main():
         import traceback
         traceback.print_exc()
 
+
+    # EVERY ROW CLASSIFIED BEFORE ANYTHING RENDERS. `lock()` stamps new picks as
+    # it writes them, so this only ever reaches rows that predate the column --
+    # the 99 week-1 picks and the signals migrated from them. It is idempotent
+    # and it must run before the page, because a NULL flag renders as "not a best
+    # bet" and would quietly shrink the record it is supposed to describe.
+    try:
+        filled = selection.backfill(conn)
+        if filled["picks_log"] or filled["signal_log"]:
+            print("\n  classified %d pick(s) and %d signal(s) that predate the "
+                  "best-bet flag" % (filled["picks_log"], filled["signal_log"]))
+            if filled.get("borrowed_disagreements"):
+                print("  NOTE: forecast_log.borrowed_fallback disagreed with grade "
+                      "coverage on %d signal(s)." % filled["borrowed_disagreements"])
+                print("  Grade coverage wins — the migration defaulted that column "
+                      "to 0 without measuring it.")
+        counts = selection.summary(conn, args.sport, season)
+        if counts:
+            print("  best bets %d of %d picked games; declined: %s"
+                  % (counts.get("best", 0), sum(counts.values()),
+                     ", ".join("%s %d" % (k, n) for k, n in sorted(counts.items())
+                               if k != "best") or "none"))
+    except Exception as e:                         # noqa: BLE001 - never block the run
+        print("  WARNING: best-bet classification failed — %s: %s" % (type(e).__name__, e))
 
     print("\n[6/9] write local artifacts")
     os.makedirs(OUT, exist_ok=True)

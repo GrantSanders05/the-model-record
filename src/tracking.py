@@ -245,14 +245,23 @@ def weekly(rows, week_labels=None):
     return out
 
 
-def summary(conn, sport, season=None, week_labels=None):
-    """Everything, from the graded ledger only. Ungraded picks are not results."""
+def summary(conn, sport, season=None, week_labels=None, selection=None):
+    """
+    Everything, from the graded ledger only. Ungraded picks are not results.
+
+    `selection="best"` narrows to the picks the board actually offered. The two
+    answers are different records of different things and the page shows both,
+    so neither is quietly the only one. `best_bet = 1` and not `IS NOT 0`: a row
+    the classifier has never seen is unknown, not qualified.
+    """
     q = ("SELECT * FROM picks_log WHERE sport=? AND graded_at IS NOT NULL"
          " AND " + db.NOT_VOIDED)
     args = [sport]
     if season:
         q += " AND season=?"
         args.append(season)
+    if selection == "best":
+        q += " AND best_bet = 1"
     rows = [dict(r) for r in conn.execute(q + " ORDER BY kickoff, game_id", args)]
 
     # Locked but not yet playable, reported separately so an empty record reads as
@@ -263,13 +272,15 @@ def summary(conn, sport, season=None, week_labels=None):
         (sport,)).fetchone()["c"]
 
     if not rows:
-        return {"graded": 0, "pending": pend, "empty": True}
+        return {"graded": 0, "pending": pend, "empty": True,
+                "selection": selection or "all"}
 
     for r in rows:
         r["clv"] = clv_of(r)
 
     return {
         "empty": False,
+        "selection": selection or "all",
         "graded": len(rows),
         "pending": pend,
         "first_kickoff": rows[0]["kickoff"],

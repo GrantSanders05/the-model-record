@@ -24,7 +24,34 @@ python3 tools/compare_champion.py --week 2
 
 # refit the challengers (shadow only; nothing is promoted)
 python3 tools/fit_challengers.py --season 2025 --apply
+
+# this week's board, and only the games that qualify
+python3 src/best_bets.py --sport cfb --by spread --best-only --top 25
+
+# which teams the film should be looked at again, ranked in standard errors.
+# WRITES NOTHING to `grades` -- a position grade is a reading of film, and
+# deriving one from a box score would make the sheet's provenance a lie.
+python3 tools/regrade_report.py --season 2026 --top 20
+
+# classify any pick or signal that predates the best-bet flag. Idempotent, and
+# run automatically by run_update before anything renders.
+python3 src/selection.py
 ```
+
+## Reading the two records
+
+The public page and the research Results tab both open on **best bets** and offer
+**every game** in a switch. They are different claims:
+
+- **best bets** — the picks the board actually offered, under the stored rule.
+  This is the product.
+- **every game** — every published pick, including the ones the board declines.
+  This is the honest denominator, and it measures the schedule as much as the
+  model.
+
+When the two disagree sharply, read the decline counts under the switch. Week 1
+of 2026 is the extreme case: 99 published picks, 0 best bets, because every game
+was either unrated, a blowout, or week 1 itself.
 
 ## Every gate
 
@@ -40,6 +67,8 @@ python3 tools/make_fixture.py
 QA_BUNDLE=output/research/fixture.json node tools/qa/research.mjs
 QA_PAGE=output/site/fixture.html node tools/qa/public.mjs
 ```
+
+As of 2026-09-07 that is 58 + 158 + 425 + 19 + 13 + 69 + 317 + 320 + 66 = 1,445 assertions.
 
 ## The cutover switch
 

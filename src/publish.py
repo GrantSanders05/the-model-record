@@ -29,8 +29,10 @@ import html
 import json
 import os
 
+import best_bets
 import ledger
 import metrics
+import selection
 import tracking
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -160,58 +162,8 @@ def render(conn, sport="cfb", backtest_summary=None):
         # sentence above it asked. `locked` is the published side at the number it
         # was published at; `close` is the same side scored against the close, and
         # it is a diagnostic rather than a wager anybody made.
-        locked = _v2_locked_record(conn, "cfb", market="spread")
-        totals = _v2_locked_record(conn, "cfb", market="total")
-        if locked and locked.get("locked_pct") is not None:
-            llo, lhi = locked["locked_ci95"]
-            # TOTALS GET THEIR OWN TILE OR NONE AT ALL. The first version of this
-            # headline pooled spreads and totals and printed the sum under a tile
-            # reading "ATS record": 83-103 was neither the 38-47 the model went
-            # against the spread nor the 31-39 it went on totals. Two bets on two
-            # different quantities do not add up to a record of either.
-            tot_tile = ""
-            if totals and totals.get("locked_pct") is not None:
-                tot_tile = ("""
-      <div class="stat"><span class="k">Totals</span>
-        <span class="v">%d–%d–%d</span>
-        <span class="sub">O/U, %.2f%% — counted apart, not added in</span></div>"""
-                            % (totals["locked_w"], totals["locked_l"],
-                               totals["locked_p"], totals["locked_pct"]))
-            roi_cell = ("%+.2f%%" % locked["roi"] if locked.get("roi") is not None
-                        else "unavailable")
-            roi_sub = ("" if locked.get("roi") is not None
-                       else "no spread prices were recorded")
-            headline = """
-    <div class="hero">
-      <div class="stat"><span class="k">ATS record</span>
-        <span class="v">%d–%d–%d</span>
-        <span class="sub">spreads only, at the line each pick locked</span></div>
-      <div class="stat"><span class="k">ATS %%</span>
-        <span class="v">%.2f%%</span><span class="sub">95%% CI %.1f–%.1f</span></div>
-      <div class="stat"><span class="k">ROI</span>
-        <span class="v">%s</span><span class="sub">%s</span></div>%s
-    </div>
-    <p class="verdict">%s</p>
-    <p class="note"><strong>How this is graded.</strong> A pick is scored at the
-      number it was <em>locked</em> at, on the side that was published. Earlier
-      versions of this page graded against the closing line and re-derived the side
-      from the model number, which meant a pick could be recorded on a side nobody
-      published: one Virginia pick, laying 3 and winning by 26, was recorded as a
-      loss. Both figures are kept — the closing-line version is below, as a
-      diagnostic — and the legacy values remain in the ledger for audit. ROI is
-      shown only where the exact price was recorded; this feed supplies moneylines
-      and not spread juice, so for spreads it is honestly unavailable rather than
-      assumed at −110.</p>""" % (
-                locked["locked_w"], locked["locked_l"], locked["locked_p"],
-                locked["locked_pct"], llo, lhi, roi_cell, roi_sub, tot_tile,
-                # Single %, not %% — these are ARGUMENTS to the format above,
-                # not part of it, so an escaped percent stays escaped and renders
-                # as "52.38%%" on the page.
-                ("This record clears the 52.38% break-even with the entire "
-                 "confidence interval above it." if (llo or 0) > 52.38 else
-                 "The interval still includes the 52.38% break-even — not yet "
-                 "enough graded picks to call this an edge either way."))
-        else:
+        headline = _two_records(conn, sport)
+        if headline is None:
             headline = """
     <div class="hero">
       <div class="stat"><span class="k">ATS record</span>
@@ -306,13 +258,14 @@ def render(conn, sport="cfb", backtest_summary=None):
         # with the rule that separates them stated.
         ("""
     <p class="note">Those figures bet <em>every</em> game with a line. The board
-       does not: anything outside &plusmn;%.0f points is marked <em>no bet</em> and
-       never staked, because a spread that wide is where the grades are least able
-       to tell two teams apart. On the %d games it would actually have offered,
-       the same replay is <strong>%.2f%%</strong> ATS for <strong>%+.2f%%</strong>
-       ROI. Both are shown because either on its own tells you something the other
-       corrects.</p>""" % (b["blowout_line"], b["offered_n"],
-                           b["offered_ats_pct"], b["offered_roi"])
+       does not, and the difference is the whole product: it offers a game only
+       when both teams have a film grade, the line is inside &plusmn;%.0f points,
+       the model disagrees by at least %.0f, and it is not week 1 &mdash; spreads
+       only. On the %d games it would actually have offered, the same replay is
+       <strong>%.2f%%</strong> ATS for <strong>%+.2f%%</strong> ROI. Both are shown
+       because either on its own tells you something the other corrects.</p>"""
+         % (b["blowout_line"], b.get("min_edge") or 0, b["offered_n"],
+            b["offered_ats_pct"], b["offered_roi"])
          if b.get("offered_ats_pct") is not None else ""),
         (("The whole interval sits above break-even, which is the test that matters."
           if b.get("ci_lo", 0) > 52.38 else
@@ -435,6 +388,22 @@ h2{font-size:16px;margin:38px 0 4px;font-weight:640;letter-spacing:-.015em;
   background:var(--raised);border-radius:100px;padding:3px 9px;
   text-transform:uppercase;letter-spacing:.06em}
 .hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin:18px 0}
+/* THE RECORD SWITCH. Two records, one at a time, best bets first. Square
+   corners and a hairline, like every other control here -- the brand's rule. */
+.switch{display:inline-flex;border:1px solid var(--line);margin:18px 0 0;
+  background:var(--panel)}
+.switch button{appearance:none;background:none;border:0;color:var(--ink3);
+  font:inherit;font-size:12.5px;font-weight:560;padding:8px 15px;cursor:pointer;
+  border-right:1px solid var(--line)}
+.switch button:last-child{border-right:0}
+.switch button[aria-selected="true"]{background:%(brand)s;color:#fff}
+.switch button:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
+.empty-record{border:1px solid var(--line);background:var(--panel);padding:16px 18px;
+  margin:14px 0 0;font-size:13px;line-height:1.65;color:var(--ink2);max-width:76ch}
+.empty-record p{margin:0 0 10px}.empty-record p:last-child{margin-bottom:0}
+.empty-record ul{margin:0 0 10px;padding-left:20px}
+.empty-record li{margin:3px 0;color:var(--ink3)}
+.empty-record strong{color:var(--ink)}
 .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
   box-shadow:var(--sh);padding:15px 16px;transition:border-color .15s}
 .stat:hover{border-color:var(--ink3)}
@@ -534,6 +503,38 @@ footer strong{color:var(--ink2)}
 </footer>
 </div>
 <script>
+/* THE RECORD SWITCH.
+
+   Rendered server-side as two panels with the second `hidden`, so the page is
+   complete and correct with JavaScript off -- both records are in the HTML, and
+   without the script the reader simply sees the best-bets one. `hidden` is
+   toggled as a property rather than through `style.display`, because the host
+   stylesheet sets `[hidden]{display:none!important}` and a display rule loses
+   to it silently. */
+(function(){
+  var tabs = document.querySelectorAll('.switch button');
+  if(!tabs.length) return;
+  function pick(btn){
+    tabs.forEach(function(t){
+      var on = t === btn;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      var panel = document.getElementById(t.getAttribute('aria-controls'));
+      if(panel) panel.hidden = !on;
+    });
+  }
+  tabs.forEach(function(t){
+    t.addEventListener('click', function(){ pick(t); });
+    t.addEventListener('keydown', function(e){
+      if(e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      e.preventDefault();
+      var i = [].indexOf.call(tabs, t);
+      var next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) %% tabs.length];
+      next.focus(); pick(next);
+    });
+  });
+})();
+</script>
+<script>
 (function(){
   var curve = %(curve_json)s;
   var svg = document.querySelector('.chart'); if(!svg||!curve.length) return;
@@ -614,7 +615,132 @@ def main():
     print("track record page -> %s" % path)
 
 
-def _v2_locked_record(conn, sport="cfb", market="spread"):
+def _tiles(rec, totals, *, label, sub):
+    """One record's four tiles. Same shape for both, so they are comparable."""
+    tot = ""
+    if totals and totals.get("locked_pct") is not None:
+        tot = ("""
+      <div class="stat"><span class="k">Totals</span>
+        <span class="v">%d\u2013%d\u2013%d</span>
+        <span class="sub">O/U, %.2f%% \u2014 counted apart, not added in</span></div>"""
+               % (totals["locked_w"], totals["locked_l"], totals["locked_p"],
+                  totals["locked_pct"]))
+    lo, hi = rec["locked_ci95"]
+    roi = ("%+.2f%%" % rec["roi"]) if rec.get("roi") is not None else "unavailable"
+    roi_sub = "" if rec.get("roi") is not None else "no spread prices were recorded"
+    return """
+      <div class="stat"><span class="k">%s</span>
+        <span class="v">%d\u2013%d\u2013%d</span><span class="sub">%s</span></div>
+      <div class="stat"><span class="k">ATS %%</span>
+        <span class="v">%.2f%%</span><span class="sub">95%% CI %.1f\u2013%.1f</span></div>
+      <div class="stat"><span class="k">ROI</span>
+        <span class="v">%s</span><span class="sub">%s</span></div>%s""" % (
+        label, rec["locked_w"], rec["locked_l"], rec["locked_p"], sub,
+        rec["locked_pct"], lo, hi, roi, roi_sub, tot)
+
+
+def _two_records(conn, sport="cfb"):
+    """
+    THE BEST BETS RECORD AND THE EVERY-GAME RECORD, both, with a switch.
+
+    These are two different claims and the page had been making only the wider
+    one. Week 1 of 2026 published a pick on 85 games; the board offered none of
+    them, because every one was a game the model declines -- a team with no film
+    grade, a line wider than a grade sheet can express, or week 1 itself, when no
+    result exists and half the rating is therefore zero.
+
+    Reporting 38-47 as "the model's record" was true of the picks and false of
+    the product. Reporting only the best bets would be the more flattering half
+    of the same mistake, and would look exactly like quietly dropping the losers.
+    So both are rendered, both are labelled, and the reader switches between
+    them. Best bets leads because it is what the board actually offers.
+
+    Returns None when nothing is graded at all, so the caller can fall back.
+    """
+    best = _v2_locked_record(conn, sport, market="spread", selection="best")
+    every = _v2_locked_record(conn, sport, market="spread")
+    if not every or every.get("locked_pct") is None:
+        return None
+    best_t = _v2_locked_record(conn, sport, market="total", selection="best")
+    every_t = _v2_locked_record(conn, sport, market="total")
+
+    counts = selection.summary(conn, sport)
+    declined = sum(n for k, n in counts.items() if k != "best")
+    # GRADED, not published. The two differ -- 99 picks are on the board and 85
+    # have been played -- and putting one number in a sentence about the other is
+    # the kind of small wrongness that makes a reader stop trusting the big ones.
+    graded_n = every["locked_w"] + every["locked_l"] + every["locked_p"]
+
+    if best and best.get("locked_pct") is not None:
+        blo = best["locked_ci95"][0]
+        best_pane = '<div class="hero">%s</div>' % _tiles(
+            best, best_t, label="Best bets",
+            sub="the board's own picks, at the line each locked")
+        verdict = ("This record clears the 52.38% break-even with the entire "
+                   "confidence interval above it." if (blo or 0) > 52.38 else
+                   "The interval still includes the 52.38% break-even \u2014 not yet "
+                   "enough graded best bets to call this an edge either way.")
+    else:
+        # THE EMPTY STATE IS THE POINT, not a gap to be filled with the other
+        # number. Saying "0-0" and why is the whole reason the split exists.
+        best_pane = """
+    <div class="empty-record">
+      <p><strong>The board has not offered a bet yet.</strong> All %d picks
+         published so far are games it declines, so the best-bets record is
+         <strong>0\u20130</strong> rather than a selection of the ones that
+         happened to win. %d of them have been played.</p>
+      <ul>%s</ul>
+      <p>The rule is fixed in advance and stored on each pick, so it cannot be
+         loosened afterwards to admit a winner or tightened to drop a loser.
+         Switch to <em>every game</em> for what the model did on all of them.</p>
+    </div>""" % (declined, graded_n, "".join(
+            "<li><strong>%d</strong> &mdash; %s</li>" % (n, selection.LABEL.get(k, k))
+            for k, n in sorted(counts.items(), key=lambda kv: -kv[1]) if k != "best"))
+        verdict = ("Nothing has qualified yet. That is a statement about the "
+                   "schedule, not a result.")
+
+    every_pane = '<div class="hero">%s</div>' % _tiles(
+        every, every_t, label="Every game",
+        sub="all %d graded picks, qualifying or not" % graded_n)
+    return """
+    <div class="switch" role="tablist" aria-label="Which record to show">
+      <button role="tab" id="tab-best" aria-controls="rec-best" aria-selected="true">Best bets</button>
+      <button role="tab" id="tab-all"  aria-controls="rec-all"  aria-selected="false">Every game</button>
+    </div>
+    <div id="rec-best" role="tabpanel" aria-labelledby="tab-best">%s
+      <p class="verdict">%s</p></div>
+    <div id="rec-all" role="tabpanel" aria-labelledby="tab-all" hidden>%s
+      <p class="verdict">Every graded pick, including the %d the board declines to
+         bet. This is the honest denominator and it is not the product: a record
+         that counts picks the board never offered measures the schedule as much
+         as the model.</p></div>
+    <p class="note"><strong>What a best bet is.</strong> A pick qualifies when both
+      teams have a film grade, the line is inside &plusmn;%.0f points, the model
+      disagrees with it by at least %.0f, and it is not week 1. Each rule exists
+      because the games it removes lose: replaying 2025, picks under %.0f points of
+      disagreement went 49.6%%, games where a team had no grade went 49.2%%, and
+      week 1 went 49.1%%. Totals are not offered at all \u2014 that model gets
+      <em>worse</em> as it disagrees more, which is the signature of no edge.
+      What is left went <strong>56.5%%</strong> over 393 games in that replay
+      against 52.4%% for every game with a line \u2014 but its 95%% interval runs
+      51.6\u201361.4%%, so the low end is still under the 52.38%% break-even. One
+      season, and not a proof.</p>
+    <p class="note"><strong>How this is graded.</strong> Every record on this page
+      is scored <em>at the line each pick locked</em>, on the side that was
+      published. Earlier
+      versions of this page graded against the closing line and re-derived the side
+      from the model number, which meant a pick could be recorded on a side nobody
+      published: one Virginia pick, laying 3 and winning by 26, was recorded as a
+      loss. Both figures are kept \u2014 the closing-line version is below, as a
+      diagnostic \u2014 and the legacy values remain in the ledger for audit. ROI is
+      shown only where the exact price was recorded; this feed supplies moneylines
+      and not spread juice, so for spreads it is honestly unavailable rather than
+      assumed at \u2212110.</p>""" % (
+        best_pane, verdict, every_pane, declined,
+        best_bets.BLOWOUT_LINE, best_bets.MIN_EDGE, best_bets.MIN_EDGE)
+
+
+def _v2_locked_record(conn, sport="cfb", market="spread", selection=None):
     """
     The locked-line record for ONE market, across every strategy.
 
@@ -644,7 +770,7 @@ def _v2_locked_record(conn, sport="cfb", market="spread"):
              "priced_n": 0, "unpriced_n": 0, "profit": 0.0, "all_priced": True}
     for v in versions:
         r = metrics_v2.signal_performance(conn, strategy_version=v, sport=sport,
-                                          market=market)
+                                          market=market, selection=selection)
         for k in ("locked_w", "locked_l", "locked_p", "n", "priced_n", "unpriced_n"):
             total[k] += r.get(k) or 0
         if r.get("roi") is None and r.get("n"):

@@ -1,10 +1,10 @@
 {
-  "ats_pct": 52.33441910966341,
+  "ats_pct": 51.900108577633006,
   "blowout_line": 28.0,
-  "calib_slope": 1.0289797650016619,
-  "ci_hi": 55.54371897788564,
-  "ci_lo": 49.10572585677578,
-  "computed_utc": "2026-09-04T03:28:09.993249+00:00",
+  "calib_slope": 0.9790024984085959,
+  "ci_hi": 55.11239392307634,
+  "ci_lo": 48.67203791908994,
+  "computed_utc": "2026-09-07T06:11:58.372828+00:00",
   "config": {
     "blend_weight": 0.5,
     "edge_realised": 0.165,
@@ -27,12 +27,15 @@
     "wq_top5": 5.0
   },
   "config_fingerprint": "7c49e5051acc",
-  "mae": 12.784703860351149,
+  "first_week": 2,
+  "mae": 12.578484745794274,
+  "min_edge": 3.0,
   "n": 921,
-  "offered_ats_pct": 53.558052434456926,
-  "offered_n": 801,
-  "offered_roi": 2.247191011235955,
-  "roi": -0.08883624518803616,
+  "offered_ats_pct": 56.1576354679803,
+  "offered_n": 406,
+  "offered_roi": 7.210031347962377,
+  "roi": -0.9179745336097173,
   "season": 2025,
-  "vs_baseline": -2.68
+  "selection_version": "B1",
+  "vs_baseline": -0.96
 }

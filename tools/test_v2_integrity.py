@@ -1319,12 +1319,14 @@ ok("CONTROL: pooled, the percentage equals neither market's",
    and _all["locked_pct"] != _to["locked_pct"],
    "pooled %s vs spread %s vs total %s" % (_all["locked_pct"],
                                            _sp["locked_pct"], _to["locked_pct"]))
+_pub_src = open(os.path.join(ROOT, "src", "publish.py")).read()
 ok("the public headline asks for one market by name",
-   '_v2_locked_record(conn, "cfb", market="spread")' in
-   open(os.path.join(ROOT, "src", "publish.py")).read())
+   'market="spread", selection="best"' in _pub_src
+   and '_v2_locked_record(conn, sport, market="spread")' in _pub_src)
+ok("...and for one SELECTION by name, so best bets and every game stay apart",
+   'selection="best"' in _pub_src and 'def _two_records(' in _pub_src)
 ok("...and the close diagnostic beside it narrows the same way",
-   "def _v2_close_diagnostic(conn, sport=\"cfb\", market=\"spread\")" in
-   open(os.path.join(ROOT, "src", "publish.py")).read())
+   "def _v2_close_diagnostic(conn, sport=\"cfb\", market=\"spread\")" in _pub_src)
 
 # ── one number, one format ───────────────────────────────────────────────────
 #
@@ -1633,7 +1635,7 @@ ok("...and one that throws does not reach the caller either",
 # The point of the whole file: the Champion's rule is untouched.
 import engine as _eng                                           # noqa: E402
 ok("the Champion still awards its threshold quality points",
-   _eng.win_points({"wq_top5": 5.0, "wq_top10": 4.0, "wq_top25": 3.0,
+   engine.win_points({"wq_top5": 5.0, "wq_top10": 4.0, "wq_top25": 3.0,
                     "wq_other": 0.0}, 3) == 5.0)
 ok("...and the challenger is a separate module that changes none of it",
    "form_quality" not in open(os.path.join(ROOT, "src", "engine.py")).read())
@@ -1746,6 +1748,170 @@ for name in ["data/model.db",
 ok("...and does not ignore the source it is protecting",
    not _ignored("src/migrate_v2.py"))
 
+
+
+# ── the best-bets selection ──────────────────────────────────────────────────
+#
+# Week 1 of 2026 published a side on 85 graded games and went 38-47. The board
+# offered none of them. That gap between "what the model bet" and "what the
+# product recommends" is what this section fixes, and every assertion here is
+# about the two never drifting apart again.
+print("\n── best bets: the rule, the flag, and the record ──")
+import best_bets as _bb                                          # noqa: E402
+import selection as _sel                                         # noqa: E402
+
+_full = {"unrated": False, "market_margin": 7.0, "week": 6, "edge": 5.0}
+ok("a normal game with real disagreement qualifies", _bb.qualifies(_full))
+for _field, _val, _want in (("unrated", True, "unrated"),
+                            ("market_margin", 40.0, "blowout"),
+                            ("week", 1, "early"),
+                            ("edge", 1.5, "thin"),
+                            ("edge", None, "no line")):
+    _p = dict(_full); _p[_field] = _val
+    if _field == "edge" and _val is None:
+        _p["market_margin"] = None
+    ok("...%s -> declined as %r" % (_field, _want),
+       _bb.decline_reason(_p) == _want, "got %r" % _bb.decline_reason(_p))
+
+# The boundaries themselves, both sides. An off-by-one in a threshold is the
+# kind of thing that only shows up as a slightly worse season.
+ok("exactly MIN_EDGE qualifies", _bb.qualifies(dict(_full, edge=_bb.MIN_EDGE)))
+ok("a hair under MIN_EDGE does not",
+   _bb.decline_reason(dict(_full, edge=_bb.MIN_EDGE - 0.01)) == "thin")
+ok("exactly BLOWOUT_LINE qualifies",
+   _bb.qualifies(dict(_full, market_margin=_bb.BLOWOUT_LINE)))
+ok("a hair over BLOWOUT_LINE does not",
+   _bb.decline_reason(dict(_full, market_margin=_bb.BLOWOUT_LINE + 0.01)) == "blowout")
+ok("week %d is the first bettable one" % _bb.FIRST_BETTABLE_WEEK,
+   _bb.qualifies(dict(_full, week=_bb.FIRST_BETTABLE_WEEK))
+   and not _bb.qualifies(dict(_full, week=_bb.FIRST_BETTABLE_WEEK - 1)))
+ok("a NEGATIVE edge of the same size qualifies too",
+   _bb.qualifies(dict(_full, edge=-_bb.MIN_EDGE)),
+   "the rule is about size, not which side")
+
+# Totals are excluded at the selection layer, not by whoever calls it.
+ok("a total is never a best bet",
+   _sel.classify(market="total", week=6, model_margin=60.0, line=50.0,
+                 borrowed=False) == (False, "market"))
+ok("...and the same numbers as a spread are",
+   _sel.classify(market="spread", week=6, model_margin=10.0, line=3.0,
+                 borrowed=False)[0])
+
+# ONE DEFINITION OF `borrowed`. The V2 migration stamped borrowed_fallback=0 on
+# all 99 legacy forecasts without measuring it, so the signal path and the ledger
+# path disagreed on 48 of 99 week-1 picks. Both now read grade coverage.
+_have = {"Alabama", "Auburn"}
+ok("a game with both teams graded is not borrowed",
+   not _sel.borrowed_for(_have, "Alabama", "Auburn"))
+ok("...one ungraded side makes it borrowed",
+   _sel.borrowed_for(_have, "Alabama", "Nicholls"))
+ok("...and it does not matter which side",
+   _sel.borrowed_for(_have, "Nicholls", "Alabama"))
+
+# The stored flag, end to end, on a database built here.
+_sc = _db.connect(os.path.join(tempfile.mkdtemp(), "sel.db"))
+_sc.execute("INSERT INTO grades (sport,season,week,team,position,grade)"
+            " VALUES ('cfb',2026,1,'Alabama','qb',10),('cfb',2026,1,'Auburn','qb',9)")
+for _gid, _wk, _h, _a in (("g-ok", 6, "Alabama", "Auburn"),
+                          ("g-early", 1, "Alabama", "Auburn"),
+                          ("g-unrated", 6, "Alabama", "Nicholls")):
+    _sc.execute("INSERT INTO games (game_id,sport,season,week,home_team,away_team,"
+                "kickoff,home_div,away_div) VALUES (?,'cfb',2026,?,?,?,"
+                "'2026-10-01T00:00:00Z','fbs','fbs')", (_gid, _wk, _h, _a))
+    _sc.execute("INSERT INTO picks_log (game_id,sport,season,week,home_team,away_team,"
+                "kickoff,published_at,model_margin,market_margin_at_pick,ats_pick)"
+                " VALUES (?,'cfb',2026,?,?,?,'2026-10-01T00:00:00Z',"
+                "'2026-09-28T00:00:00Z',10.0,3.0,?)",
+                (_gid, _wk, _h, _a, _h))
+_sc.commit()
+_fill = _sel.backfill(_sc)
+ok("backfill classifies every unclassified row", _fill["picks_log"] == 3)
+_flags = {r["game_id"]: (r["best_bet"], r["decline_reason"]) for r in
+          _sc.execute("SELECT game_id,best_bet,decline_reason FROM picks_log")}
+ok("...the qualifying game is flagged 1", _flags["g-ok"] == (1, None), _flags["g-ok"])
+ok("...week 1 is flagged 0/early", _flags["g-early"] == (0, "early"), _flags["g-early"])
+ok("...the ungraded opponent is 0/unrated",
+   _flags["g-unrated"] == (0, "unrated"), _flags["g-unrated"])
+ok("every classified row carries the rule version that produced it",
+   all(r["selection_version"] == _bb.SELECTION_VERSION
+       for r in _sc.execute("SELECT selection_version FROM picks_log")))
+
+# CONTROL: A SECOND RUN MUST NOT RECLASSIFY. This is the whole reason the answer
+# is stored -- if the backfill reclassified, then lowering MIN_EDGE would
+# retroactively add winners to a finished season.
+_sc.execute("UPDATE picks_log SET best_bet=0, decline_reason='thin' WHERE game_id='g-ok'")
+_sc.commit()
+ok("[control] a second backfill touches nothing already classified",
+   _sel.backfill(_sc)["picks_log"] == 0)
+ok("...so the hand-edited value survives, proving it was not recomputed",
+   _sc.execute("SELECT best_bet FROM picks_log WHERE game_id='g-ok'").fetchone()[0] == 0)
+
+# The record split, on signals. An unclassified row must NOT count as a best bet.
+# One game per signal: the official index is UNIQUE on
+# (game_id, market, strategy_version), which is itself the rule that a strategy
+# may hold only one official opinion per game per market.
+for _i, (_bb_flag, _res) in enumerate([(1, "W"), (1, "L"), (0, "W"), (None, "W")]):
+    _sg = "g-sig%d" % _i
+    _sc.execute("INSERT INTO games (game_id,sport,season,week,home_team,away_team,"
+                "kickoff) VALUES (?,'cfb',2026,6,'Alabama','Auburn',"
+                "'2026-10-01T00:00:00Z')", (_sg,))
+    _sc.execute(
+        "INSERT INTO signal_log (signal_id,evaluation_id,forecast_id,game_id,"
+        "strategy_version,market,side,line,created_at,official_horizon,is_official,"
+        "locked_result,graded_at,best_bet) VALUES (?,?,?,?,'S-sel','spread',"
+        "'Alabama',-3.0,'2026-09-01T00:00:00+00:00','T2',1,?, "
+        "'2026-09-02T00:00:00+00:00',?)",
+        ("s%d" % _i, "e%d" % _i, "f%d" % _i, _sg, _res, _bb_flag))
+_sc.commit()
+_r_all = sig.official_record(_sc, strategy_version="S-sel", market="spread")
+_r_best = sig.official_record(_sc, strategy_version="S-sel", market="spread",
+                              selection="best")
+ok("the every-game record counts all four", _r_all["n"] == 4)
+ok("the best-bets record counts only the flagged two",
+   (_r_best["locked_w"], _r_best["locked_l"]) == (1, 1),
+   "%s-%s" % (_r_best["locked_w"], _r_best["locked_l"]))
+ok("CONTROL: an UNCLASSIFIED row is not silently a best bet",
+   _r_best["n"] == 2, "n=%s — NULL best_bet must not qualify" % _r_best["n"])
+ok("...and the two records differ, so the split is doing something",
+   _r_all["locked_pct"] != _r_best["locked_pct"],
+   "all %s vs best %s" % (_r_all["locked_pct"], _r_best["locked_pct"]))
+ok("every record says which selection it is",
+   _r_all["selection"] == "all" and _r_best["selection"] == "best")
+
+# The form term: leak-free, and off by default.
+print("\n── the performance-form term ──")
+ok("form is OFF unless a config asks for it",
+   engine.DEFAULT_CONFIG["form_weight"] == 0.0)
+_fm = engine.PerformanceForm(engine.merge_config({"form_weight": 1.0, "form_half_life": 8.0,
+                                              "form_shrink_k": 4.0, "form_cap": 21.0}))
+ok("a team with no games has no form", _fm.value("A") == 0.0)
+_g = {"home_team": "A", "away_team": "B", "home_score": 30, "away_score": 10,
+      "neutral_site": 0}
+_fm.observe(_g, 10.0)                       # beat a 10-point expectation by 10
+ok("beating expectation moves the team up", _fm.value("A") > 0)
+ok("...and its opponent down by the same amount",
+   abs(_fm.value("A") + _fm.value("B")) < 1e-9)
+ok("one game is shrunk toward zero, not taken at face value",
+   0 < _fm.value("A") < 10.0, "got %.3f of a 10-point residual" % _fm.value("A"))
+ok("...to exactly n/(n+k) of the mean residual",
+   abs(_fm.value("A") - 10.0 * (1 / (1 + 4.0))) < 1e-9, _fm.value("A"))
+_fm2 = engine.PerformanceForm(engine.merge_config(
+    {"form_weight": 1.0, "form_half_life": 8.0, "form_shrink_k": 4.0, "form_cap": 21.0}))
+_fm2.observe({"home_team": "A", "away_team": "B", "home_score": 80,
+              "away_score": 0, "neutral_site": 0}, 0.0)
+ok("a single 80-0 is winsorized, so one game cannot own a season",
+   abs(_fm2.value("A") - 21.0 * (1 / (1 + 4.0))) < 1e-9, _fm2.value("A"))
+ok("CONTROL: an unfinished game moves nothing",
+   (lambda f: (f.observe({"home_team": "A", "away_team": "B", "home_score": None,
+                          "away_score": None, "neutral_site": 0}, 3.0)
+               or f.value("A") == 0.0))(
+       engine.PerformanceForm(engine.merge_config({"form_weight": 1.0}))))
+ok("a new season clears it — form does not carry over",
+   (lambda f: (f.new_season(2027) or f.value("A") == 0.0))(_fm))
+ok("the residual is measured against the RATING, never the form-adjusted number",
+   "rating_margin" in engine.Model.predict.__doc__ or
+   "self.form.observe(game, s * scale" in open(
+       os.path.join(ROOT, "src", "engine.py")).read())
 
 # ── proving this section can fail ────────────────────────────────────────────
 print("\n── proving these can fail ──")

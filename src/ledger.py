@@ -21,6 +21,7 @@ import datetime as dt
 import db
 import grading
 import metrics
+import selection
 
 
 def _now():
@@ -114,6 +115,17 @@ def lock(conn, sport, picks, config_label, now=None, within_days=LOCK_WINDOW_DAY
             # at -150 -- so it is locked at the same moment and never revised.
             "ml_odds_at_pick": p.get("ml_odds"),
         })
+        # WAS IT A BEST BET, decided now and stored now. `selection.backfill`
+        # would reach this row on the next run anyway, but "the next run" is a
+        # different clock and possibly a different rule; a pick that records what
+        # it qualified as at the moment it was published cannot be recategorised
+        # by a later edit to a constant. The version is stored with it.
+        ok, why = selection.classify(
+            market="spread", week=p.get("week"),
+            model_margin=p.get("model_margin"), line=p.get("market_margin"),
+            borrowed=bool(p.get("unrated")))
+        rows[-1].update({"best_bet": 1 if ok else 0, "decline_reason": why,
+                         "selection_version": selection.SELECTION_VERSION})
     if rows:
         # OR IGNORE, not ON CONFLICT UPDATE: an existing pick is final.
         conn.executemany(
@@ -121,11 +133,12 @@ def lock(conn, sport, picks, config_label, now=None, within_days=LOCK_WINDOW_DAY
                (game_id, sport, season, week, home_team, away_team, kickoff,
                 published_at, config_label, model_margin, market_margin_at_pick,
                 model_total, market_total_at_pick, ats_pick, ml_pick, ou_pick,
-                ml_odds_at_pick)
+                ml_odds_at_pick, best_bet, decline_reason, selection_version)
                VALUES (:game_id, :sport, :season, :week, :home_team, :away_team,
                        :kickoff, :published_at, :config_label, :model_margin,
                        :market_margin_at_pick, :model_total, :market_total_at_pick,
-                       :ats_pick, :ml_pick, :ou_pick, :ml_odds_at_pick)""", rows)
+                       :ats_pick, :ml_pick, :ou_pick, :ml_odds_at_pick,
+                       :best_bet, :decline_reason, :selection_version)""", rows)
         conn.commit()
     inserted = conn.execute(
         "SELECT COUNT(*) c FROM picks_log WHERE sport=? AND published_at=?",

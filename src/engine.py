@@ -91,6 +91,44 @@ DEFAULT_CONFIG = {
     # are the market. Tuned, not assumed.
     "market_anchor": 0.0,
 
+    # ── performance form (margin against this model's own expectation) ──
+    #
+    # THE QUALITY-POINT RULE THROWS AWAY EVERY POINT OF MARGIN. Beating an
+    # unranked team 63-3 and 17-14 both score `wq_other`, which is zero. That is
+    # fine while the film is regraded weekly, because the film carries the
+    # update. It is not fine when the grades are a single preseason snapshot,
+    # which is what 2026 has: one sync in week 1 and nothing since.
+    #
+    # So this accumulates, per team, how far it beat or missed THIS MODEL's
+    # prediction, and adds the difference back as points of margin. Measured by
+    # replaying 2025 with the grades frozen at week 1 -- 2026's exact situation:
+    #
+    #     no form term   54.17% ATS   RMSE 16.228     (n=432, best-bets rule)
+    #     with it        56.49% ATS   RMSE 15.786     (n=393)
+    #
+    # and with 2025's real weekly regrades it is 56.16%, so it does not need
+    # switching off if Grant resumes grading film -- it simply has less left to
+    # do. Every one of the 54 (weight, half-life, k) cells tested improved RMSE
+    # and 53 of 54 improved the hit rate; these values sit in the middle of that
+    # plateau rather than at its maximum, which would be fitting the noise.
+    # `form_weight` 0 disables it entirely.
+    #
+    # LEAK-FREE BY CONSTRUCTION: the accumulator is only ever written in
+    # observe(), and both callers are strictly predict-then-observe. A game can
+    # never inform the pick made on it.
+    "form_weight": 0.0,            # 0 = off. points of margin per point of form
+    "form_half_life": 8.0,         # games; 8 in a 12-game season is a mild recency tilt
+    "form_shrink_k": 4.0,          # n/(n+k): one game of evidence counts one fifth
+    # Winsorize a single residual, so one 70-0 cannot own a season. Set at TWO
+    # STANDARD DEVIATIONS of the actual-minus-market residual, measured at 15.0
+    # points on 2025 -- the ordinary robust choice, and it agrees with the
+    # measurement: sweeping the cap over 2025 the hit rate climbs from 54.4% at 10
+    # to 56.2% at 25 and is flat from there to 60, so anything past ~25 is picking
+    # a point on a plateau. The first value here was 21, which is 1.4 SD, and it
+    # bound on 32% of teams after week 1 alone -- a guard that fires on a third of
+    # ordinary observations is not a guard, it is a ceiling.
+    "form_cap": 30.0,
+
     # ── totals (pace x efficiency; independent of the spread ratings) ──
     "totals_enabled": True,
     "totals_prior_games": 3.0,     # shrink early-season rates toward league mean
@@ -529,6 +567,66 @@ class TotalsModel:
 
 # ── the model ──────────────────────────────────────────────────────────────────
 
+class PerformanceForm:
+    """How far each team has beaten or missed the model's own expectation.
+
+    A decayed, winsorized mean of (actual margin - predicted margin), signed for
+    the team, shrunk toward zero by n/(n+k) so one game is worth a fifth of a
+    settled opinion rather than a whole one.
+
+    The mean is kept as numerator and denominator rather than as a running
+    blend. An un-normalised EWMA seeded at zero counts the first observation at
+    (1 - decay) of its weight -- 13% at a half-life of 5 -- so the term stays
+    near-silent through exactly the early weeks it exists for. Dividing by the
+    accumulated weight makes one game of evidence one game of evidence.
+    """
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.num = defaultdict(float)
+        self.den = defaultdict(float)
+        self.games = defaultdict(int)
+
+    def new_season(self, season):
+        # Form is a within-season quantity, like quality points. A team is not
+        # the team it was last November.
+        self.num.clear()
+        self.den.clear()
+        self.games.clear()
+
+    def value(self, team):
+        """Points of margin to add for this team. 0 until it has played."""
+        d = self.den.get(team, 0.0)
+        if not d:
+            return 0.0
+        n = self.games[team]
+        return (self.num[team] / d) * (n / (n + self.cfg["form_shrink_k"]))
+
+    def adjustment(self, game):
+        return self.value(game["home_team"]) - self.value(game["away_team"])
+
+    def observe(self, game, predicted_margin):
+        hs, as_ = game["home_score"], game["away_score"]
+        if hs is None or as_ is None or predicted_margin is None:
+            return
+        cap = self.cfg["form_cap"]
+        resid = max(-cap, min(cap, (hs - as_) - predicted_margin))
+        decay = 0.5 ** (1.0 / self.cfg["form_half_life"])
+        for team, sign in ((game["home_team"], 1.0), (game["away_team"], -1.0)):
+            self.num[team] = self.num[team] * decay + sign * resid
+            self.den[team] = self.den[team] * decay + 1.0
+            self.games[team] += 1
+
+    def record(self, team):
+        """For the team page: the number, and how much evidence is under it."""
+        n = self.games.get(team, 0)
+        d = self.den.get(team, 0.0)
+        return {"games": n,
+                "raw": round(self.num[team] / d, 2) if d else None,
+                "form": round(self.value(team), 2),
+                "reliability": round(n / (n + self.cfg["form_shrink_k"]), 3) if n else 0.0}
+
+
 class Model:
     def __init__(self, config=None, grades_by_team=None, stats_by_game=None):
         self.cfg = merge_config(config)
@@ -548,6 +646,7 @@ class Model:
             raise ValueError("unknown rater %r" % kind)
         self.totals = TotalsModel(self.cfg) if self.cfg["totals_enabled"] else None
         self._fallback = EloRater(self.cfg) if kind == "grades" else None
+        self.form = PerformanceForm(self.cfg) if self.cfg["form_weight"] else None
         self.predictions = 0
         self.fallbacks = 0
         # A grade rater with NO grades is not a grade rater. Every prediction would
@@ -598,6 +697,8 @@ class Model:
             self._fallback.new_season(season)
         if self.totals:
             self.totals.new_season(season)
+        if self.form:
+            self.form.new_season(season)
 
     def parts(self, game):
         """The rater's two rating halves, when it has them. See GradeRater.parts."""
@@ -636,12 +737,38 @@ class Model:
         if anchor > 0:
             import pro_models
             margin = pro_models.market_anchor(margin, game.get("market_margin"), anchor)
-        out = {"pred_margin": margin, "borrowed": borrowed}
+        # THE RATING'S OWN NUMBER, kept whatever else is added to it. The form
+        # term is measured against this, never against the form-adjusted figure:
+        # feeding a correction its own output back is how a correction runs away.
+        rating_margin = margin
+        form_adj = 0.0
+        if self.form:
+            form_adj = self.cfg["form_weight"] * self.form.adjustment(game)
+            margin += form_adj
+        out = {"pred_margin": margin, "borrowed": borrowed,
+               "rating_margin": rating_margin, "form_adj": round(form_adj, 2)}
         if self.totals:
             out["pred_total"] = self.totals.predict(game)
         return out
 
     def observe(self, game):
+        # FORM FIRST, and deliberately. It needs the prediction this model would
+        # have made BEFORE this game entered any rating, and re-deriving it here
+        # rather than caching what predict() returned means observe() is correct
+        # when it is called on a game nobody predicted -- which is every game of
+        # every season the backtest walks through to warm up.
+        if self.form:
+            s = self.rater.strength(game)
+            if s is None and self._fallback:
+                s = self._fallback.strength(game)
+            if s is not None:
+                # The SAME scale predict() would have used, borrowed or not. A
+                # residual measured against a number the model never makes is a
+                # residual against nothing.
+                borrowed = self.rater.strength(game) is None
+                fb = self.cfg.get("fallback_scale")
+                scale = fb if (borrowed and fb is not None) else self.cfg["scale"]
+                self.form.observe(game, s * scale + self.hfa_for(game))
         self.rater.observe(game)
         if self._fallback:
             self._fallback.observe(game)

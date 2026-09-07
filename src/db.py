@@ -583,6 +583,18 @@ ADDED_COLUMNS = [
     # Which grading rules produced the columns above, so a row graded under one
     # set of semantics can never be mistaken for a row graded under another.
     ("picks_log", "grading_version", "TEXT"),
+
+    # WAS THIS A BEST BET, decided by `selection.classify` and stored rather than
+    # asked again at render time. A record whose membership is recomputed on
+    # every page load is a record that a later edit to one constant can improve
+    # retroactively -- see selection.py. `selection_version` is what makes a row
+    # classified under an old rule readable as such instead of silently wrong.
+    ("picks_log", "best_bet", "INTEGER"),
+    ("picks_log", "decline_reason", "TEXT"),
+    ("picks_log", "selection_version", "TEXT"),
+    ("signal_log", "best_bet", "INTEGER"),
+    ("signal_log", "decline_reason", "TEXT"),
+    ("signal_log", "selection_version", "TEXT"),
 ]
 
 # Bumped whenever the meaning of a graded column changes. Stamped on every row

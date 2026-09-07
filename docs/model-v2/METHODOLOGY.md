@@ -192,6 +192,72 @@ from the same feature snapshot. Comparing a T2 forecast's error with the closing
 line's error flatters or damns it depending on which way the market moved and says
 nothing either way.
 
+## Selection — what counts as a best bet
+
+Two records, never one, and never merged. The **best bets** record counts only
+picks that qualified under the rule below; the **every game** record counts every
+published pick. The public page opens on the first and offers the second in a
+switch; the research page does the same on its Results tab.
+
+The rule, version `B1`:
+
+| rule | a pick is out when | what the excluded games did |
+|---|---|---|
+| `unrated` | either team has no film grade, so Elo answered | 2025: 49.2% over 126 games |
+| `blowout` | the line is outside ±28, wider than a grade sheet can express | 2026 wk 1: 4–7 |
+| `thin` | the model disagrees by under 3 points | 2025: 49.6% over 238 games |
+| `early` | week 1 — no game has been played, so the model holds no in-season information at all | 2025: 49.1% (n=53) · 2026: 44.7% (n=85) |
+| `market` | it is a total, not a spread | 2025 totals get *worse* with more disagreement: 52.2% at any gap, 48.8% past 4, 46.9% past 5 |
+
+Replaying 2025 with the grades frozen at week 1 — which is the state 2026 is
+actually in — the surviving board is **56.49% over 393 bets, ROI +7.8%**, against
+**52.44%** for every game with a line. Its 95% interval is 51.6–61.4%, so the
+lower bound is still under the 52.38% break-even: this is the best estimate
+available, not a proven edge.
+
+**The answer is stored, not recomputed.** `selection.classify` runs once, at lock
+time, and writes `best_bet`, `decline_reason` and `selection_version` onto the
+pick. Asking the question again at render time would mean a later edit to
+`MIN_EDGE` could retroactively add winners to a finished season — the same reason
+`ats_result_at_pick` is stored beside `grading_version` rather than regraded.
+
+One consequence worth stating plainly: **week 1 of 2026 contains no best bets at
+all.** 99 picks were published, 85 have been graded, and every one is a game the
+board declines. The best-bets record is therefore 0–0, and the page says so
+rather than borrowing the wider number.
+
+## Performance form
+
+The quality-point rule is binary: beating an unranked team 63–3 and 17–14 both
+score `wq_other`, which is zero. That is survivable while the film is regraded
+weekly, because the film carries the update. It is not survivable when the grades
+are one preseason snapshot — 2026 has a single sync in week 1 and nothing since.
+
+`form_weight` adds back, per team, a decayed and winsorized mean of how far it
+beat or missed the model's own prediction, shrunk by `n/(n+k)`:
+
+    form(team) = mean_decayed(actual - predicted, signed) × n/(n+k)
+    margin    += form_weight × (form(home) - form(away))
+
+Measured by replaying 2025 with the grades frozen at week 1:
+
+| | ATS on the board | RMSE |
+|---|---|---|
+| no form term | 54.17% (n=432) | 16.228 |
+| with it | **56.49%** (n=393) | **15.786** |
+
+With 2025's real weekly regrades it is 56.16% — so it does not need switching off
+if Grant resumes grading film; it simply has less left to do. **Fresh film is
+still worth more than this term recovers**, which is the single largest available
+improvement to the model and the one a person has to make.
+
+Leak-free by construction: the accumulator is written only in `observe()`, and
+both callers are strictly predict-then-observe. The residual is measured against
+the **rating's** margin, never the form-adjusted one — feeding a correction its
+own output back is how a correction runs away. The cap is 30 points, two standard
+deviations of the actual-minus-market residual measured at 15.0 on 2025; the
+first value was 21 and it bound on 32% of teams after week 1 alone.
+
 ## Development and prospective evidence
 
 **2025 is development data.** It has been used to choose terms, fit scale, split

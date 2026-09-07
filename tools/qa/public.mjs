@@ -64,7 +64,12 @@ console.log("\n── week by week ──");
   // the correct behaviour is for it to be absent rather than an empty table.
   const hasWeekly = [...window.document.querySelectorAll("h2")]
     .some(h => h.textContent.includes("Week by week"));
-  const graded = /ATS record/.test(window.document.body.textContent);
+  // NOT /ATS record/. That was the text of one tile, and when the headline gained
+  // a best-bets/every-game switch the tile was renamed and this whole section
+  // silently took the "nothing is graded" branch on a page with 85 graded picks --
+  // asserting the absence of a table that was right there. A structural signal
+  // cannot be renamed by a copy edit.
+  const graded = window.document.querySelector("#rec-all") !== null;
   if (graded) {
     ok("a graded record publishes a week-by-week table", hasWeekly);
     const tbl = [...window.document.querySelectorAll("table")].find(
@@ -177,9 +182,19 @@ console.log("\n── the backtest states its own uncertainty ──");
          `looking for ${V.ats_pct.toFixed(2)} and ${V.offered_ats_pct.toFixed(2)}`);
       ok("...the wide one is the headline, the narrow one sits under it",
          t.indexOf(V.ats_pct.toFixed(2)) < t.indexOf(V.offered_ats_pct.toFixed(2)));
+      // NOT /no bet/. That was the phrase when the blowout line was the whole
+      // rule; the backtest's narrow cut now applies the same four-part board rule
+      // as the live page, so the assertion checks the RULE is stated rather than
+      // one word from an older version of it.
       ok("...and the page says which games the narrow one leaves out",
-         /no bet/i.test(t) && t.includes(String(Math.round(V.blowout_line))),
-         `blowout line ${V.blowout_line}`);
+         t.includes(String(Math.round(V.blowout_line))) &&
+         /film grade/i.test(t) && /week 1/i.test(t) &&
+         (V.min_edge == null || t.includes(String(Math.round(V.min_edge)))),
+         `looking for the ±${V.blowout_line} / edge ${V.min_edge} / week rule`);
+      ok("...and the backtest's narrow cut is the SAME rule the board applies",
+         V.selection_version === undefined ||
+         t.includes("spreads only") || /spreads\s+only/i.test(t),
+         `selection ${V.selection_version}`);
     }
   }
 }
@@ -209,10 +224,45 @@ console.log("\n── the record is the locked line, and the close is a diagnost
     ok("...and says plainly that nobody bet those prices",
        /Nobody bet these prices/i.test(t));
     // The two must not be the same number presented twice.
-    const locked = t.match(/ATS record\s*(\d+)[–-](\d+)[–-](\d+)/);
+    const locked = t.match(/Every game\s*(\d+)[–-](\d+)[–-](\d+)/);
     const close = t.match(/At the close\s*(\d+)[–-](\d+)[–-](\d+)/);
     ok("...and the two records are reported separately",
        !!locked && !!close, `${locked && locked[0]} / ${close && close[0]}`);
+  }
+
+  // ── BEST BETS AND EVERY GAME, BOTH ON THE PAGE ─────────────────────────────
+  //
+  // Week 1 of 2026 published a side on 85 games and went 38-47. The board would
+  // have offered none of them. Reporting only the wide number describes a
+  // product nobody sells; reporting only the narrow one, with no sign of the
+  // wide one, looks exactly like dropping the losers. Both, always.
+  const doc = window.document;
+  ok("the page carries both records", doc.querySelector("#rec-best") !== null &&
+     doc.querySelector("#rec-all") !== null);
+  ok("...with a switch between them",
+     doc.querySelectorAll(".switch button[role=tab]").length === 2);
+  ok("...opening on best bets",
+     doc.querySelector("#tab-best").getAttribute("aria-selected") === "true" &&
+     doc.querySelector("#rec-all").hidden === true);
+  ok("the rule that separates them is stated, with its numbers",
+     /What a best bet is/i.test(t) && /at least 3/.test(t) && /±28|\u00b128/.test(t),
+     t.slice(t.indexOf("What a best bet"), t.indexOf("What a best bet") + 90));
+  ok("...including that totals are not offered",
+     /Totals are not offered at all/i.test(t));
+  // CONTROL: the every-game panel must be in the HTML even though it is hidden,
+  // so the page is complete and honest with JavaScript off.
+  ok("CONTROL: the wider record is in the markup, not fetched on click",
+     (doc.querySelector("#rec-all").textContent || "").replace(/\s+/g, " ")
+       .includes("Every game"));
+  // When nothing qualifies, the best-bets panel must SAY that rather than
+  // borrowing the other number or printing a fabricated 0.0%.
+  const bestTxt = doc.querySelector("#rec-best").textContent.replace(/\s+/g, " ");
+  if (/has not offered a bet yet/.test(bestTxt)) {
+    ok("an empty best-bets record explains itself", /0–0|0-0/.test(bestTxt));
+    ok("...and lists why each pick was declined",
+       /film grade|wider than|week 1/.test(bestTxt), bestTxt.slice(0, 110));
+    ok("CONTROL: it prints no percentage it does not have",
+       !/\d+\.\d+%/.test(bestTxt), bestTxt.slice(0, 110));
   }
 
   // No invented ROI. The feed carries moneylines and not spread juice, so a
