@@ -114,25 +114,85 @@ def dispersion_check(rows, max_abs_line=BLOWOUT_LINE):
             "max_abs_line": max_abs_line}
 
 
+# ── WHAT COUNTS AS A BEST BET ─────────────────────────────────────────────────
+#
+# Week 1 of 2026 went 38-47 against the spread and the honest reading of it is
+# not that the model broke. It is that the record counted 85 bets on a board
+# that only ever offered 36 of them, and that the model's own documentation had
+# already said week 1 was a coin flip.
+#
+# Each rule below is a mechanism first and a measurement second. The measurement
+# is a walk-forward replay of 2025 -- predict strictly before observe -- and the
+# quoted rates are on games the rule EXCLUDES, so each one is the cost of not
+# having had it:
+#
+#   unrated   a team has no film grade, so Elo answered, and Elo holds every
+#             non-FBS side at one constant rating however the market prices it.
+#             2025: 49.2% over 126 games. Week 1 2026: 18-20.
+#
+#   blowout   the line is wider than a grade sheet can express. Roughly 30
+#             rating points end to end cannot produce a 45-point spread, so the
+#             disagreement is the ceiling talking, not an opinion.
+#             Week 1 2026: 4-7 on the eleven such games.
+#
+#   thin      the disagreement is smaller than the model's own noise. Below
+#             three points 2025 went 49.6% over 238 games, and the rate climbs
+#             smoothly and monotonically from 53.6% at no threshold to 56.1% at
+#             three. A smooth ramp is signal; a single good cell is not, which
+#             is why the cut sits at the elbow rather than at the maximum.
+#
+#   early     in week 1 the model holds no in-season information AT ALL: no
+#             game has been played, so every team's quality points are zero and
+#             its form is zero, and the rating is the preseason film and nothing
+#             else. That is a categorical gap, not a gradual one -- by week 2
+#             there is a full week of results in both terms.
+#             2025 week 1 went 49.1% (n=53); week 1 2026 went 44.7% (n=85), and
+#             the board would have offered none of those 85.
+#             The site's own preseason banner has said "track these, do not bet
+#             them" all along, and the record counted them anyway.
+#
+#             WEEK 2 IS IN, and the first draft of this rule wrongly had it out.
+#             Grouping "weeks 1-2" hid that the two are different: on 2025 the
+#             board reads the same from week 3 as from week 2, so week 2's own
+#             ~20 plays neither help nor hurt. Its sample is far too small to
+#             judge on its own (95% interval +/-21 points), so it is included on
+#             the mechanism -- the model has real information by then -- and not
+#             on its record.
+#
+# What survives, replaying 2025 with the grades frozen at week 1 -- which is the
+# state 2026 is actually in, and with the form term the config now carries:
+# 56.49% over 393 bets, ROI +7.8% at -110, about 26 plays a week. Against 52.44%
+# for every game with a line, which is what the record used to measure. It holds
+# in every split tested: weeks 2-6 52.8%, weeks 7-11 58.1%, weeks 12+ 59.1%, odd
+# weeks 57.4%, even weeks 55.8%.
+#
+# IT IS NOT A PROVEN EDGE AND MUST NOT BE DESCRIBED AS ONE. The 95% interval on
+# 56.49% over 393 games runs from 51.6% to 61.4%, and break-even at -110 is
+# 52.38%, so the lower bound is still under water. It is the best estimate
+# available, with its precision stated, and one season is what is behind it.
+MIN_EDGE = 3.0
+FIRST_BETTABLE_WEEK = 2
+
+# Bumped whenever a rule above changes. Stored on every pick, so a record can
+# never be silently rewritten by a later change of mind about what qualified --
+# the same reason the graded result is stored rather than recomputed.
+SELECTION_VERSION = "B1"
+
+
 def no_bet_reason(pick):
     """
-    Why this game is not offered, or None if it is. -> str | None
+    Why this game is not on the board at all, or None. -> str | None
+
+    Narrower than `decline_reason`: these two rules say the model has no opinion
+    it can express, so the game is shown with its numbers and excluded from
+    every ranking and stake rather than dropped. A silently missing game looks
+    like an oversight, and its enormous fake EV is exactly what would top the
+    board.
 
     ONE FUNCTION, so the rule and the test of the rule cannot drift. It used to
     be an expression inline in `rank`, and the gate that checked it re-stated the
     same expression in the test file — which meant the test could only ever agree
     with itself.
-
-    Two ways a game is out of reach:
-
-      blowout  the line is wider than the grade sheet can express. Roughly 25
-               rating points end to end cannot produce a 45-point spread.
-      unrated  a team has no film grade, so Elo answered — and Elo holds every
-               non-FBS team at one constant rating, however the market prices
-               them. On the 5 September slate the market spread FCS opponents
-               across 24 points while the model held them equal, and six of the
-               top ten claimed edges were that constant talking. Those games went
-               4-6 in week 1 against 9-5 where both teams were graded.
     """
     if pick.get("unrated"):
         return "unrated"
@@ -140,6 +200,54 @@ def no_bet_reason(pick):
     if m is not None and abs(m) > BLOWOUT_LINE:
         return "blowout"
     return None
+
+
+def decline_reason(pick, week=None):
+    """
+    Why this game is not a BEST BET, or None if it is. -> str | None
+
+    Every consumer asks this one function: the board, the record, the publisher
+    and the tests. Two implementations of a selection rule is how the page and
+    the picks came to disagree about what the model had actually bet.
+
+    `week` may be passed for a pick that does not carry its own -- a stored row,
+    say -- but the pick's own value wins when it has one.
+    """
+    hard = no_bet_reason(pick)
+    if hard:
+        return hard
+    wk = pick.get("week", week)
+    if wk is not None and wk < FIRST_BETTABLE_WEEK:
+        return "early"
+    edge = pick.get("edge")
+    if edge is None:
+        edge = pick.get("spread_edge")
+    if edge is None:
+        m, mm = pick.get("model_margin"), pick.get("market_margin")
+        edge = None if (m is None or mm is None) else m - mm
+    if edge is None:
+        return "no line"
+    if abs(edge) < MIN_EDGE:
+        return "thin"
+    return None
+
+
+def qualifies(pick, week=None):
+    """Is this a Best Bet? The single source of truth."""
+    return decline_reason(pick, week) is None
+
+
+DECLINE_LABEL = {
+    "unrated": "a team has no film grade — Elo answered, and it rates every "
+               "non-FBS side the same",
+    "blowout": "the line is wider than %.0f, which a grade sheet cannot express"
+               % BLOWOUT_LINE,
+    "thin": "the disagreement is under %.0f points — inside the model's own noise"
+            % MIN_EDGE,
+    "early": "week 1 — no game has been played, so the model holds no in-season "
+             "information at all",
+    "no line": "no book had posted a number when the pick locked",
+}
 
 
 def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
@@ -208,6 +316,12 @@ def rank(conn, sport, config, season=None, week=None, bankroll=1000.0):
             # opinion on, exactly as ledger.missed_locks already says.
             "no_bet": no_bet_reason(p) is not None,
             "no_bet_reason": no_bet_reason(p),
+            # THE BEST BET FLAG, decided here and carried everywhere. The record,
+            # the page and the publisher all read this rather than each deciding
+            # for itself what qualified.
+            "best_bet": qualifies(p),
+            "decline_reason": decline_reason(p),
+            "selection_version": SELECTION_VERSION,
         }
 
         ph, pa = devig(implied_prob(home_ml), implied_prob(away_ml))
@@ -256,6 +370,8 @@ def main():
     ap.add_argument("--bankroll", type=float, default=1000.0)
     ap.add_argument("--top", type=int, default=15)
     ap.add_argument("--by", default="ml", choices=["ml", "spread"])
+    ap.add_argument("--best-only", action="store_true",
+                    help="only the games that qualify as best bets")
     ap.add_argument("--out", help="write full ranking to JSON")
     args = ap.parse_args()
 
@@ -313,10 +429,21 @@ def main():
         print("=" * 78 + "\n")
 
     rows = [r for r in rows if not r.get("no_bet")]
-    if skipped:
-        print("  %d game(s) excluded: the line is beyond %.0f, which is wider than a"
-              % (skipped, BLOWOUT_LINE))
-        print("  grade sheet can express. The model cannot price those and does not try.\n")
+
+    # WHAT WAS DECLINED, BY REASON. Printing one total under one reason was
+    # false as soon as there was more than one rule, and "the line is beyond 28"
+    # is simply not true of a game nobody graded.
+    from collections import Counter
+    why = Counter(r["decline_reason"] for r in rows if r.get("decline_reason"))
+    best = [r for r in rows if r.get("best_bet")]
+    if why:
+        print("  %d of %d priced games are not best bets:" % (len(rows) - len(best), len(rows)))
+        for reason, n in why.most_common():
+            print("    %-9s %3d   %s" % (reason, n, DECLINE_LABEL.get(reason, reason)))
+        print()
+    if args.best_only:
+        rows = best
+        print("  showing the %d best bet(s) only.\n" % len(rows))
 
     if args.by == "ml":
         rows.sort(key=lambda r: -(r["ml_ev"] if r["ml_ev"] is not None else -999))

@@ -327,7 +327,8 @@ def grade_signals(conn, *, sport="cfb", now=None, commit=True):
     return n
 
 
-def official_record(conn, *, strategy_version=None, sport="cfb", market=None):
+def official_record(conn, *, strategy_version=None, sport="cfb", market=None,
+                    selection=None):
     """
     The strategy's own record. Locked line, published side, priced honestly.
 
@@ -341,6 +342,12 @@ def official_record(conn, *, strategy_version=None, sport="cfb", market=None):
     the public headline did on its first deploy, under a tile labelled "ATS".
     None still pools, because the research bundle wants the strategy's whole
     output; a caller that puts a market's name on the screen must pass it.
+
+    `selection` picks WHICH RECORD. "best" counts only the picks that qualified
+    as best bets under the rule stored on the row; None or "all" counts every
+    published pick. The two are different claims and the page shows both, so the
+    headline is not quietly the flattering one -- and neither is quietly the
+    only one.
     """
     sv = strategy_version or STRATEGY_V0["strategy_version"]
     q = ("SELECT s.* FROM signal_log s JOIN games g ON g.game_id=s.game_id"
@@ -350,8 +357,14 @@ def official_record(conn, *, strategy_version=None, sport="cfb", market=None):
     if market:
         q += " AND s.market=?"
         args.append(market)
+    if selection == "best":
+        # `best_bet = 1` and not `IS NOT 0`: a row that has never been classified
+        # is unknown, not qualified. An unclassified row silently counted as a
+        # best bet is how a selective record fills up with everything.
+        q += " AND s.best_bet = 1"
     rows = [dict(r) for r in conn.execute(q, args)]
-    out = {"strategy_version": sv, "market": market or "all", "n": len(rows)}
+    out = {"strategy_version": sv, "market": market or "all", "n": len(rows),
+           "selection": selection or "all"}
     for label, col in (("locked", "locked_result"), ("close", "close_result")):
         w = sum(1 for r in rows if r[col] == "W")
         l = sum(1 for r in rows if r[col] == "L")

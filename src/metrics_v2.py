@@ -265,7 +265,8 @@ def probability_quality(conn, *, model_version, horizon=None, sport="cfb",
     return out
 
 
-def signal_performance(conn, *, strategy_version, sport="cfb", market=None):
+def signal_performance(conn, *, strategy_version, sport="cfb", market=None,
+                                   selection=None):
     """
     B. What the strategy actually did, at the numbers it locked.
 
@@ -278,7 +279,7 @@ def signal_performance(conn, *, strategy_version, sport="cfb", market=None):
     """
     import signals as sig
     rec = sig.official_record(conn, strategy_version=strategy_version, sport=sport,
-                              market=market)
+                              market=market, selection=selection)
     n = (rec.get("locked_w") or 0) + (rec.get("locked_l") or 0)
     rec["locked_ci95"] = _wilson(rec.get("locked_w") or 0, n)
     rec["break_even"] = 52.38
@@ -287,7 +288,8 @@ def signal_performance(conn, *, strategy_version, sport="cfb", market=None):
     return rec
 
 
-def closing_diagnostic(conn, *, strategy_version, sport="cfb", market=None):
+def closing_diagnostic(conn, *, strategy_version, sport="cfb", market=None,
+                                   selection=None):
     """
     C. The same side, at the close. A DIAGNOSTIC and not a wager record.
 
@@ -299,10 +301,11 @@ def closing_diagnostic(conn, *, strategy_version, sport="cfb", market=None):
     """
     import signals as sig
     rec = sig.official_record(conn, strategy_version=strategy_version, sport=sport,
-                              market=market)
+                              market=market, selection=selection)
     n = (rec.get("close_w") or 0) + (rec.get("close_l") or 0)
     return {
         "strategy_version": strategy_version, "market": market or "all",
+        "selection": selection or "all",
         "n": n, "w": rec.get("close_w"), "l": rec.get("close_l"),
         "p": rec.get("close_p"), "pct": rec.get("close_pct"),
         "ci95": _wilson(rec.get("close_w") or 0, n),
