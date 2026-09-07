@@ -172,6 +172,43 @@ def dedupe_champions(conn, *, commit=True):
     return retired
 
 
+def retire_superseded_champions(conn, keep_version, *, model_id=None, commit=True):
+    """
+    One live Champion per model_id, and it is `keep_version`. -> [retired]
+
+    `dedupe_champions` above handles the case where two rows share a config hash
+    -- the same model registered twice. This handles the OTHER case, which had
+    nothing handling it: a config that genuinely CHANGED mints a new Champion
+    with a new hash, and the old row stayed `role='champion'` with no retirement
+    date. Turning on `form_weight` did exactly that and the registry came back
+    with two live Champions of different configs, which the research page
+    faithfully reported.
+
+    A superseded Champion is retired, never deleted: forecasts were filed under
+    it by a model that really was the Champion at the time, and erasing the row
+    would orphan them. The note records what replaced it, so a reader landing on
+    an old forecast can find out what it was and what came next.
+    """
+    row = conn.execute("SELECT model_id FROM model_registry WHERE model_version=?",
+                       (keep_version,)).fetchone()
+    mid = model_id or (row["model_id"] if row else CHAMPION_MODEL_ID)
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    retired = []
+    for r in conn.execute(
+            "SELECT model_version, config_hash FROM model_registry"
+            " WHERE role='champion' AND retired_at IS NULL AND model_id=?"
+            "   AND model_version<>? ORDER BY created_at", (mid, keep_version)):
+        conn.execute(
+            "UPDATE model_registry SET retired_at=?, role='retired',"
+            " notes=COALESCE(notes,'') || ? WHERE model_version=?",
+            (now, " | superseded by %s: the config changed" % keep_version,
+             r["model_version"]))
+        retired.append((r["model_version"], keep_version))
+    if retired and commit:
+        conn.commit()
+    return retired
+
+
 class ChampionAdapter:
     """
     The shipped grade model, behind the V2 interface.
@@ -424,6 +461,13 @@ def run_snapshots(conn, *, sport="cfb", config, now=None, horizons_wanted=None,
     register_model(conn, model_version=model_version, model_id=CHAMPION_MODEL_ID,
                    role=ROLE_CHAMPION, config=config,
                    notes="the shipped grade model, frozen as the V2 Champion")
+    # AND THEN THE ONES A CONFIG CHANGE SUPERSEDED. After registration, so the
+    # row being kept exists and its model_id is read rather than assumed. A
+    # different config hash is a different model, so `dedupe_champions` above --
+    # which only ever matched on the hash -- could not see these: turning on
+    # `form_weight` left two live Champions and the page reported both.
+    for _old, _keep in retire_superseded_champions(conn, model_version):
+        print("  retired %s — superseded by %s (the config changed)" % (_old, _keep))
 
     adapter = ChampionAdapter(config, grades, stats)
 

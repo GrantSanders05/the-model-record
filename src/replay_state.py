@@ -57,23 +57,41 @@ def apply_events(conn, events, *, verbose=False):
     """
     Apply events to a database in order. -> {table: rows written}
 
-    INSERT OR REPLACE on the primary key: a later event for the same key is a
-    correction and supersedes, which is why `read_all` orders by occurred_at.
-    Applying the same journal twice is a no-op.
+    UPSERT on the primary key, touching ONLY the columns the payload carries: a
+    later event for the same key is a correction and supersedes, which is why
+    `read_all` orders by occurred_at. Applying the same journal twice is a no-op.
+
+    NOT `INSERT OR REPLACE`, which is what this was and which is subtly
+    destructive. That statement DELETES the conflicting row and inserts a fresh
+    one, so every column absent from the payload comes back NULL -- and a
+    payload is a snapshot of the columns that existed WHEN THE EVENT WAS
+    WRITTEN. Any column added to a table afterwards is therefore erased on every
+    replay, for every row whose event predates it.
+
+    It was found on `signal_log.best_bet`, added 2026-09-07: the scheduled run
+    replays the journal at step 5, and 163 signals came back unclassified on a
+    database that had just classified them. The rest of the pipeline healed it
+    because `selection.backfill` runs afterwards -- so the damage was invisible
+    and the property it destroyed, that a stored classification is never
+    recomputed under a later rule, was destroyed silently. Nothing announces
+    this: the row count is identical either way.
     """
     counts = {}
     for ev in events:
         spec = APPLY.get(ev.get("event_type"))
         if spec is None:
             continue
-        table, _key = spec
+        table, key = spec
         payload = ev.get("payload") or {}
         cols = [c["name"] for c in conn.execute("PRAGMA table_info(%s)" % table)]
         row = {c: payload.get(c) for c in cols if c in payload}
         if not row:
             continue
-        conn.execute("INSERT OR REPLACE INTO %s (%s) VALUES (%s)"
-                     % (table, ",".join(row), ",".join(":" + c for c in row)), row)
+        assign = ",".join("%s=excluded.%s" % (c, c) for c in row if c != key)
+        sql = ("INSERT INTO %s (%s) VALUES (%s) ON CONFLICT(%s) DO %s"
+               % (table, ",".join(row), ",".join(":" + c for c in row), key,
+                  ("UPDATE SET " + assign) if assign else "NOTHING"))
+        conn.execute(sql, row)
         counts[table] = counts.get(table, 0) + 1
     conn.commit()
     if verbose:
@@ -228,6 +246,60 @@ def self_test():
     tampered[0]["payload"]["home_spread"] = -99.0
     ok("[control] an edited payload fails verification",
        bool(state_events.verify(tampered)))
+
+    # ── A REPLAY MUST NOT ERASE A COLUMN THE EVENT PREDATES ──────────────────
+    #
+    # This was `INSERT OR REPLACE`, which deletes the conflicting row and
+    # inserts a fresh one, so every column absent from the payload came back
+    # NULL. A payload holds the columns that existed when it was written, so
+    # each replay silently wiped every column added since -- for the rows whose
+    # events were oldest, which is the rows that matter most.
+    #
+    # Found on `signal_log.best_bet`. The scheduled run replays at step 5 and 163
+    # classified signals came back unclassified; the backfill afterwards healed
+    # it, so nothing was ever visibly wrong and the property that a stored
+    # classification is never recomputed was gone. Row counts are identical
+    # either way, which is why only an assertion on a VALUE can see it.
+    replay_conn.execute(
+        "INSERT INTO signal_log (signal_id, evaluation_id, forecast_id, game_id,"
+        " strategy_version, market, side, line, created_at, official_horizon,"
+        " is_official) VALUES ('sg_a','ev_a','fc_a','g1','S0','spread','H',-3.5,?,"
+        " 'T2',1)", (now,))
+    replay_conn.execute("UPDATE signal_log SET best_bet=1, decline_reason=NULL,"
+                        " selection_version='B-test' WHERE signal_id='sg_a'")
+    replay_conn.commit()
+    # AN EVENT WRITTEN BEFORE THE COLUMN EXISTED, which is what the 163 signals in
+    # the live journal are. Built by stripping the key rather than by reading the
+    # journal back: today's export carries `best_bet: null` explicitly, and an
+    # explicit null SHOULD overwrite -- the journal is saying the value is null.
+    # The bug is the column being ABSENT, and only that.
+    _new = [e for e in state_events.read_all(state_dir)
+            if e.get("event_type") == "signal"]
+    old_events = []
+    for e in _new:
+        pay = {k: v for k, v in (e.get("payload") or {}).items()
+               if k not in ("best_bet", "decline_reason", "selection_version")}
+        old_events.append(dict(e, payload=pay))
+    ok("the test event predates the column",
+       old_events and all("best_bet" not in e["payload"] for e in old_events))
+    ok("...while today's export does carry it, null and all",
+       all("best_bet" in (e.get("payload") or {}) for e in _new))
+    apply_events(replay_conn, old_events)
+    _kept = replay_conn.execute(
+        "SELECT best_bet, selection_version FROM signal_log"
+        " WHERE signal_id='sg_a'").fetchone()
+    ok("replaying an older event does NOT erase a newer column",
+       _kept and _kept["best_bet"] == 1 and _kept["selection_version"] == "B-test",
+       dict(_kept) if _kept else "row gone")
+    # ...while a column the payload DOES carry is still superseded by it.
+    _bumped = dict(old_events[0])
+    _bumped["payload"] = dict(_bumped["payload"], line=-7.5)
+    _bumped["payload"].pop("best_bet", None)
+    apply_events(replay_conn, [_bumped])
+    _after = replay_conn.execute(
+        "SELECT line, best_bet FROM signal_log WHERE signal_id='sg_a'").fetchone()
+    ok("[control] a column the event DOES carry is still overwritten",
+       _after["line"] == -7.5 and _after["best_bet"] == 1, dict(_after))
 
     print("\n  %d passed, %d failed" % (p, f))
     return 1 if f else 0
