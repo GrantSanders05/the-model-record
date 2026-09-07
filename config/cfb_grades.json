@@ -8,6 +8,10 @@
   "elo_per_point": 20.0,
   "elo_revert": 0.25,
   "elo_start": 1500.0,
+  "form_cap": 30.0,
+  "form_half_life": 8.0,
+  "form_shrink_k": 4.0,
+  "form_weight": 0.6,
   "grade_formula": "computed",
   "grade_scale": 2.0,
   "grade_weights": {
