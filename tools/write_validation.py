@@ -82,10 +82,13 @@ def main():
     print("  %.2f%% ATS on %d games (95%% CI %.1f-%.1f), ROI %+.2f%%"
           % (v["ats_pct"], v["n"], v["ci_lo"], v["ci_hi"], v["roi"]))
     if "offered_ats_pct" in v:
-        print("  %.2f%% ATS on the %d it would have OFFERED, ROI %+.2f%%   "
-              "(|line| <= %.0f; the rest are marked no_bet and never staked)"
-              % (v["offered_ats_pct"], v["offered_n"], v["offered_roi"],
-                 v["blowout_line"]))
+        print("  %.2f%% ATS on the %d it would have OFFERED as BEST BETS, "
+              "ROI %+.2f%%" % (v["offered_ats_pct"], v["offered_n"],
+                               v["offered_roi"]))
+        print("    (both teams graded, |line| <= %.0f, |edge| >= %.0f, week >= %d, "
+              "spreads only — rule %s)"
+              % (v["blowout_line"], v.get("min_edge", 0), v.get("first_week", 1),
+                 v.get("selection_version", "?")))
     print("  fingerprint %s — regenerate this whenever the config changes."
           % v["config_fingerprint"])
 

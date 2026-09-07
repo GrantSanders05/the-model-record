@@ -24,6 +24,7 @@ import os
 
 import backtest
 import best_bets
+import selection as selection_mod
 import bet_log
 import db
 import engine
@@ -792,6 +793,22 @@ def main():
         # `mybets` now carries only the rows still coming from the Google Sheet; the
         # bets he types on the site live in his browser and never reach this file.
         "tracking": tracking.summary(conn, args.sport, season=None, week_labels=labels),
+        # THE SAME RECORD, TWICE, CUT THE ONLY WAY THAT CHANGES THE ANSWER. The
+        # page defaults to `best` because that is what the board offers; `all` is
+        # one click away and is never hidden. Two keys rather than a filtered one
+        # so a reader can hold both numbers at once, which is the whole point --
+        # the gap between them IS the selection's claim.
+        "tracking_best": tracking.summary(conn, args.sport, season=None,
+                                          week_labels=labels, selection="best"),
+        "selection": {
+            "version": selection_mod.SELECTION_VERSION,
+            "min_edge": best_bets.MIN_EDGE,
+            "blowout_line": best_bets.BLOWOUT_LINE,
+            "first_week": best_bets.FIRST_BETTABLE_WEEK,
+            "markets": list(selection_mod.BEST_BET_MARKETS),
+            "labels": selection_mod.LABEL,
+            "counts": selection_mod.summary(conn, args.sport),
+        },
         "mybets": mybets,
         "teams": team_snapshot(conn, args.sport, grade_season, model=rater_model),
         "efficiency": efficiency_trend(conn, args.sport, eff_season),
