@@ -160,9 +160,23 @@ def render(conn, sport="cfb", backtest_summary=None):
         # sentence above it asked. `locked` is the published side at the number it
         # was published at; `close` is the same side scored against the close, and
         # it is a diagnostic rather than a wager anybody made.
-        locked = _v2_locked_record(conn, "cfb")
+        locked = _v2_locked_record(conn, "cfb", market="spread")
+        totals = _v2_locked_record(conn, "cfb", market="total")
         if locked and locked.get("locked_pct") is not None:
             llo, lhi = locked["locked_ci95"]
+            # TOTALS GET THEIR OWN TILE OR NONE AT ALL. The first version of this
+            # headline pooled spreads and totals and printed the sum under a tile
+            # reading "ATS record": 83-103 was neither the 38-47 the model went
+            # against the spread nor the 31-39 it went on totals. Two bets on two
+            # different quantities do not add up to a record of either.
+            tot_tile = ""
+            if totals and totals.get("locked_pct") is not None:
+                tot_tile = ("""
+      <div class="stat"><span class="k">Totals</span>
+        <span class="v">%d–%d–%d</span>
+        <span class="sub">O/U, %.2f%% — counted apart, not added in</span></div>"""
+                            % (totals["locked_w"], totals["locked_l"],
+                               totals["locked_p"], totals["locked_pct"]))
             roi_cell = ("%+.2f%%" % locked["roi"] if locked.get("roi") is not None
                         else "unavailable")
             roi_sub = ("" if locked.get("roi") is not None
@@ -171,11 +185,11 @@ def render(conn, sport="cfb", backtest_summary=None):
     <div class="hero">
       <div class="stat"><span class="k">ATS record</span>
         <span class="v">%d–%d–%d</span>
-        <span class="sub">at the line each pick locked</span></div>
+        <span class="sub">spreads only, at the line each pick locked</span></div>
       <div class="stat"><span class="k">ATS %%</span>
         <span class="v">%.2f%%</span><span class="sub">95%% CI %.1f–%.1f</span></div>
       <div class="stat"><span class="k">ROI</span>
-        <span class="v">%s</span><span class="sub">%s</span></div>
+        <span class="v">%s</span><span class="sub">%s</span></div>%s
     </div>
     <p class="verdict">%s</p>
     <p class="note"><strong>How this is graded.</strong> A pick is scored at the
@@ -189,7 +203,7 @@ def render(conn, sport="cfb", backtest_summary=None):
       and not spread juice, so for spreads it is honestly unavailable rather than
       assumed at −110.</p>""" % (
                 locked["locked_w"], locked["locked_l"], locked["locked_p"],
-                locked["locked_pct"], llo, lhi, roi_cell, roi_sub,
+                locked["locked_pct"], llo, lhi, roi_cell, roi_sub, tot_tile,
                 # Single %, not %% — these are ARGUMENTS to the format above,
                 # not part of it, so an escaped percent stays escaped and renders
                 # as "52.38%%" on the page.
@@ -600,14 +614,21 @@ def main():
     print("track record page -> %s" % path)
 
 
-def _v2_locked_record(conn, sport="cfb"):
+def _v2_locked_record(conn, sport="cfb", market="spread"):
     """
-    The locked-line record across every strategy that has produced signals.
+    The locked-line record for ONE market, across every strategy.
 
-    Combined DELIBERATELY here and nowhere else: this is the public "what has
-    this project's published picks done" number, and splitting it by strategy
-    version on the headline would ask a reader to add up buckets. The per-strategy
-    split is available in the research bundle, where it belongs.
+    Pooled across strategy VERSIONS deliberately — this is the public "what have
+    the published picks done" number and splitting it by version would ask a
+    reader to add up buckets; the per-version split is in the research bundle.
+
+    NOT pooled across MARKETS, and that distinction cost a deploy. The first
+    version of this function summed spreads and totals and the headline tile said
+    "ATS record" over the total. A spread and a total are bets on different
+    quantities: 83-103 was neither the 38-47 the model went against the spread nor
+    the 31-39 it went on totals. `market` is a parameter with no default that
+    means "everything", because a caller putting a market's name on the screen
+    has to say which one.
     """
     try:
         import metrics_v2
@@ -618,10 +639,12 @@ def _v2_locked_record(conn, sport="cfb"):
         "SELECT DISTINCT strategy_version FROM signal_log WHERE is_official=1")]
     if not versions:
         return None
-    total = {"locked_w": 0, "locked_l": 0, "locked_p": 0, "n": 0,
+    total = {"market": market,
+             "locked_w": 0, "locked_l": 0, "locked_p": 0, "n": 0,
              "priced_n": 0, "unpriced_n": 0, "profit": 0.0, "all_priced": True}
     for v in versions:
-        r = metrics_v2.signal_performance(conn, strategy_version=v, sport=sport)
+        r = metrics_v2.signal_performance(conn, strategy_version=v, sport=sport,
+                                          market=market)
         for k in ("locked_w", "locked_l", "locked_p", "n", "priced_n", "unpriced_n"):
             total[k] += r.get(k) or 0
         if r.get("roi") is None and r.get("n"):
@@ -633,8 +656,8 @@ def _v2_locked_record(conn, sport="cfb"):
     return total
 
 
-def _v2_close_diagnostic(conn, sport="cfb"):
-    """The closing-line view, pooled across strategies. See _v2_locked_record."""
+def _v2_close_diagnostic(conn, sport="cfb", market="spread"):
+    """One market's closing-line view, pooled across strategies. See _v2_locked_record."""
     try:
         import metrics_v2
     except Exception:                              # noqa: BLE001
@@ -643,7 +666,8 @@ def _v2_close_diagnostic(conn, sport="cfb"):
         "SELECT DISTINCT strategy_version FROM signal_log WHERE is_official=1")]
     tot = {"w": 0, "l": 0, "p": 0, "n": 0, "clv_n": 0, "_clv_sum": 0.0, "_beat": 0}
     for v in versions:
-        d = metrics_v2.closing_diagnostic(conn, strategy_version=v, sport=sport)
+        d = metrics_v2.closing_diagnostic(conn, strategy_version=v, sport=sport,
+                                          market=market)
         for a, b in (("w", "w"), ("l", "l"), ("p", "p"), ("n", "n")):
             tot[a] += d.get(b) or 0
         if d.get("clv_n"):

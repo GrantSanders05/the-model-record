@@ -1227,6 +1227,54 @@ ok("...and it is skipped once recorded, so it costs one lookup a run",
 ok("...and a failure to migrate is reported, never swallowed",
    "ERROR: the V2 migration did not apply" in _ru)
 
+# ── a spread and a total are two bets, not one record ────────────────────────
+#
+# The first deploy of the locked-line headline pooled both markets and printed
+# the sum under a tile reading "ATS record". 83-103 was neither the 38-47 the
+# model went against the spread nor the 31-39 it went on totals: both numbers
+# were real and the one on screen was neither of them.
+_mkc = _db.connect(os.path.join(tempfile.mkdtemp(), "markets.db"))
+for _i, (_mkt, _res) in enumerate(
+        [("spread", "W"), ("spread", "W"), ("spread", "L"), ("total", "L"),
+         ("total", "L"), ("total", "L")]):
+    _gid = "m%d" % _i
+    _mkc.execute(
+        "INSERT INTO games (game_id, sport, season, week, home_team, away_team,"
+        " kickoff, home_score, away_score, neutral_site)"
+        " VALUES (?,'cfb',2026,1,'A','B','2026-09-01T16:00:00+00:00',30,10,0)",
+        (_gid,))
+    _mkc.execute(
+        "INSERT INTO signal_log (signal_id, evaluation_id, forecast_id, game_id,"
+        " strategy_version, market, side, line, created_at, official_horizon,"
+        " is_official, locked_result, graded_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?)",
+        ("sg%d" % _i, "ev%d" % _i, "fc%d" % _i, _gid, "S-test", _mkt, "A", -3.0,
+         "2026-09-01T00:00:00+00:00", "T2", _res, "2026-09-02T00:00:00+00:00"))
+_mkc.commit()
+
+_all = sig.official_record(_mkc, strategy_version="S-test")
+_sp = sig.official_record(_mkc, strategy_version="S-test", market="spread")
+_to = sig.official_record(_mkc, strategy_version="S-test", market="total")
+ok("a market filter counts only that market",
+   (_sp["locked_w"], _sp["locked_l"]) == (2, 1)
+   and (_to["locked_w"], _to["locked_l"]) == (0, 3),
+   "spread %s-%s, total %s-%s" % (_sp["locked_w"], _sp["locked_l"],
+                                  _to["locked_w"], _to["locked_l"]))
+ok("...and every row says which market it is about",
+   _sp["market"] == "spread" and _all["market"] == "all")
+# The point: the pooled number is a record of NEITHER bet.
+ok("CONTROL: pooled, the percentage equals neither market's",
+   _all["locked_pct"] != _sp["locked_pct"]
+   and _all["locked_pct"] != _to["locked_pct"],
+   "pooled %s vs spread %s vs total %s" % (_all["locked_pct"],
+                                           _sp["locked_pct"], _to["locked_pct"]))
+ok("the public headline asks for one market by name",
+   '_v2_locked_record(conn, "cfb", market="spread")' in
+   open(os.path.join(ROOT, "src", "publish.py")).read())
+ok("...and the close diagnostic beside it narrows the same way",
+   "def _v2_close_diagnostic(conn, sport=\"cfb\", market=\"spread\")" in
+   open(os.path.join(ROOT, "src", "publish.py")).read())
+
 # ── one number, one format ───────────────────────────────────────────────────
 #
 # The budget ledger stored a bare integer per month. `api_budget.spend` stores a

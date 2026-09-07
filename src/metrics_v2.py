@@ -265,16 +265,20 @@ def probability_quality(conn, *, model_version, horizon=None, sport="cfb",
     return out
 
 
-def signal_performance(conn, *, strategy_version, sport="cfb"):
+def signal_performance(conn, *, strategy_version, sport="cfb", market=None):
     """
     B. What the strategy actually did, at the numbers it locked.
 
     ROI is over signals whose price is KNOWN. Where no price was recorded there
     is no return to state, and `roi` is None rather than a figure computed from
     an assumed -110.
+
+    `market` narrows to one bet type. A spread and a total are bets on different
+    quantities and pooling them is not a record of either.
     """
     import signals as sig
-    rec = sig.official_record(conn, strategy_version=strategy_version, sport=sport)
+    rec = sig.official_record(conn, strategy_version=strategy_version, sport=sport,
+                              market=market)
     n = (rec.get("locked_w") or 0) + (rec.get("locked_l") or 0)
     rec["locked_ci95"] = _wilson(rec.get("locked_w") or 0, n)
     rec["break_even"] = 52.38
@@ -283,18 +287,22 @@ def signal_performance(conn, *, strategy_version, sport="cfb"):
     return rec
 
 
-def closing_diagnostic(conn, *, strategy_version, sport="cfb"):
+def closing_diagnostic(conn, *, strategy_version, sport="cfb", market=None):
     """
     C. The same side, at the close. A DIAGNOSTIC and not a wager record.
 
     Beating the close is the leading indicator most worth watching, and it is not
     money. Labelled here so it cannot be quoted as the strategy's return.
+
+    `market` narrows it, for the same reason it narrows the record above: a
+    diagnostic printed beside a spread record has to be about spreads.
     """
     import signals as sig
-    rec = sig.official_record(conn, strategy_version=strategy_version, sport=sport)
+    rec = sig.official_record(conn, strategy_version=strategy_version, sport=sport,
+                              market=market)
     n = (rec.get("close_w") or 0) + (rec.get("close_l") or 0)
     return {
-        "strategy_version": strategy_version,
+        "strategy_version": strategy_version, "market": market or "all",
         "n": n, "w": rec.get("close_w"), "l": rec.get("close_l"),
         "p": rec.get("close_p"), "pct": rec.get("close_pct"),
         "ci95": _wilson(rec.get("close_w") or 0, n),

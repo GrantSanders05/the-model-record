@@ -107,6 +107,48 @@ ok("does not claim a win rate it has not earned",
 ok("empty states are explicit when there is nothing to show",
    $$(".empty").length === 0 || $$(".empty").every(e => e.textContent.trim().length > 12));
 
+/* ── a spread and a total are two bets, not one record ─────────────────────
+   The first deploy of the locked-line headline pooled them and printed the sum
+   under a tile reading "ATS record": 83–103 was neither the 38–47 the model went
+   against the spread nor the 31–39 it went on totals. Both numbers were real and
+   the one on screen was neither. */
+console.log("\n── the headline is one market, and says which ──");
+{
+  const tiles = new Map($$(".hero .stat").map(s => [
+    (s.querySelector(".k")?.textContent || "").trim(),
+    { v: (s.querySelector(".v")?.textContent || "").trim(),
+      sub: (s.querySelector(".sub")?.textContent || "").trim() }]));
+  const ats = tiles.get("ATS record");
+  if (ats && /\d+–\d+/.test(ats.v)) {
+    ok("the ATS tile says it is spreads only", /spread/i.test(ats.sub), ats.sub);
+    const tot = tiles.get("Totals");
+    if (tot) {
+      ok("totals are a tile of their own", /\d+–\d+/.test(tot.v), tot.v);
+      ok("...and say they are not added in", /apart|not added/i.test(tot.sub), tot.sub);
+      // The control that would have caught the original defect: the two records
+      // must be DIFFERENT numbers. A pooled headline equals neither.
+      const n = t => (t.match(/(\d+)–(\d+)–(\d+)/) || []).slice(1).map(Number);
+      const [aw, al, ap] = n(ats.v), [tw, tl, tp] = n(tot.v);
+      ok("CONTROL: the ATS record is not the two markets added together",
+         (aw + al + ap) > 0 && (aw !== aw + tw || al !== al + tl),
+         `ats ${aw}-${al}-${ap}, totals ${tw}-${tl}-${tp}`);
+      // The CLV denominator counts PUSHES too — a push has closing-line value
+      // like any other pick. Comparing it against W+L alone was wrong by exactly
+      // the push count, which is a test bug and not a page one.
+      ok("CONTROL: the close diagnostic beside it counts the same market",
+         (() => { const c = tiles.get("Beat the close");
+                  if (!c) return true;
+                  const m = c.sub.match(/of (\d+) graded/);
+                  return !m || Number(m[1]) === aw + al + ap; })(),
+         `${tiles.get("Beat the close")?.sub} vs ats ${aw}+${al}+${ap}`);
+    }
+  }
+  // A percent that survived one round of formatting must not show two signs.
+  ok("no doubled percent leaked from a nested format string",
+     !/%%/.test(window.document.body.textContent),
+     (window.document.body.textContent.match(/.{0,25}%%.{0,15}/) || [""])[0]);
+}
+
 console.log("\n── the backtest states its own uncertainty ──");
 {
   // The prose tells the reader to read the interval, so the interval has to be

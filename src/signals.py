@@ -327,20 +327,31 @@ def grade_signals(conn, *, sport="cfb", now=None, commit=True):
     return n
 
 
-def official_record(conn, *, strategy_version=None, sport="cfb"):
+def official_record(conn, *, strategy_version=None, sport="cfb", market=None):
     """
     The strategy's own record. Locked line, published side, priced honestly.
 
     `strategy_version` is REQUIRED in spirit: mixing two strategies' signals into
     one percentage is the ambiguity this whole module exists to end. It defaults
     to S0 rather than to "all".
+
+    `market` exists for the same reason, one level down. A spread pick and a
+    total pick are two different bets on two different quantities, and pooling
+    them produces a number that is not a record of either — which is exactly what
+    the public headline did on its first deploy, under a tile labelled "ATS".
+    None still pools, because the research bundle wants the strategy's whole
+    output; a caller that puts a market's name on the screen must pass it.
     """
     sv = strategy_version or STRATEGY_V0["strategy_version"]
-    rows = [dict(r) for r in conn.execute(
-        "SELECT s.* FROM signal_log s JOIN games g ON g.game_id=s.game_id"
-        " WHERE s.strategy_version=? AND s.is_official=1 AND s.voided_at IS NULL"
-        "   AND s.graded_at IS NOT NULL AND g.sport=?", (sv, sport))]
-    out = {"strategy_version": sv, "n": len(rows)}
+    q = ("SELECT s.* FROM signal_log s JOIN games g ON g.game_id=s.game_id"
+         " WHERE s.strategy_version=? AND s.is_official=1 AND s.voided_at IS NULL"
+         "   AND s.graded_at IS NOT NULL AND g.sport=?")
+    args = [sv, sport]
+    if market:
+        q += " AND s.market=?"
+        args.append(market)
+    rows = [dict(r) for r in conn.execute(q, args)]
+    out = {"strategy_version": sv, "market": market or "all", "n": len(rows)}
     for label, col in (("locked", "locked_result"), ("close", "close_result")):
         w = sum(1 for r in rows if r[col] == "W")
         l = sum(1 for r in rows if r[col] == "L")
