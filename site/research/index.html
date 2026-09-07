@@ -2557,7 +2557,8 @@ function drawLab(){
                retired:"superseded; kept so its forecasts stay readable"};
   const ms=(V.models||[]).slice().sort((a,b)=>{
     const ord={champion:0,baseline:1,challenger:2,retired:3};
-    return (ord[a.role]??9)-(ord[b.role]??9) ||
+    const ra=a.retired_at?"retired":a.role, rb=b.retired_at?"retired":b.role;
+    return (ord[ra]??9)-(ord[rb]??9) ||
            String(a.model_version).localeCompare(String(b.model_version));
   });
   const good=v=>v==null?"muted":(+v<0?"pos":(+v>0?"neg":"muted"));   // closer = better
@@ -2580,7 +2581,12 @@ function drawLab(){
         <th class="num">vs market</th><th class="num">bias</th>
         <th class="num">vs Champion</th><th>Promotion</th></tr></thead><tbody>${
        ms.map(m=>{
-         const q=m.quality||{}, vc=m.vs_champion, r=ROLE[m.role]||[m.role,"muted"];
+         const q=m.quality||{}, vc=m.vs_champion;
+         /* A retirement DATE outranks the role string. They can disagree — a
+            superseded row that kept role="champion" rendered as a second live
+            Champion — and the date is the fact. */
+         const r=m.retired_at?ROLE.retired:(ROLE[m.role]||[m.role,"muted"]);
+         const promo=m.retired_at?PROMO.retired:(PROMO[m.role]||"—");
          return `<tr><td class="team">${esc(m.model_version)}</td>
            <td class="muted">${esc(m.experiment_id||"—")}</td>
            <td class="${r[1]}">${esc(r[0])}</td>
@@ -2592,7 +2598,7 @@ function drawLab(){
            <td class="num ${vc&&vc.mean_improvement!=null?(vc.mean_improvement>0?"pos":"neg"):"muted"}" title="${
               esc(bootTitle(vc))}">${
               vc&&vc.mean_improvement!=null?`${sgn(vc.mean_improvement,2)} (${vc.paired_n})`:"—"}</td>
-           <td class="muted">${esc(PROMO[m.role]||"—")}</td></tr>`;
+           <td class="muted">${esc(promo)}</td></tr>`;
        }).join("")}</tbody>`
     : `<tbody><tr><td><div class="empty">No model is registered.</div></td></tr></tbody>`;
 

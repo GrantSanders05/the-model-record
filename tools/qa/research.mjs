@@ -1254,6 +1254,46 @@ console.log("\n── model lab: challengers, not ranked by win rate ──");
      /shadow forecast/.test($("#labmodelnote").textContent));
 }
 
+/* CONTROL. A superseded Champion whose ROLE still says champion. It happened:
+   the version string carried the calendar, midnight minted a second Champion,
+   and the retirement set a timestamp while leaving the role alone. Anything that
+   groups by role then shows two live Champions. The date is the fact. */
+console.log("\n── model lab: CONTROL, a retirement date outranks a stale role ──");
+{
+  const two = JSON.parse(bundle);
+  const q = { n: 0 };
+  two.v2 = { ...two.v2, champion: "C0-day1",
+    models: [
+      { model_version: "C0-day1", model_id: "champion-grade", role: "champion",
+        experiment_id: null, retired_at: null, quality: q },
+      { model_version: "C0-day2", model_id: "champion-grade", role: "champion",
+        experiment_id: null, retired_at: "2026-09-07T01:00:00+00:00", quality: q },
+    ] };
+  const d7 = new JSDOM(html, {
+    runScripts: "dangerously", virtualConsole: new VirtualConsole(),
+    url: "https://example.test/research/",
+    beforeParse(win) {
+      win.fetch = async () => ({ ok: true, json: async () => two });
+      win.matchMedia = () => ({ matches:false, addEventListener(){}, removeEventListener(){} });
+    },
+  });
+  await wait(400);
+  const w7 = d7.window;
+  const rows7 = [...w7.document.querySelectorAll("#labmodels tbody tr")]
+    .filter(t => !t.querySelector(".empty"));
+  const roleOf = t => t.querySelectorAll("td")[2].textContent.trim();
+  ok("CONTROL: only one row reads as Champion",
+     rows7.filter(t => roleOf(t) === "Champion").length === 1,
+     rows7.map(roleOf).join(","));
+  ok("CONTROL: the retired one reads as Retired despite its role string",
+     roleOf(rows7.find(t => t.textContent.includes("C0-day2"))) === "Retired");
+  ok("CONTROL: and the live one still leads the table",
+     rows7[0].textContent.includes("C0-day1"));
+  ok("CONTROL: the retired row is not promised as official",
+     !/produces the published signal/.test(
+       rows7.find(t => t.textContent.includes("C0-day2")).textContent));
+}
+
 console.log("\n── model lab: the decision policy is on the page ──");
 {
   const V = JSON.parse(bundle).v2;

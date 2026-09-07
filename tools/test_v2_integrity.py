@@ -1252,6 +1252,17 @@ ok("the duplicates are retired, and the earliest one is kept",
 # by an identical model, and erasing the row would orphan them.
 ok("...retired rather than deleted, so nothing is orphaned",
    _cvc.execute("SELECT COUNT(*) c FROM model_registry").fetchone()["c"] == 3)
+# THE ROLE TOO, not only the timestamp. A row left at role='champion' with a
+# retirement date reads as a second live Champion to anything grouping by role,
+# and that is exactly how the page rendered it.
+ok("...and takes the role the registry already has for a superseded model",
+   [r["role"] for r in _cvc.execute(
+       "SELECT role FROM model_registry WHERE model_version LIKE 'C0-2026.09.0[78]%'"
+       " OR model_version IN (?,?)",
+       ("C0-2026.09.07.%s" % _h8, "C0-2026.09.08.%s" % _h8))] == ["retired", "retired"])
+ok("CONTROL: exactly one row is a live champion",
+   _cvc.execute("SELECT COUNT(*) c FROM model_registry WHERE role='champion'"
+                " AND retired_at IS NULL").fetchone()["c"] == 1)
 ok("...and the row says what superseded it",
    "superseded by" in (_cvc.execute(
        "SELECT notes FROM model_registry WHERE model_version=?",

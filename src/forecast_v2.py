@@ -156,8 +156,12 @@ def dedupe_champions(conn, *, commit=True):
         if keep is None:
             seen[r["config_hash"]] = r["model_version"]
             continue
+        # ROLE TOO, not just the timestamp. `retired` is a role this registry
+        # already uses for superseded champions, and a row left at role='champion'
+        # with a retirement date reads as a second live Champion to anything that
+        # groups by role — which is exactly how the page rendered it.
         conn.execute(
-            "UPDATE model_registry SET retired_at=?,"
+            "UPDATE model_registry SET retired_at=?, role='retired',"
             " notes=COALESCE(notes,'') || ? WHERE model_version=?",
             (now, " | superseded by %s: same config, a version string that "
                   "carried the calendar rather than the config" % keep,

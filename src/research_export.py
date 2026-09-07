@@ -591,7 +591,7 @@ def build_v2_block(conn, sport, season):
     models = []
     for r in conn.execute(
             "SELECT model_version, model_id, role, experiment_id, config_hash,"
-            "       git_sha, feature_schema_version, created_at, notes"
+            "       git_sha, feature_schema_version, created_at, retired_at, notes"
             "  FROM model_registry ORDER BY role, model_version"):
         m = dict(r)
         m["quality"] = metrics_v2.forecast_quality(
