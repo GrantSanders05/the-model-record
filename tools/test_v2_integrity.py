@@ -2017,6 +2017,56 @@ for _mod in ("run_update", "research_export", "best_bets", "predict"):
     ok("%s calibrates the config it loads" % _mod,
        "calibrate.calibrated_config(" in _src)
 
+
+# ── a frozen number's identity must be reproducible off this laptop ──────────
+#
+# `data/validation/*.json` is a committed summary of a walk-forward replay, and
+# it carries a fingerprint so that editing the config makes it announce itself as
+# stale. The fingerprint was briefly taken over the CALIBRATED config -- and
+# `scale` is fitted from the replayed season's own grades, which CI does not
+# have, because the runner restores a database holding only the CURRENT season's.
+#
+# So the laptop that wrote the file computed one fingerprint and every production
+# run computed another. The check failed on every deploy while nothing was
+# actually wrong, which is the fastest way to teach everyone to ignore a gate.
+# The same shape as every "a step that only ever ran on one machine" defect in
+# this repository.
+print("\n── the validation fingerprint is machine-independent ──")
+import glob as _glob                                             # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import write_validation as _wvv                                  # noqa: E402
+
+_cfg_file = os.path.join(ROOT, "config", "cfb_grades.json")
+_raw_cfg = json.load(open(_cfg_file))
+_vfiles = sorted(_glob.glob(os.path.join(ROOT, "data", "validation", "cfb_*.json")))
+ok("a validation summary is committed", bool(_vfiles))
+if _vfiles:
+    _v = json.load(open(_vfiles[-1]))
+    ok("its fingerprint is of the config FILE, not of a fitted config",
+       _v.get("config_fingerprint") == _wvv.fingerprint(_raw_cfg),
+       "committed %s vs file %s" % (_v.get("config_fingerprint"),
+                                    _wvv.fingerprint(_raw_cfg)))
+    # THE POINT: computing it needs nothing but the file, so a machine with no
+    # historical grades gets the same answer.
+    _bare = _db.connect(os.path.join(tempfile.mkdtemp(), "bare.db"))
+    _here = _wvv.fingerprint(json.load(open(_cfg_file)))
+    ok("...so a database with NO historical grades computes the same one",
+       _here == _v.get("config_fingerprint"),
+       "bare %s vs committed %s" % (_here, _v.get("config_fingerprint")))
+    ok("the units it was replayed at are recorded separately",
+       _v.get("fitted_scale") is not None and _v.get("config_scale") is not None,
+       sorted(_v))
+    ok("...and they may legitimately differ from the file",
+       True, "file %.3f, replayed %.2f" % (_v["config_scale"], _v["fitted_scale"]))
+    # CONTROL: an edited config must still be caught.
+    ok("[control] editing the config changes the fingerprint",
+       _wvv.fingerprint(dict(_raw_cfg, scale=_raw_cfg["scale"] + 1))
+       != _v.get("config_fingerprint"))
+    # And the calibration itself must DECLINE on a bare database rather than
+    # inventing units from nothing.
+    ok("[control] calibration refuses on a database with no games",
+       _cal.fit_units(_bare, "cfb", 2025, _raw_cfg) is None)
+
 # ── proving this section can fail ────────────────────────────────────────────
 print("\n── proving these can fail ──")
 _before = F

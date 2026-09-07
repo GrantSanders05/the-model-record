@@ -843,18 +843,14 @@ def _backtest_summary(sport="cfb", conn=None):
             # units are fitted per grade vintage at run time, so the file's own
             # values are not what any replay ran under and comparing to them
             # would mark every summary stale on the day it was written.
-            _raw = json.load(open(cfg_path))
-            if conn is None:
-                # Unknown, not False. Without a database the units cannot be
-                # re-fitted, so the honest answer is that staleness could not be
-                # checked -- and `None` is what the page already renders as
-                # silence rather than as a clean bill of health.
-                b["stale"] = None
-            else:
-                import calibrate as _calib
-                _cfg_eff = _calib.calibrated_config(
-                    conn, sport, _raw, season=b.get("season"), quiet=True)
-                b["stale"] = (_wv.fingerprint(_cfg_eff) != b["config_fingerprint"])
+            # Against the config FILE, which every machine has. The units are
+            # fitted from the season's own grades and CI holds only the current
+            # season's, so a fingerprint over the calibrated config cannot be
+            # reproduced there -- it failed on every production run. What this
+            # question is actually asking is "has a human edited the config since
+            # this number was frozen", and the file answers that.
+            b["stale"] = (_wv.fingerprint(json.load(open(cfg_path)))
+                          != b["config_fingerprint"])
         except Exception:                          # noqa: BLE001 - never block a page
             b["stale"] = None
     return b

@@ -229,17 +229,20 @@ if files:
        bool(v.get("config_fingerprint")))
     # A frozen number with no way to notice it has gone stale is worse than none.
     # Change `scale` or the rater and this fails until it is regenerated.
-    # AGAINST THE CALIBRATED CONFIG, not the file. `scale` is fitted per grade
-    # vintage at run time, so the summary is computed under a config the file
-    # does not contain -- comparing to the file makes the check fail forever and
-    # teaches everyone to ignore it, which is worse than not having it.
-    import calibrate as _calib                                   # noqa: E402
-    _eff = _calib.calibrated_config(conn, "cfb", dict(CFG),
-                                    season=v.get("season"), quiet=True)
-    ok("...and that fingerprint still matches the calibrated config",
-       v.get("config_fingerprint") == wv.fingerprint(_eff),
+    # AGAINST THE CONFIG FILE. The first version of this compared the CALIBRATED
+    # config, which cannot be reproduced in CI: `scale` is fitted from the
+    # season's own grades and the runner restores only the current season's, so
+    # the check failed on every production run while nothing was wrong. The
+    # question is "has a human edited the config since this was frozen", and the
+    # file is what both machines hold.
+    ok("...and that fingerprint still matches config/cfb_grades.json",
+       v.get("config_fingerprint") == wv.fingerprint(CFG),
        "committed %s vs current %s — re-run tools/write_validation.py"
-       % (v.get("config_fingerprint"), wv.fingerprint(_eff)))
+       % (v.get("config_fingerprint"), wv.fingerprint(CFG)))
+    # And the units it was replayed under are recorded, because the fingerprint
+    # no longer carries them.
+    ok("...and it records the scale it was replayed at",
+       v.get("fitted_scale") is not None, sorted(v))
     ok("it reports an interval, not just a headline",
        v.get("ci_lo") is not None and v.get("ci_hi") is not None)
     ok("it leaks no grades", not any(

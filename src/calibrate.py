@@ -127,7 +127,14 @@ def fit_units(conn, sport, season, config, *, as_of_week=None):
     grades = backtest.load_grades(conn, sport)
     cfg = dict(config)
     cfg.pop("_grades", None)
-    model = engine.Model(cfg, grades)
+    try:
+        model = engine.Model(cfg, grades)
+    except ValueError:
+        # A grades rater with no grades. `engine.Model` refuses outright rather
+        # than silently becoming Elo, which is right -- and here it simply means
+        # there is nothing to calibrate. A CI database restored with only the
+        # current season's grades hits this for every earlier season.
+        return None
     rows, seen = [], None
     for g in backtest.load_games(conn, sport):
         if g["season"] != seen:

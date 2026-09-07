@@ -57,14 +57,13 @@ def main():
     args = ap.parse_args()
 
     path = args.config if os.path.isabs(args.config) else os.path.join(ROOT, args.config)
-    config = json.load(open(path))
+    raw = json.load(open(path))
     conn = db.connect()
     # THE UNITS THE SEASON WAS REPLAYED UNDER, not the ones in the file. `scale`
-    # is fitted per grade vintage at run time, so a validation summary computed
-    # from the file's value describes a model that never ran -- and the config
-    # fingerprint below would then certify the wrong thing as current.
+    # is fitted per grade vintage at run time, so a summary computed from the
+    # file's value would describe a model that never ran.
     import calibrate
-    config = calibrate.calibrated_config(conn, args.sport, config,
+    config = calibrate.calibrated_config(conn, args.sport, dict(raw),
                                          season=args.season)
     n = conn.execute("SELECT COUNT(*) c FROM grades WHERE sport=? AND season=?",
                      (args.sport, args.season)).fetchone()["c"]
@@ -76,7 +75,21 @@ def main():
     v = run_update.validation_backtest(conn, args.sport, args.season + 1, config)
     if not v:
         raise SystemExit("the backtest produced nothing for %d" % args.season)
-    v["config_fingerprint"] = fingerprint(config)
+    # FINGERPRINT THE FILE, NOT THE FIT.
+    #
+    # The fingerprint exists to catch a HUMAN EDIT to the config that this frozen
+    # number no longer describes. Fingerprinting the calibrated config instead
+    # made it unreproducible: `scale` is fitted from the season's own grades, and
+    # CI restores a database holding only the CURRENT season's, so the runner
+    # cannot re-derive 2025's units and computed a different fingerprint from the
+    # laptop that wrote the file. The check then failed on every run and would
+    # have taught everyone to ignore it.
+    #
+    # The file is the thing both machines have. The units are DERIVED, so they
+    # are recorded as data beside it rather than folded into the identity.
+    v["config_fingerprint"] = fingerprint(raw)
+    v["fitted_scale"] = config.get("scale")
+    v["config_scale"] = raw.get("scale")
     v["computed_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
     v["config"] = {k: config.get(k) for k in FINGERPRINT_KEYS}
 
@@ -96,8 +109,12 @@ def main():
               "spreads only — rule %s)"
               % (v["blowout_line"], v.get("min_edge", 0), v.get("first_week", 1),
                  v.get("selection_version", "?")))
-    print("  fingerprint %s — regenerate this whenever the config changes."
+    print("  fingerprint %s (of the config FILE) — regenerate whenever it is edited."
           % v["config_fingerprint"])
+    if v.get("fitted_scale") is not None and v.get("config_scale") is not None:
+        print("  replayed at scale %.2f, fitted for the %s grade sheet "
+              "(the file carries %.3f)"
+              % (v["fitted_scale"], v["season"], v["config_scale"]))
 
 
 if __name__ == "__main__":

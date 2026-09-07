@@ -4,7 +4,7 @@
   "calib_slope": 1.0550011281494398,
   "ci_hi": 55.54371897788564,
   "ci_lo": 49.10572585677578,
-  "computed_utc": "2026-09-07T06:51:13.354317+00:00",
+  "computed_utc": "2026-09-07T06:59:03.509530+00:00",
   "config": {
     "blend_weight": 0.5,
     "edge_realised": 0.165,
@@ -26,8 +26,10 @@
     "wq_top25": 3.0,
     "wq_top5": 5.0
   },
-  "config_fingerprint": "fc0a4ed6a530",
+  "config_fingerprint": "7c49e5051acc",
+  "config_scale": 1.311,
   "first_week": 2,
+  "fitted_scale": 1.19,
   "mae": 12.590438700348566,
   "min_edge": 3.0,
   "n": 921,
