@@ -489,6 +489,44 @@ console.log("\n── results / tracking ──");
   $$("#nav button").find(b => b.dataset.v === "results")
     .dispatchEvent(new window.Event("click", { bubbles: true }));
 
+  // ── THE TWO RECORDS ────────────────────────────────────────────────────────
+  //
+  // The page opens on `best`, which is what the board offers. Everything below
+  // this block tests the every-game record, so it switches once and stays there
+  // -- the assertions are about the numbers matching `B.tracking`, and matching
+  // them against a cut they are not from is how a suite proves nothing.
+  ok("the record switch exists", $("#recsel") !== null);
+  ok("...and both records are in the bundle",
+     !!B.tracking_best && !!B.selection, JSON.stringify(Object.keys(B.selection||{})));
+  ok("...and it opens on best bets, not on every game",
+     $("#recsel").value === "best", $("#recsel").value);
+  ok("the rule is stated on screen, with its version",
+     $("#selnote").textContent.includes(String(B.selection.min_edge)) &&
+     $("#selnote").textContent.includes(B.selection.version),
+     $("#selnote").textContent.slice(0, 90));
+
+  if (B.tracking_best.empty && (T.graded || 0) > 0) {
+    // THE CASE THAT MADE THE SPLIT NECESSARY: 85 graded picks, none qualifying.
+    // "No games have finished yet" would be false, and beside a full every-game
+    // record it reads as a broken page rather than as a decision.
+    const txt = $("#resultstate").textContent;
+    ok("an empty BEST-BETS record says the board offered nothing",
+       txt.includes("has not offered a bet yet"), txt.slice(0, 90));
+    ok("...and says how many picks were graded anyway",
+       txt.includes(String(T.graded)), txt.slice(0, 90));
+    ok("CONTROL: it does NOT claim no games have finished",
+       !txt.includes("No games have finished"), txt.slice(0, 90));
+    ok("...and prints no fabricated percentage",
+       !/\d+\.\d%/.test($("#rescards").textContent), $("#rescards").textContent.slice(0, 60));
+  }
+
+  const bestNote = $("#selnote").textContent;
+  $("#recsel").value = "all"; fire($("#recsel"), "change");
+  ok("switching to every game re-renders the explanation",
+     $("#selnote").textContent !== bestNote &&
+     $("#selnote").textContent.includes("Every published pick"),
+     $("#selnote").textContent.slice(0, 70));
+
   if (T.empty) {
     // An empty ledger is the live state until games are played, and it is the state
     // most likely to be shipped untested. It must read as "nothing has finished",
@@ -992,6 +1030,56 @@ console.log("\n── the board leads with the market it has an edge in ──")
      withEdge.every(b => Math.abs(b.realised_edge) <= Math.abs(b.spread_edge) + 1e-9));
 }
 
+// ── THE BOARD SHOWS THE BOARD ──────────────────────────────────────────────
+//
+// This tab used to list every priced game sorted by disagreement while the page
+// was titled "Best bets", so the thing recommended and the thing recorded were
+// different sets and no assertion could see it. These are about the two staying
+// the same set.
+console.log("\n── best bets: the board is the record ──");
+{
+  const BB = JSON.parse(bundle);
+  $$("#nav button").find(b => b.dataset.v === "bets")
+    .dispatchEvent(new window.Event("click", { bubbles: true }));
+  $("#wk").value = ""; fire($("#wk"), "change");
+  ok("the board has a Show filter", $("#showsel") !== null);
+  ok("...and opens on best bets", $("#showsel").value === "best", $("#showsel").value);
+  $("#sortby").value = "spread"; fire($("#sortby"), "change");
+  const bestRows = dataRows("#bets").length;
+  const nQual = BB.bets.filter(b => b.best_bet).length;
+  ok("every qualifying game is on the board",
+     bestRows === Math.min(nQual, 150), `${bestRows} shown vs ${nQual} qualifying`);
+  ok("...and there IS a board to show", bestRows > 0, `${bestRows} rows`);
+
+  $("#showsel").value = "all"; fire($("#showsel"), "change");
+  const allRows = dataRows("#bets").length;
+  ok("CONTROL: every-priced-game shows strictly more",
+     allRows > bestRows, `${allRows} vs ${bestRows}`);
+  ok("...so the filter is removing something real",
+     BB.bets.some(b => !b.best_bet && b.spread_edge != null));
+
+  $("#showsel").value = "best"; fire($("#showsel"), "change");
+  ok("the footnote names what was declined and why",
+     /Not offered/.test($("#betnote").textContent), $("#betnote").textContent.slice(0, 80));
+  const S = BB.selection;
+  ok("...using the same labels the bundle ships",
+     Object.entries(S.counts).filter(([k]) => k !== "best")
+       .every(([k]) => S.labels[k] !== undefined ||
+              !$("#betnote").textContent.includes(k)));
+
+  // The rule the tab states must be the rule the bundle carries. A page that
+  // describes a threshold it is not applying is the failure this whole change
+  // exists to prevent.
+  // Whitespace-normalised: the copy is wrapped in the source, and textContent
+  // keeps the newlines, so a phrase that straddles a line break never matches.
+  const sub = $("#v-bets .sub").textContent.replace(/\s+/g, " ");
+  ok("the tab states the rule it is applying",
+     sub.includes(String(S.min_edge)) && sub.includes(String(S.blowout_line)),
+     sub.slice(0, 100));
+  ok("...and says the record counts the same games",
+     /record on the Results tab counts exactly these/.test(sub));
+}
+
 console.log("\n── stake sizing ──");
 // Read the money out of the table rather than trusting a summary card — the card and
 // the column are computed from the same map, so a card alone would agree with itself.
@@ -1018,7 +1106,14 @@ ok("every positive-EV play is sized", nPlays > 0 && stakeRows().every(r => r.sta
 // The whole reason the sizing bug was invisible: a $0 stake renders as an em dash and
 // looks exactly like "this game has no moneyline". Positive EV and no stake is a
 // contradiction, so assert the two agree.
-const posEvCount = JSON.parse(bundle).bets.filter(b => (b.ml_ev || 0) > 0).length;
+// AGAINST WHAT THE TABLE IS SHOWING, not against the whole bundle. The board now
+// lists the best bets rather than every priced game, so the bundle's count is a
+// superset and comparing to it fails on a page that is behaving correctly. The
+// contradiction being tested is unchanged: a row on screen with positive EV and
+// no stake. `showsel` is forced to `best` so the assertion states which set.
+$("#showsel").value = "best"; fire($("#showsel"), "change");
+const posEvCount = JSON.parse(bundle).bets
+  .filter(b => b.best_bet && (b.ml_ev || 0) > 0).length;
 ok("sized plays match the positive-EV count", nPlays === posEvCount,
    `${nPlays} sized vs ${posEvCount} with EV > 0`);
 

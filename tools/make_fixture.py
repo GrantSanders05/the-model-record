@@ -160,8 +160,24 @@ def main():
     _plan, _rep = migrate_v2.plan(fake, "cfb")
     migrate_v2.apply_migration(fake, _plan, _rep)
 
+    # THE GRADES THOSE PICKS WERE MADE FROM, because `selection` decides whether a
+    # game was answered by the film or borrowed from Elo by reading grade
+    # coverage. Without them every fixture pick classifies as `unrated` and the
+    # fixture exercises the empty board rather than a full one — the opposite of
+    # what a fixture is for.
+    gcols2 = [c["name"] for c in real.execute("PRAGMA table_info(grades)")]
+    fake.executemany("INSERT OR REPLACE INTO grades (%s) VALUES (%s)"
+                     % (",".join(gcols2), ",".join("?" * len(gcols2))),
+                     [tuple(r) for r in real.execute(
+                         "SELECT %s FROM grades WHERE sport='cfb' AND season=?"
+                         % ",".join(gcols2), (SEASON,))])
+    fake.commit()
+    import selection
+    selection.backfill(fake)
+
     labels = research_export.display_weeks(real, "cfb", SEASON)
     summary = tracking.summary(fake, "cfb", week_labels=labels)
+    summary_best = tracking.summary(fake, "cfb", week_labels=labels, selection="best")
 
     sheet = sample_bets(fake, rows, labels)
     # The bet log grades against the GAMES table, which only the real database has.
@@ -172,6 +188,9 @@ def main():
     src = os.path.join(ROOT, "output", "research", "data.json")
     bundle = json.load(open(src))
     bundle["tracking"] = summary
+    bundle["tracking_best"] = summary_best
+    bundle["selection"] = dict(bundle.get("selection") or {},
+                               counts=selection.summary(fake, "cfb"))
     bundle["mybets"] = built
     bundle["fixture"] = True
 

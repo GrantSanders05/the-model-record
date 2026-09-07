@@ -616,6 +616,58 @@ dozens of plausible interactions and 800 games will happily rank one best;
 choosing after looking is how a model acquires a beautiful backtest and no
 future.
 
+## E015 — performance form in the champion — **SHIPPED 2026-09-07**
+
+Distinct from E005, which fitted continuous form as a *challenger ridge feature*
+against the market and lost (valid RMSE 14.929 vs 14.891). This asks a different
+question: does the same quantity improve the **champion's own rating**?
+
+**Why it might, when E005 did not.** The champion's quality-point rule is binary
+— beating an unranked team 63–3 and 17–14 both score zero — so every point of
+margin is discarded. That is harmless while the film is regraded weekly, because
+the film carries the update. 2025 had nine grade snapshots. **2026 has one.**
+
+**Method.** Walk-forward 2025, predict strictly before observe. Two grade
+regimes: as they actually were (weekly), and frozen at week 1 (2026's situation).
+Scored on the best-bets board.
+
+**Result.** Frozen grades: 54.17% → **56.49%** ATS, RMSE 16.228 → **15.786**.
+Weekly grades: 56.14% → 56.16%, RMSE 16.087 → 15.820. Every one of 54 tested
+(weight, half-life, k) cells improved RMSE and 53 of 54 improved the hit rate;
+the shipped values sit mid-plateau rather than at either maximum.
+
+**Parameters.** `form_weight` 0.6, `form_half_life` 8, `form_shrink_k` 4,
+`form_cap` 30. The cap is two standard deviations of the actual-minus-market
+residual (15.0 on 2025); at the first value of 21 it bound on 32% of teams after
+week 1 alone, which is a ceiling rather than a guard.
+
+**Caveat.** 2025 is development data and this was chosen on it. The prospective
+test is 2026 weeks 2 onward.
+
+---
+
+## E016 — best-bet selection — **SHIPPED 2026-09-07**
+
+Week 1 2026 published a side on 85 graded games and went 38–47, on a board that
+would have offered none of them. This makes the board's rule explicit, versioned
+and stored, and splits the public record into best bets and every game.
+
+Rules and the rate of what each removes: `unrated` 49.2% (n=126), `blowout`,
+`thin` 49.6% (n=238), `early` 49.1% (n=53), totals excluded (they get *worse* as
+they disagree more: 48.8% past 4 points, 46.9% past 5).
+
+**Result on 2025, frozen grades, with E015:** 56.49% over 393, ROI +7.8%,
+against 52.44% for every game with a line. 95% interval 51.6–61.4% — the lower
+bound is under break-even, and it must be quoted that way.
+
+**Rejected in the same pass:** an upper bound on edge (an artefact of week-1
+contamination), tightening ±28 (n=18), and excluding week 2 (categorically
+different from week 1).
+
+See `WEEK-1-2026-POSTMORTEM.md`.
+
+---
+
 ## E005 — continuous team form — **FITTED, shadow**
 
 `models_v2/form_quality.py`. Exponentially decayed, winsorized performance

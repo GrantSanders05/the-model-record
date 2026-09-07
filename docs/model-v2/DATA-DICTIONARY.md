@@ -94,9 +94,27 @@ A withdrawal before kickoff is a void event, not an edit.
 | `close_result` | the same side at the close. A diagnostic |
 | `line_clv` | points gained against the close, signed for the side taken |
 | `profit_units` | `NULL` unless the price was recorded |
+| `best_bet` | 1 if this qualified as a best bet, 0 if not, `NULL` if never classified |
+| `decline_reason` | `unrated` · `blowout` · `thin` · `early` · `market` · `no line` |
+| `selection_version` | the rule version that produced the two columns above |
 
 A partial unique index enforces one official signal per game per market per
 strategy version, so a retried workflow collides instead of publishing twice.
+
+`best_bet` is written once, at lock time, and never recomputed. A record whose
+membership is re-derived at render time is a record that a later edit to
+`best_bets.MIN_EDGE` can improve retroactively — the same reason
+`ats_result_at_pick` sits beside `grading_version`. **`NULL` is not `0`:** a row
+nobody has classified is unknown, not disqualified, and every query that counts
+best bets asks for `best_bet = 1` rather than `IS NOT 0`. `picks_log` carries the
+same three columns for the legacy ledger.
+
+One trap this replaced: `forecast_log.borrowed_fallback` looks like the authority
+on whether the film or Elo answered a game, and is not — the V2 migration stamped
+`0` on all 99 legacy forecasts without ever measuring it, so every FCS game came
+back as fully graded. `selection.borrowed_for` reads grade coverage instead,
+which is the condition `GradeRater.strength` itself applies. The two disagreed on
+76 of 166 signals.
 
 ## `game_results_v2` — what happened
 

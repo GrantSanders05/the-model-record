@@ -311,6 +311,17 @@ def line_movement_after(conn, sport, season, *, window_hours=48, min_impact=0.75
     return out
 
 
+def _load_alerts(path=None):
+    """The alerts report as written, or None. Read-only; never raises."""
+    import json as _json
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    p = path or os.path.join(root, "output", "alerts.json")
+    try:
+        return _json.load(open(p))
+    except Exception:                              # noqa: BLE001
+        return None
+
+
 def sync_from_alerts(conn, path=None, *, sport="cfb", season=None, commit=True):
     """
     Append everything roster_watch's last run listed. -> dict counts
@@ -373,9 +384,29 @@ def main():
               % (r.get("appended", 0), r.get("unchanged", 0),
                  r.get("skipped_unknown", 0)))
         if not r.get("appended") and not r.get("unchanged"):
-            print("  NOTHING LISTED. In the preseason that is the expected answer,")
-            print("  not a broken feed — but it is also what a broken feed looks")
-            print("  like, so the timestamp above is the thing to read.")
+            # DISTINGUISH THE TWO EMPTIES, because they call for opposite actions
+            # and look identical. `roster_watch` refuses to write a report when
+            # ESPN returns no teams, so an alerts file that resolved every team
+            # and still lists nobody is the SOURCE being empty, not the pipe.
+            #
+            # Verified against ESPN directly on 7 September 2026: the college
+            # football roster endpoint carries `injuredReserveOrOut` and
+            # `suspended` groups for every team and both are empty on all of
+            # them, and no athlete carries a status or an injuries array. There
+            # is no mandatory college injury report and ESPN's free API does not
+            # substitute for one. The layer is correct and its upstream is
+            # silent; that is a fact about college football, not a defect.
+            missing = len((_load_alerts() or {}).get("teams_without_espn") or [])
+            print("  NOTHING LISTED.")
+            if missing:
+                print("  %d team(s) did not resolve on ESPN, so this may be the "
+                      "pipe rather than" % missing)
+                print("  the source. Check roster_watch before trusting the zero.")
+            else:
+                print("  Every team resolved on ESPN and none listed a player out.")
+                print("  College football has no mandatory injury report and ESPN's")
+                print("  free API carries the groups but leaves them empty, so a zero")
+                print("  here is the normal reading rather than a working feed.")
 
     if args.movement:
         season = args.season or dt.datetime.now(dt.timezone.utc).year
